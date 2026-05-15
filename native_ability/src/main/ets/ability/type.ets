@@ -1,5 +1,8 @@
-import { NodeContent } from "@kit.ArkUI";
+import { NodeContent, SymbolGlyphModifier } from "@kit.ArkUI";
 import resourceManager from "@ohos.resourceManager";
+import { MenuItemData, MenuCreateOptions, MenuItemCreateOptions, SubmenuCreateOptions } from "../helper/menu_types";
+import { image } from "@kit.ImageKit";
+import { emitter } from "@kit.BasicServicesKit";
 
 export interface ApplicationLifecycle {
   environmentCallback: EnvironmentCallback;
@@ -78,12 +81,33 @@ export interface Module {
   registerCustomProtocol?: () => void;
 }
 
+export interface StatusBarIconRgba {
+  white?: Uint8Array;
+  black?: Uint8Array;
+}
+
 export interface ArkHelper {
   exit: (code: number) => void;
   createWebview: (data: WebViewInitData) => Object;
   createEmbeddedWebview: (data: WebViewInitData) => Object;
   requestPermission: (permission: string | string[]) => Promise<number | number[]>;
   getWindowAvoidArea: (type: number) => WindowAvoidAreaInfo | undefined;
+  createMenu?: (options: MenuCreateOptions) => Promise<string>;
+  createMenuItem?: (options: MenuItemCreateOptions) => Promise<string>;
+  createSubmenu?: (options: SubmenuCreateOptions) => Promise<string>;
+  appendMenuItem?: (menuId: string, itemId: string) => Promise<void>;
+  popupMenu?: (menuId: string, x?: number, y?: number) => Promise<void>;
+  destroyMenu?: (menuId: string) => Promise<void>;
+  addToStatusBarWithRgba: (iconsRgba: StatusBarIconRgba, iconSize: number, quickOperation: ESObject, statusBarGroupMenu?: ESObject[][], hoverTips?: string) => void;
+  updateStatusBarIconWithRgba: (iconsRgba: StatusBarIconRgba, iconSize: number) => void;
+  registerIconClickHandler: (eventName: string, callback: Callback<emitter.EventData>) => void;
+  registerMenuClickHandler: (eventName: string, callback: Callback<emitter.EventData>) => void;
+  unregisterIconClickHandler: (eventName: string) => void;
+  unregisterMenuClickHandler: (eventName: string) => void;
+  updateStatusBarMenu: (statusBarGroupMenu: ESObject[][]) => void;
+  updateStatusBarHoverTips: (hoverTips: string) => void;
+  removeFromStatusBar: () => void;
+  executePredefinedAction: (actionType: string) => void;
 }
 
 export interface WindowAvoidAreaInfo {

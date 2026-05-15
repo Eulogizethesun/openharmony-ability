@@ -18,6 +18,12 @@ pub fn render(
     set_helper(helper);
     set_main_thread_env(*env);
 
+    // Initialize tray ThreadsafeFunctions (must be called after set_main_thread_env)
+    if let Err(e) = crate::statusbar::init_tray_tsfn(env) {
+        // Log error but don't panic - tray tests will fail but app continues
+        eprintln!("init_tray_tsfn failed: {}", e);
+    }
+
     // Initialize permission request threadsafe function
     let _ = create_permission_request_tsfn(env);
 
