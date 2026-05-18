@@ -2,12 +2,14 @@ import { AbilityConstant, Configuration, UIAbility, Want } from "@kit.AbilityKit
 import common from "@ohos.app.ability.common";
 import window from "@ohos.window";
 import webview from "@ohos.web.webview";
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import * as Entry from "../components/MainPage";
 import { AbilityInitContext, ApplicationLifecycle, Module } from "./type";
 import { Loadable } from "../helper/loadable";
 import { MenuManager, PredefinedActionExecutor } from "../helper/menu";
 import { menuStateController } from "../helper/menu_state";
-import { setCurrentAbilityName } from "../components/DefaultXComponent";
+import { setCurrentAbilityName } from "../helper/StatusBarUtils";
+import { WindowManager } from "../window/WindowManager";
 
 export const STATE_KEY = "ohos.rs.ability.application.state";
 
@@ -74,8 +76,13 @@ export class NativeAbility extends UIAbility {
       (want.parameters?.["ohos.ability.params.abilityRecoveryRestart"] as boolean) ?? false;
     const state = isRestore ? ((want.parameters?.[STATE_KEY] as string) ?? "") : "";
 
+    hilog.info(0x0000, 'NativeAbility', 'onCreate - moduleName: %{public}s', JSON.stringify(this.moduleName));
     AppStorage.setOrCreate("moduleName", this.moduleName);
     AppStorage.setOrCreate("loadMode", this.loadMode);
+
+    // Initialize WindowManager for multi-window support
+    const context = this.context as common.UIAbilityContext;
+    WindowManager.init(context);
 
     const requestedModules: string[] = this.resolveModuleNames();
     const restoredStateMap: Record<string, string> = this.parseSavedStateMap(state);

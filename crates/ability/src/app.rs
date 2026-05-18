@@ -108,6 +108,8 @@ pub struct OpenHarmonyAppInner {
     pub(crate) window_rect: Rect,
     pub(crate) avoid_areas: HashMap<AvoidAreaType, AvoidArea>,
     pub(crate) init_context: AbilityInitContext,
+    
+    
 }
 
 impl PartialEq for OpenHarmonyAppInner {
@@ -164,6 +166,7 @@ impl OpenHarmonyAppInner {
             window_rect: Default::default(),
             avoid_areas: HashMap::new(),
             init_context: AbilityInitContext::default(),
+            
         }
     }
 

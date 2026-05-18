@@ -1,10 +1,13 @@
 import { UIContext } from "@ohos.arkui.UIContext";
 import web_webview from "@ohos.web.webview";
 import { ComponentContent, NodeController, BuilderNode, FrameNode } from "@ohos.arkui.node";
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { randomString } from "../helper";
 import { OnDownloadStartResult } from "../ability/type";
 import { getCookies, JsHelper } from "./Utils";
 import { WebHeader } from "@kit.ArkUI";
+
+const DOMAIN: number = 0x1999;
 
 export interface WebviewStyle {
   x?: number | string;
@@ -54,7 +57,7 @@ function WebBuilder(data: WebviewNodeData) {
       typeof data?.autoplay === "boolean" && data.autoplay === true ? false : true,
     )
     .javaScriptOnDocumentStart(data?.initializationScripts)
-    .onControllerAttached(() => {
+.onControllerAttached(() => {
       const ctrl = data.controller;
       // load url or html string
       if (data?.url) {
@@ -67,6 +70,27 @@ function WebBuilder(data: WebviewNodeData) {
         ctrl.loadUrl(data.url, header);
       } else {
         ctrl.loadData(data!.html, "text/html", "UTF-8", " ", " ");
+      }
+    })
+    .onErrorReceive((event) => {
+      hilog.error(DOMAIN, 'DefaultWebview', 'Web onErrorReceive: %{public}s', JSON.stringify(event));
+      if (event.error) {
+        const ctrl = data.controller;
+        const errorCode = event.error.getErrorCode();
+        const errorInfo = event.error.getErrorInfo();
+        hilog.error(DOMAIN, 'DefaultWebview', 'Main frame load failed: %{public}d - %{public}s', errorCode, errorInfo);
+        const errorHtml = `
+          <html>
+            <body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;font-family:sans-serif;">
+              <div style="text-align:center;padding:20px;">
+                <h2>Network Error</h2>
+                <p>Failed to load the page. Please check your connection.</p>
+                <p style="color:#666;font-size:12px;">Error: ${errorCode} - ${errorInfo}</p>
+              </div>
+            </body>
+          </html>
+        `;
+        ctrl.loadData(errorHtml, 'text/html', 'UTF-8', ' ', ' ');
       }
     })
     .onLoadIntercept((event) => {
@@ -117,6 +141,27 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
           ctrl.loadData(data!.html, "text/html", "UTF-8", " ", " ");
         }
       })
+      .onErrorReceive((event) => {
+        hilog.error(DOMAIN, 'DefaultWebview', 'Embedded Web onErrorReceive: %{public}s', JSON.stringify(event));
+        if (event.error) {
+          const ctrl = data.controller;
+          const errorCode = event.error.getErrorCode();
+          const errorInfo = event.error.getErrorInfo();
+          hilog.error(DOMAIN, 'DefaultWebview', 'Embedded Main frame load failed: %{public}d - %{public}s', errorCode, errorInfo);
+          const errorHtml = `
+            <html>
+              <body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;font-family:sans-serif;">
+                <div style="text-align:center;padding:20px;">
+                  <h2>Network Error</h2>
+                  <p>Failed to load the page. Please check your connection.</p>
+                  <p style="color:#666;font-size:12px;">Error: ${errorCode} - ${errorInfo}</p>
+                </div>
+              </body>
+            </html>
+          `;
+          ctrl.loadData(errorHtml, 'text/html', 'UTF-8', ' ', ' ');
+        }
+      })
       .onLoadIntercept((event) => {
         if (typeof data?.onNavigationRequest === "function") {
           const url = event.data.getRequestUrl();
@@ -130,7 +175,7 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
           data.onTitleChange(e.title);
         }
       })
-  }
+    }
   .width("100%")
   .height("100%")
   .clip(true)

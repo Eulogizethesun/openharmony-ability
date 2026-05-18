@@ -39,6 +39,7 @@ type OnDownloadEnd<'a> = Option<Function<'a, (String, Option<String>, bool), ()>
 pub struct WebViewInitData<'a> {
     pub url: Option<String>,
     pub id: Option<String>,
+    pub window_id: Option<i64>,
     pub style: Option<WebViewStyle>,
     pub javascript_enabled: Option<bool>,
     pub devtools: Option<bool>,

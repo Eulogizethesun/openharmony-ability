@@ -10,447 +10,119 @@ import { Loadable } from "../helper/loadable";
 import { requestPermission } from "../helper/permission";
 import common from "@ohos.app.ability.common";
 import window from "@ohos.window";
-import { image } from "@kit.ImageKit";
-import { statusBarManager } from "@kit.DeskTopExtensionKit";
-import { emitter, BusinessError } from "@kit.BasicServicesKit";
 import {
   EmbeddedWebviewManager,
   RustWebviewNodeController,
   WebviewStyle,
   WebviewInitData,
 } from "../webview/DefaultWebview";
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { WindowManager } from "../window/WindowManager";
+import { createArkHelper } from "../ability/ArkHelper";
+import {
+  setAbilityContext,
+  setHelperRef,
+  helperRef,
+  statusBarManager,
+  emitter,
+  BusinessError,
+} from "../helper/StatusBarUtils";
+
+const DOMAIN: number = 0x1999;
 
 export const RouteName = "NativeAbility";
 
-let abilityContext: common.UIAbilityContext | null = null;
-let currentAbilityName: string = "";
-let helperRef: ArkHelper | null = null;
-
-export function setCurrentAbilityName(name: string): void {
-  currentAbilityName = name;
-}
-
-function getAbilityContext(): common.UIAbilityContext {
-  return abilityContext as common.UIAbilityContext;
-}
-
-function createPixelMapFromRgba(rgbaData: Uint8Array, size: number): image.PixelMap | null {
-  try {
-    console.info(`[StatusBar] createPixelMapFromRgba: size=${size}, dataLen=${rgbaData.length}, byteOffset=${rgbaData.byteOffset}, bufferLen=${rgbaData.buffer.byteLength}`);
-    const expectedLen = size * size * 4;
-    if (rgbaData.length !== expectedLen) {
-      console.error(`[StatusBar] data length mismatch: got ${rgbaData.length}, expected ${expectedLen}`);
-      return null;
-    }
-    let nonZero = 0;
-    for (let i = 0; i < Math.min(rgbaData.length, 100); i++) {
-      if (rgbaData[i] !== 0) nonZero++;
-    }
-    console.info(`[StatusBar] first 100 bytes non-zero count: ${nonZero}, first 8 bytes: [${rgbaData[0]},${rgbaData[1]},${rgbaData[2]},${rgbaData[3]},${rgbaData[4]},${rgbaData[5]},${rgbaData[6]},${rgbaData[7]}]`);
-    const opts: image.InitializationOptions = {
-      editable: true,
-      pixelFormat: image.PixelMapFormat.RGBA_8888,
-      size: { width: size, height: size }
-    };
-    const pm = image.createPixelMapSync(opts);
-    const buf = rgbaData.buffer.slice(rgbaData.byteOffset, rgbaData.byteOffset + rgbaData.byteLength);
-    pm.writeBufferToPixelsSync(buf);
-    const info = pm.getImageInfoSync();
-    console.info(`[StatusBar] PixelMap created: ${info.size.width}x${info.size.height}, pixelFormat=${info.pixelFormat}`);
-    return pm;
-  } catch (e) {
-    const err = e as BusinessError;
-    console.error(`[StatusBar] createPixelMapFromRgba failed: ${err.code} ${err.message}`);
-    return null;
-  }
-}
-
-function fillMenuItemAbilityName(groups: ESObject[][], abilityName: string): void {
-  for (const group of groups) {
-    for (const item of group) {
-      if (item.menuAction && (!item.menuAction.abilityName || item.menuAction.abilityName === '')) {
-        item.menuAction.abilityName = abilityName;
-      }
-      if (item.subMenu) {
-        for (const sub of item.subMenu) {
-          if (sub.menuAction && (!sub.menuAction.abilityName || sub.menuAction.abilityName === '')) {
-            sub.menuAction.abilityName = abilityName;
-          }
-        }
-      }
-    }
-  }
-}
-
-function createPixelMapFromRgbaWH(rgbaData: Uint8Array, width: number, height: number): image.PixelMap | null {
-  try {
-    const expectedLen = width * height * 4;
-    if (rgbaData.length !== expectedLen) {
-      console.error(`[StatusBar] createPixelMapFromRgbaWH: data length mismatch: got ${rgbaData.length}, expected ${expectedLen} (${width}x${height})`);
-      return null;
-    }
-    const opts: image.InitializationOptions = {
-      editable: true,
-      pixelFormat: image.PixelMapFormat.RGBA_8888,
-      size: { width: width, height: height }
-    };
-    const pm = image.createPixelMapSync(opts);
-    const buf = rgbaData.buffer.slice(rgbaData.byteOffset, rgbaData.byteOffset + rgbaData.byteLength);
-    pm.writeBufferToPixelsSync(buf);
-    return pm;
-  } catch (e) {
-    const err = e as BusinessError;
-    console.error(`[StatusBar] createPixelMapFromRgbaWH failed: ${err.code} ${err.message}`);
-    return null;
-  }
-}
-
-function processMenuItemIcons(groups: ESObject[][]): void {
-  for (const group of groups) {
-    for (const item of group) {
-      if (item.options && item.options.iconRgba) {
-        const rgba = item.options.iconRgba as Uint8Array;
-        const w = (item.options.iconWidth as number) || 24;
-        const h = (item.options.iconHeight as number) || 24;
-        const pm = createPixelMapFromRgbaWH(rgba, w, h);
-        if (pm) {
-          item.options.icon = { white: pm, black: pm };
-        }
-        delete item.options.iconRgba;
-        delete item.options.iconWidth;
-        delete item.options.iconHeight;
-      }
-      if (item.subMenu) {
-        for (const sub of item.subMenu) {
-          if (sub.options && sub.options.iconRgba) {
-            const rgba = sub.options.iconRgba as Uint8Array;
-            const w = (sub.options.iconWidth as number) || 24;
-            const h = (sub.options.iconHeight as number) || 24;
-            const pm = createPixelMapFromRgbaWH(rgba, w, h);
-            if (pm) {
-              sub.options.icon = { white: pm, black: pm };
-            }
-            delete sub.options.iconRgba;
-            delete sub.options.iconWidth;
-            delete sub.options.iconHeight;
-          }
-        }
-      }
-    }
-  }
-}
-
 @Component
 export struct DefaultXComponent {
-  moduleName: string = "";
+  // 主窗口模式：moduleName 不为空
+  @Prop moduleName: string = "";
+  // 子窗口模式：windowId 不为 0
+  @Prop windowId: number = 0;
+
   private rootSlot = new NodeContent();
-  private webviewController = new RustWebviewNodeController(this.getUIContext());
-  private embeddedWebviewManager = new EmbeddedWebviewManager(this.getUIContext());
+  private webviewController: RustWebviewNodeController | null = null;
   private nativeModule: ESObject;
-  private helper: ArkHelper = {
-    exit,
-    requestPermission: async (permission: string | string[]): Promise<number | number[]> => {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      return await requestPermission(context, permission);
-    },
-    getWindowAvoidArea: (type: number): WindowAvoidAreaInfo | undefined => {
-      try {
-        const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-        const win = context.windowStage.getMainWindowSync();
-        const avoidType = type as window.AvoidAreaType;
-        return {
-          type: avoidType,
-          area: win.getWindowAvoidArea(avoidType),
-        } as WindowAvoidAreaInfo;
-      } catch (_) {
-        return undefined;
-      }
-    },
-    addToStatusBarWithRgba: (iconsRgba: StatusBarIconRgba, iconSize: number, quickOperation: ESObject, statusBarGroupMenu?: ESObject[][], hoverTips?: string) => {
-      console.info(`[StatusBar] addToStatusBarWithRgba called: iconSize=${iconSize}, hasWhite=${!!(iconsRgba.white)}, whiteLen=${iconsRgba.white?.length ?? 0}, hasBlack=${!!(iconsRgba.black)}, blackLen=${iconsRgba.black?.length ?? 0}`);
-      const context = getAbilityContext();
-      if (!context) { console.error('[StatusBar] no context'); return; }
-      if (!quickOperation.abilityName || quickOperation.abilityName === '') {
-        quickOperation.abilityName = context.abilityInfo.name;
-      }
-      const icons: ESObject = {};
-      if (iconsRgba.white && iconsRgba.white.length > 0) {
-        const pm = createPixelMapFromRgba(iconsRgba.white, iconSize);
-        if (pm) icons.white = pm;
-        console.info(`[StatusBar] white PixelMap: ${pm ? 'OK' : 'NULL'}`);
-      }
-      if (iconsRgba.black && iconsRgba.black.length > 0) {
-        const pm = createPixelMapFromRgba(iconsRgba.black, iconSize);
-        if (pm) icons.black = pm;
-        console.info(`[StatusBar] black PixelMap: ${pm ? 'OK' : 'NULL'}`);
-      }
-      if (Object.keys(icons).length === 0) { console.error('[StatusBar] no valid icons, aborting'); return; }
-      const opts: ESObject = {
-        icons: icons,
-        quickOperation: quickOperation,
-        statusBarGroupMenu: statusBarGroupMenu ?? []
-      };
-      if (statusBarGroupMenu) {
-        fillMenuItemAbilityName(statusBarGroupMenu, context.abilityInfo.name);
-        processMenuItemIcons(statusBarGroupMenu);
-      }
-      if (hoverTips && hoverTips.length > 0 && hoverTips.length <= 128) {
-        opts.hoverTips = hoverTips;
-      }
-      try {
-        statusBarManager.addToStatusBar(context, opts);
-        console.info('[StatusBar] addToStatusBar succeeded');
-        const h = helperRef as ESObject;
-        const hasIconCb = !!(h && h._onIconClick);
-        const hasMenuCb = !!(h && h._onMenuClick);
-        console.info(`[StatusBar] _onIconClick=${hasIconCb}, _onMenuClick=${hasMenuCb}`);
-        setTimeout(() => {
-          try {
-            if (h && h._onIconClick) {
-              statusBarManager.on('statusBarIconClick' as 'statusBarIconClick', h._onIconClick as Callback<emitter.EventData>);
-              console.info('[StatusBar] registered iconClick handler after addToStatusBar');
-            }
-            if (h && h._onMenuClick) {
-              statusBarManager.on('rightMenuClick' as 'rightMenuClick', h._onMenuClick as Callback<emitter.EventData>);
-              console.info('[StatusBar] registered menuClick handler after addToStatusBar');
-            }
-          } catch (e2) {
-            const err2 = e2 as BusinessError;
-            console.error(`[StatusBar] on() registration failed: ${err2.code} ${err2.message}`);
-          }
-        }, 200);
-      } catch (e) {
-        const err = e as BusinessError;
-        console.error(`[StatusBar] addToStatusBar failed: ${err.code} ${err.message}`);
-      }
-    },
-    updateStatusBarIconWithRgba: (iconsRgba: StatusBarIconRgba, iconSize: number) => {
-      const context = getAbilityContext();
-      if (!context) return;
-      const icons: ESObject = {};
-      if (iconsRgba.white && iconsRgba.white.length > 0) {
-        const pm = createPixelMapFromRgba(iconsRgba.white, iconSize);
-        if (pm) icons.white = pm;
-      }
-      if (iconsRgba.black && iconsRgba.black.length > 0) {
-        const pm = createPixelMapFromRgba(iconsRgba.black, iconSize);
-        if (pm) icons.black = pm;
-      }
-      if (Object.keys(icons).length === 0) return;
-      try {
-        statusBarManager.updateStatusBarIcon(context, icons);
-      } catch (e) {
-        const err = e as BusinessError;
-        console.error(`[StatusBar] updateStatusBarIcon failed: ${err.code} ${err.message}`);
-      }
-    },
-    registerIconClickHandler: (eventName: string, callback: Callback<emitter.EventData>) => {
-      console.info(`[StatusBar] registerIconClickHandler: legacy call (using _onIconClick instead)`);
-    },
-    registerMenuClickHandler: (eventName: string, callback: Callback<emitter.EventData>) => {
-      console.info(`[StatusBar] registerMenuClickHandler: legacy call (using _onMenuClick instead)`);
-    },
-    unregisterIconClickHandler: (eventName: string) => {
-      statusBarManager.off(eventName as 'statusBarIconClick');
-    },
-    unregisterMenuClickHandler: (eventName: string) => {
-      statusBarManager.off(eventName as 'rightMenuClick');
-    },
-    updateStatusBarMenu: (statusBarGroupMenu: ESObject[][]) => {
-      const context = getAbilityContext();
-      if (!context) return;
-      try {
-        fillMenuItemAbilityName(statusBarGroupMenu, context.abilityInfo.name);
-        processMenuItemIcons(statusBarGroupMenu);
-        statusBarManager.updateStatusBarMenu(context, statusBarGroupMenu);
-      } catch (e) {
-        const err = e as BusinessError;
-        console.error(`[StatusBar] updateStatusBarMenu failed: ${err.code} ${err.message}`);
-      }
-    },
-    updateStatusBarHoverTips: (hoverTips: string) => {
-      const context = getAbilityContext();
-      if (!context) return;
-      try {
-        statusBarManager.updateStatusBarHoverTips(context, hoverTips);
-      } catch (e) {
-        const err = e as BusinessError;
-        console.error(`[StatusBar] updateStatusBarHoverTips failed: ${err.code} ${err.message}`);
-      }
-    },
-    removeFromStatusBar: () => {
-      const context = getAbilityContext();
-      if (!context) return;
-      try {
-        statusBarManager.removeFromStatusBar(context);
-      } catch (e) {
-        const err = e as BusinessError;
-        console.error(`[StatusBar] removeFromStatusBar failed: ${err.code} ${err.message}`);
-      }
-    },
-    executePredefinedAction: (actionType: string) => {
-      const context = getAbilityContext();
-      if (!context) return;
-      try {
-        switch (actionType) {
-          case 'quit':
-            exit(0);
-            break;
-          case 'minimize':
-          case 'hide':
-          case 'close': {
-            const win = context.windowStage.getMainWindowSync();
-            let timerId: number | null = null;
 
-            const doMinimize = () => {
-              if (timerId !== null) { clearTimeout(timerId); timerId = null; }
-              try { context.windowStage.off("windowStageEvent", handler); } catch (_) {}
-              try { win.minimize(); } catch (e) {
-                const err = e as BusinessError;
-                console.error(`[StatusBar] minimize failed: ${err.code} ${err.message}`);
-              }
-            };
+  // 全局 ArkHelper 实例（窗口无关）
+  private helper: ArkHelper = createArkHelper();
 
-            const handler = (event: window.WindowStageEventType) => {
-              if (event === window.WindowStageEventType.SHOWN) {
-                doMinimize();
-              }
-            };
-            context.windowStage.on("windowStageEvent", handler);
+  // 判断是否为主窗口的函数：基于 windowId 判断
+  private isMainWindow(): boolean {
+    const result = this.windowId === 0;
+    hilog.info(DOMAIN, 'DefaultXComponent', 'isMainWindow() called: windowId=%{public}d, result=%{public}b', 
+      this.windowId, result);
+    return result;
+  }
 
-            timerId = setTimeout(() => {
-              timerId = null;
-              try { context.windowStage.off("windowStageEvent", handler); } catch (_) {}
-              try { win.minimize(); } catch (e) {
-                const err = e as BusinessError;
-                console.error(`[StatusBar] minimize(fallback) failed: ${err.code} ${err.message}`);
-              }
-            }, 500);
-            break;
-          }
-          case 'maximize':
-          case 'fullscreen':
-            context.windowStage.getMainWindowSync().maximize();
-            break;
-        }
-      } catch (e) {
-        const err = e as BusinessError;
-        console.error(`[StatusBar] executePredefinedAction(${actionType}) failed: ${err.code} ${err.message}`);
-      }
-    },
-    createWebview: (data: NativeWebViewInitData) => {
-      const initScripts: ScriptItem[] = (data?.initializationScripts || []).map((i) => {
-        return {
-          script: i,
-          scriptRules: ["*"],
-        } as ScriptItem;
-      });
-      const init: WebviewInitData = {
-        webTag: data?.id,
-        url: data?.url,
-        html: data?.html,
-        headers: data?.headers,
-        style: (data.style || {}) as WebviewStyle,
-        javascriptEnable: data?.javascriptEnable ?? true,
-        userAgent: data?.userAgent,
-        devtools: data?.devtools,
-        autoplay: data?.autoplay,
-        initializationScripts: initScripts,
-        onDragAndDrop: data?.onDragAndDrop,
-        onDownloadStart: data?.onDownloadStart,
-        onDownloadEnd: data?.onDownloadEnd,
-        onNavigationRequest: data?.onNavigationRequest,
-        onTitleChange: data?.onTitleChange,
-      } as WebviewInitData;
-
-      init.style = init.style || {};
-
-      if (data?.transparent && !init.style.backgroundColor) {
-        init.style.backgroundColor = Color.Transparent;
-      }
-      const ret = this.webviewController.addWebview(init);
-      const applyStyle = (style: WebviewStyle) => {
-        objectAssign(init.style as Record<string, ESObject>, style);
-        this.webviewController.updateWebviewStyle(ret.webTag, init.style as WebviewStyle);
-      };
-
-      ret.controller.setBackgroundColor = (color: string) => {
-        applyStyle({ backgroundColor: color });
-      };
-
-      ret.controller.setVisible = (visible: boolean) => {
-        applyStyle({ visible });
-      };
-
-      ret.controller.dispose = () => {
-        this.webviewController.removeWebview(ret.webTag);
-      };
-
-      return ret.controller;
-    },
-    createEmbeddedWebview: (data: NativeWebViewInitData) => {
-      const initScripts: ScriptItem[] = (data?.initializationScripts || []).map((i) => {
-        return {
-          script: i,
-          scriptRules: ["*"],
-        } as ScriptItem;
-      });
-      const init: WebviewInitData = {
-        webTag: data?.id,
-        url: data?.url,
-        html: data?.html,
-        headers: data?.headers,
-        style: (data.style || {}) as WebviewStyle,
-        javascriptEnable: data?.javascriptEnable ?? true,
-        userAgent: data?.userAgent,
-        devtools: data?.devtools,
-        autoplay: data?.autoplay,
-        initializationScripts: initScripts,
-        onDragAndDrop: data?.onDragAndDrop,
-        onDownloadStart: data?.onDownloadStart,
-        onDownloadEnd: data?.onDownloadEnd,
-        onNavigationRequest: data?.onNavigationRequest,
-        onTitleChange: data?.onTitleChange,
-      } as WebviewInitData;
-
-      init.style = init.style || {};
-
-      if (data?.transparent && !init.style.backgroundColor) {
-        init.style.backgroundColor = Color.Transparent;
-      }
-
-      const ret = this.embeddedWebviewManager.createWebview(init);
-      const applyStyle = (style: WebviewStyle) => {
-        objectAssign(init.style as Record<string, ESObject>, style);
-        this.embeddedWebviewManager.updateWebviewStyle(ret.webTag, init.style as WebviewStyle);
-      };
-
-      ret.controller.setBackgroundColor = (color: string) => {
-        applyStyle({ backgroundColor: color });
-      };
-
-      ret.controller.setVisible = (visible: boolean) => {
-        applyStyle({ visible });
-      };
-
-      ret.controller.dispose = () => {
-        this.embeddedWebviewManager.removeWebview(ret.webTag);
-      };
-
-      return ret;
-    },
-  };
   @StorageProp("loadMode") loadMode: "async" | "sync" = "async";
 
   async aboutToAppear(): Promise<void> {
-    abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    helperRef = this.helper;
-    const moduleName = this.moduleName.trim();
-    if (!moduleName) {
-      throw new Error("DefaultXComponent.moduleName is required");
+    hilog.info(DOMAIN, 'DefaultXComponent', '=== aboutToAppear START ===');
+    hilog.info(DOMAIN, 'DefaultXComponent', 'Props -> moduleName: "%{public}s", windowId: %{public}d',
+      this.moduleName, this.windowId);
+
+    setAbilityContext(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    setHelperRef(this.helper);
+
+    try {
+      // 注册 UIContext 到 WindowManager
+      const uiCtx = this.getUIContext();
+      if (uiCtx) {
+        try {
+          const wm = WindowManager.getInstance();
+          wm.registerUIContext(this.windowId, uiCtx);
+          hilog.info(DOMAIN, 'DefaultXComponent', 'UIContext registered for window %{public}d', this.windowId);
+        } catch (e) {
+          hilog.error(DOMAIN, 'DefaultXComponent', 'Failed to register UIContext: %{public}s', JSON.stringify(e));
+        }
+      }
+
+      // 初始化 webviewController
+      this.webviewController = new RustWebviewNodeController(uiCtx);
+      hilog.info(DOMAIN, 'DefaultXComponent', 'RustWebviewNodeController created');
+
+      if (this.isMainWindow()) {
+        // 主窗口模式：调用 render 设置 helper 和 XComponent
+        hilog.info(DOMAIN, 'DefaultXComponent', 'Entering MAIN WINDOW logic');
+        const moduleName = this.moduleName.trim();
+        if (!moduleName) {
+          hilog.error(DOMAIN, 'DefaultXComponent', 'moduleName is empty, cannot initialize main window');
+          throw new Error("DefaultXComponent.moduleName is required for main window");
+        }
+
+        hilog.info(DOMAIN, 'DefaultXComponent', 'Loading native module: %{public}s', moduleName);
+        this.nativeModule = await Loadable.load(moduleName, this.loadMode);
+        hilog.info(DOMAIN, 'DefaultXComponent', 'Native module loaded, calling render()');
+
+        this.nativeModule.render(this.helper, this.rootSlot);
+        hilog.info(DOMAIN, 'DefaultXComponent', 'render() completed');
+
+        // 注册主窗口到 WindowManager (id=0)
+        try {
+          const wm = WindowManager.getInstance();
+          wm.registerController(0, this.webviewController);
+          hilog.info(DOMAIN, 'DefaultXComponent', 'Main window registered to WindowManager with id=0');
+        } catch (err) {
+          hilog.warn(DOMAIN, 'DefaultXComponent', 'Failed to register main window to WindowManager: %{public}s',
+            JSON.stringify(err));
+        }
+      } else {
+        // 子窗口模式：注册到 WindowManager
+        hilog.info(DOMAIN, 'DefaultXComponent', 'Entering SUB WINDOW logic');
+        if (this.windowId === 0) {
+          hilog.error(DOMAIN, 'DefaultXComponent', 'windowId is 0 but not main window, this should not happen');
+          return;
+        }
+
+        hilog.info(DOMAIN, 'DefaultXComponent', 'Registering sub-window controller with id: %{public}d', this.windowId);
+        const wm = WindowManager.getInstance();
+        wm.registerController(this.windowId, this.webviewController);
+        hilog.info(DOMAIN, 'DefaultXComponent', 'Sub-window controller registered');
+      }
+    } catch (err) {
+      hilog.error(DOMAIN, 'DefaultXComponent', 'aboutToAppear FAILED: %{public}s', JSON.stringify(err));
+      throw err;
     }
-    this.nativeModule = await Loadable.load(moduleName, this.loadMode);
-    this.nativeModule.render(this.helper, this.rootSlot);
     console.info(`[StatusBar] afterRender: _onIconClick=${!!(this.helper as ESObject)._onIconClick}, _onMenuClick=${!!(this.helper as ESObject)._onMenuClick}`);
   }
 
