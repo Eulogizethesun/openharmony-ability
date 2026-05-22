@@ -11,10 +11,17 @@ mod memory;
 mod render;
 mod resource;
 mod stage;
+pub mod statusbar;
 mod waker;
 
 #[cfg(feature = "webview")]
 mod webview;
+
+#[cfg(feature = "menu")]
+pub mod menu;
+
+#[cfg(feature = "menu")]
+pub use menu::{on_popup_request, start_popup_forwarder, PopupRequestData};
 
 pub use app::*;
 pub use area::*;
@@ -29,6 +36,7 @@ pub use memory::*;
 pub use render::*;
 pub use resource::*;
 pub use stage::*;
+pub use statusbar::*;
 pub use waker::*;
 
 #[cfg(feature = "webview")]

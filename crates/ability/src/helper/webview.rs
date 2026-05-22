@@ -330,7 +330,7 @@ impl Webview {
     pub fn custom_protocol<S, F>(&self, protocol: S, callback: F) -> Result<()>
     where
         S: Into<String>,
-        F: Fn(&str, Request<Vec<u8>>, bool) -> Option<Response<Cow<'static, [u8]>>>,
+        F: Fn(&str, Request<Vec<u8>>, bool) -> Option<Response<Cow<'static, [u8]>>> + 'static,
     {
         self.custom_protocol_async(protocol, move |url, request, is_main_frame, responder| {
             let response = callback(url, request, is_main_frame);
@@ -343,10 +343,10 @@ impl Webview {
     pub fn custom_protocol_async<S, F>(&self, protocol: S, callback: F) -> Result<()>
     where
         S: Into<String>,
-        F: Fn(&str, Request<Vec<u8>>, bool, CustomProtocolResponder),
+        F: Fn(&str, Request<Vec<u8>>, bool, CustomProtocolResponder) + 'static,
     {
         let handle = CustomProtocolHandler::new();
-        let cbs = Box::leak(Box::new(callback));
+        let cbs: &'static F = Box::leak(Box::new(callback));
         let cbs = Arc::new(Mutex::new(cbs));
 
         handle.on_request_start(move |req, req_handle| {
@@ -409,7 +409,8 @@ impl Webview {
                             }),
                         };
 
-                        cbs.lock().unwrap()(&url, request, req.is_main_frame(), responder);
+                        let cb = *cbs.lock().unwrap();
+                        cb(&url, request, req.is_main_frame(), responder);
                     });
                 }
                 None => {
@@ -451,7 +452,8 @@ impl Webview {
                             req_handle.finish();
                         }),
                     };
-                    cbs.lock().unwrap()(&url, request, req.is_main_frame(), responder);
+                    let cb = *cbs.lock().unwrap();
+                    cb(&url, request, req.is_main_frame(), responder);
                 }
             }
 

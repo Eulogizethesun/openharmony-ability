@@ -5,6 +5,9 @@ import webview from "@ohos.web.webview";
 import * as Entry from "../components/MainPage";
 import { AbilityInitContext, ApplicationLifecycle, Module } from "./type";
 import { Loadable } from "../helper/loadable";
+import { MenuManager, PredefinedActionExecutor } from "../helper/menu";
+import { menuStateController } from "../helper/menu_state";
+import { setCurrentAbilityName } from "../components/DefaultXComponent";
 
 export const STATE_KEY = "ohos.rs.ability.application.state";
 
@@ -64,6 +67,9 @@ export class NativeAbility extends UIAbility {
   }
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
+    // Store ability name globally for statusBarManager quickOperation
+    setCurrentAbilityName(want.abilityName ?? "");
+
     const isRestore: boolean =
       (want.parameters?.["ohos.ability.params.abilityRecoveryRestart"] as boolean) ?? false;
     const state = isRestore ? ((want.parameters?.[STATE_KEY] as string) ?? "") : "";
@@ -106,6 +112,29 @@ export class NativeAbility extends UIAbility {
         lifecycle.windowStageEventCallback.onAbilityCreate(restoredState);
       } catch (_) {}
     }
+  }
+
+  private setupMenuPopup(windowStage: window.WindowStage): void {
+    const primaryModule: ESObject = this.nativeModules[0] as ESObject;
+    if (!primaryModule || typeof primaryModule.onPopupRequest !== 'function') {
+      return;
+    }
+    const emitMenuEventFn: (menuId: string) => void = primaryModule.emitMenuEvent as (menuId: string) => void;
+
+    const executor = new PredefinedActionExecutor((code: number) => {
+      this.context?.terminateSelf();
+    });
+    executor.setWindow(windowStage.getMainWindowSync());
+
+    const menuManager = new MenuManager(executor, emitMenuEventFn);
+
+    primaryModule.onPopupRequest((data: { jsonData: string; x?: number; y?: number }) => {
+      try {
+        menuManager.popupFromJson(data.jsonData, data.x ?? 0, data.y ?? 0);
+      } catch (e) {
+        console.error(`[Menu] Popup failed: ${e}`);
+      }
+    });
   }
 
   async onWindowStageCreate(windowStage: window.WindowStage): Promise<void> {
@@ -155,6 +184,13 @@ export class NativeAbility extends UIAbility {
       try {
         await windowStage.loadContentByName(Entry.RouteName);
       } catch (_) {}
+    }
+
+    // Register popup callback for menu system (must be after loadContentByName so UIContext is available)
+    try {
+      this.setupMenuPopup(windowStage);
+    } catch (menuErr) {
+      console.error(`[Menu] setupMenuPopup threw: ${menuErr}`);
     }
   }
 
