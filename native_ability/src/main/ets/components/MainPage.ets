@@ -3,6 +3,9 @@ import { Loadable } from "../helper/loadable";
 import { MenuItemData } from "../helper/menu_types";
 import { image } from "@kit.ImageKit";
 import { buffer } from "@kit.ArkTS";
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const DOMAIN: number = 0x1999;
 
 export const RouteName = "NativeAbility";
 
@@ -14,11 +17,12 @@ export function setMenuClickHandler(handler: (item: MenuItemData) => void): void
 
 @Entry({ routeName: RouteName })
 @Component
-struct Index {
+struct MainPage {
   @StorageProp("moduleName") moduleNames: string | string[] = "";
   @StorageProp("loadMode") loadMode: "async" | "sync" = "async";
-  private nativeModule: ESObject = null;
-  @State private primaryModuleName: string = "";
+
+  @State private nativeModule: ESObject | null = null;
+  @State private resolvedModuleName: string = "";
 
   @StorageLink("__openharmony_ability_menu_shown__") menuShown: boolean = false;
   @StorageLink("__openharmony_ability_menu_x__") menuX: number = 0;
@@ -147,21 +151,35 @@ struct Index {
   }
 
   async aboutToAppear(): Promise<void> {
+    hilog.info(DOMAIN, 'MainPage', '=== MainPage aboutToAppear START ===');
+    hilog.info(DOMAIN, 'MainPage', 'Initializing MAIN WINDOW');
+
+    // 主窗口专属逻辑：加载 Native Module
     const moduleName = Loadable.resolvePrimaryModuleName(this.moduleNames);
     if (!moduleName) {
-      throw new Error("dynamic moduleName is empty");
+      hilog.error(DOMAIN, 'MainPage', 'moduleName is empty, cannot initialize main window');
+      throw new Error("MainPage.moduleName is required for main window");
     }
 
+    hilog.info(DOMAIN, 'MainPage', 'Resolved moduleName: %{public}s', moduleName);
+    this.resolvedModuleName = moduleName;
+
+    hilog.info(DOMAIN, 'MainPage', 'Loading native module: %{public}s', moduleName);
     this.nativeModule = await Loadable.load(moduleName, this.loadMode);
-    this.primaryModuleName = moduleName;
+    hilog.info(DOMAIN, 'MainPage', 'Native module loaded successfully');
   }
 
   onBackPress(): boolean {
-    if (typeof this.nativeModule?.onBackPressIntercept === "function") {
-      return this.nativeModule.onBackPressIntercept();
-    }
-    if (typeof this.nativeModule?.on_back_press_intercept === "function") {
-      return this.nativeModule.on_back_press_intercept();
+    // 主窗口专属：处理返回键拦截
+    try {
+      if (typeof this.nativeModule?.onBackPressIntercept === "function") {
+        return this.nativeModule.onBackPressIntercept();
+      }
+      if (typeof this.nativeModule?.on_back_press_intercept === "function") {
+        return this.nativeModule.on_back_press_intercept();
+      }
+    } catch (err) {
+      hilog.error(DOMAIN, 'MainPage', 'onBackPress failed: %{public}s', JSON.stringify(err));
     }
     return false;
   }
@@ -170,8 +188,13 @@ struct Index {
     Stack() {
       Row() {
         Column() {
-          if (this.primaryModuleName) {
-            DefaultXComponent({ moduleName: this.primaryModuleName });
+          if (this.resolvedModuleName !== "") {
+        // 主窗口固定 windowId 为 0
+            DefaultXComponent({ moduleName: this.resolvedModuleName, windowId: 0 })
+          } else {
+            Text("Loading Main Window...")
+              .fontSize(20)
+              .fontColor(Color.Gray)
           }
         }.width("100%")
       }.height("100%")

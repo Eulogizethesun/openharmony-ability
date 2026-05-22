@@ -28,6 +28,7 @@ pub struct WebViewBuilder {
     pub transparent: Option<bool>,
 
     id: Option<String>,
+    window_id: Option<i64>,
     #[cfg(feature = "drag_and_drop")]
     on_drag_and_drop: Option<Box<dyn Fn(String)>>,
     on_download_start: Option<OnDownloadStart>,
@@ -123,6 +124,13 @@ impl WebViewBuilder {
         }
     }
 
+    pub fn window_id(self, window_id: i64) -> WebViewBuilder {
+        WebViewBuilder {
+            window_id: Some(window_id),
+            ..self
+        }
+    }
+
     #[cfg(feature = "drag_and_drop")]
     pub fn on_drag_and_drop<F: Fn(String)>(self, on_drag_and_drop: F) -> WebViewBuilder {
         let static_handler = unsafe {
@@ -199,6 +207,9 @@ impl WebViewBuilder {
         let id = self
             .id
             .ok_or(Error::from_reason("WebTag should be provided"))?;
+
+        // window_id 由调用方通过 window_id() 方法显式传入，不再依赖 thread_local
+        let window_id = self.window_id.unwrap_or(0);
 
         let ret = unsafe {
             use crate::get_helper;
@@ -303,6 +314,7 @@ impl WebViewBuilder {
                 let webview = create_webview_func.call(WebViewInitData {
                     url: self.url,
                     id: Some(id.clone()),
+                    window_id: Some(window_id),
                     style: self.style,
                     javascript_enabled: self.javascript_enabled,
                     devtools: self.devtools,

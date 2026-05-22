@@ -44,6 +44,7 @@ export interface OnDownloadStartResult {
 export interface WebViewInitData {
   url?: string;
   id?: string;
+  windowId?: number;
   style?: WebViewStyle;
   javascriptEnable?: boolean;
   devtools?: boolean;
@@ -86,12 +87,24 @@ export interface StatusBarIconRgba {
   black?: Uint8Array;
 }
 
+export interface WindowConfig {
+  name: string;
+  type: number;
+  windowId: number;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+}
+
 export interface ArkHelper {
   exit: (code: number) => void;
   createWebview: (data: WebViewInitData) => Object;
   createEmbeddedWebview: (data: WebViewInitData) => Object;
   requestPermission: (permission: string | string[]) => Promise<number | number[]>;
-  getWindowAvoidArea: (type: number) => WindowAvoidAreaInfo | undefined;
+  getWindowAvoidArea: (type: number, windowId: number) => WindowAvoidAreaInfo | undefined;
+  createOSWindow: (config: WindowConfig) => Promise<number>;
+  loadUrl: (id: number, url: string) => void;
   createMenu?: (options: MenuCreateOptions) => Promise<string>;
   createMenuItem?: (options: MenuItemCreateOptions) => Promise<string>;
   createSubmenu?: (options: SubmenuCreateOptions) => Promise<string>;

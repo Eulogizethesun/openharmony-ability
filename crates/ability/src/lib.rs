@@ -13,6 +13,7 @@ mod resource;
 mod stage;
 pub mod statusbar;
 mod waker;
+pub mod window;
 
 #[cfg(feature = "webview")]
 mod webview;
@@ -38,6 +39,7 @@ pub use resource::*;
 pub use stage::*;
 pub use statusbar::*;
 pub use waker::*;
+pub use window::*;
 
 #[cfg(feature = "webview")]
 pub use webview::*;
