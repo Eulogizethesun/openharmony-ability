@@ -2,15 +2,20 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 pub struct MenuEvent {
     pub id: String,
+    pub window_id: Option<String>,
 }
 
 impl MenuEvent {
-    pub fn new(id: String) -> Self {
-        Self { id }
+    pub fn new(id: String, window_id: Option<String>) -> Self {
+        Self { id, window_id }
     }
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    pub fn window_id(&self) -> Option<&str> {
+        self.window_id.as_deref()
     }
 }
 
@@ -62,26 +67,47 @@ mod tests {
 
     #[test]
     fn test_menu_event_creation() {
-        let event = MenuEvent::new("item123".to_string());
+        let event = MenuEvent::new("item123".to_string(), Some("main".to_string()));
         assert_eq!(event.id(), "item123");
+        assert_eq!(event.window_id(), Some("main"));
     }
 
     #[test]
-    fn test_menu_event_dispatcher() {
+    fn test_menu_event_no_window_id() {
+        let event = MenuEvent::new("item456".to_string(), None);
+        assert_eq!(event.id(), "item456");
+        assert!(event.window_id().is_none());
+    }
+
+    #[test]
+    fn test_menu_event_with_window_id_per_window() {
+        let event_main = MenuEvent::new("click1".to_string(), Some("main".to_string()));
+        assert_eq!(event_main.window_id(), Some("main"));
+
+        let event_child = MenuEvent::new("click2".to_string(), Some("secondary".to_string()));
+        assert_eq!(event_child.window_id(), Some("secondary"));
+    }
+
+    #[test]
+    fn test_menu_event_dispatcher_with_window_id() {
         let mut dispatcher = MenuEventDispatcher::new();
         let count = Arc::new(AtomicUsize::new(0));
+        let received_window_id = Arc::new(std::sync::Mutex::new(None::<String>));
 
         dispatcher.add_listener({
             let count = count.clone();
-            move |_| {
+            let wid = received_window_id.clone();
+            move |event| {
                 count.fetch_add(1, Ordering::SeqCst);
+                *wid.lock().unwrap() = event.window_id().map(|s| s.to_string());
             }
         });
 
-        let event = MenuEvent::new("test_item".to_string());
+        let event = MenuEvent::new("test_item".to_string(), Some("main".to_string()));
         dispatcher.dispatch(&event);
 
         assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(*received_window_id.lock().unwrap(), Some("main".to_string()));
     }
 
     #[test]
@@ -104,7 +130,7 @@ mod tests {
             }
         });
 
-        let event = MenuEvent::new("item".to_string());
+        let event = MenuEvent::new("item".to_string(), None);
         dispatcher.dispatch(&event);
 
         assert_eq!(count1.load(Ordering::SeqCst), 1);

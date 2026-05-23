@@ -100,11 +100,11 @@ mod tests {
     #[test]
     fn menu_items_limit_20() {
         let over_limit: Vec<Vec<StatusBarMenuItem>> =
-            vec![(0..21).map(|_| StatusBarMenuItem::default()).collect()];
+            vec![(0..21).map(|_| StatusBarMenuItem { menu_action: Some(StatusBarMenuAction::default()), ..Default::default() }).collect()];
         assert!(validate_menus(&over_limit).is_err());
 
         let at_limit: Vec<Vec<StatusBarMenuItem>> =
-            vec![(0..20).map(|_| StatusBarMenuItem::default()).collect()];
+            vec![(0..20).map(|_| StatusBarMenuItem { menu_action: Some(StatusBarMenuAction::default()), ..Default::default() }).collect()];
         assert!(validate_menus(&at_limit).is_ok());
     }
 

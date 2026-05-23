@@ -1,12 +1,15 @@
-import { MenuItemData, PredefinedType } from './menu_types';
+import { MenuItemData, PredefinedType, AboutMetadataData } from './menu_types';
 import web_webview from '@ohos.web.webview';
 import window from '@ohos.window';
+import display from '@ohos.display';
 import { setMenuClickHandler } from '../components/MainPage';
 
 export class PredefinedActionExecutor {
   private controller: web_webview.WebviewController | null = null;
   private win: window.Window | null = null;
   private exitFn: (code: number) => void;
+  private showAboutFn: ((metadata: AboutMetadataData) => void) | null = null;
+  private notifyMenubarVisibilityFn: ((windowId: string, visible: boolean) => void) | null = null;
 
   constructor(exitFn: (code: number) => void) {
     this.exitFn = exitFn;
@@ -20,7 +23,15 @@ export class PredefinedActionExecutor {
     this.win = win;
   }
 
-  async execute(type: PredefinedType): Promise<void> {
+  setShowAboutFn(fn: (metadata: AboutMetadataData) => void): void {
+    this.showAboutFn = fn;
+  }
+
+  setNotifyMenubarVisibilityFn(fn: (windowId: string, visible: boolean) => void): void {
+    this.notifyMenubarVisibilityFn = fn;
+  }
+
+  async execute(type: PredefinedType, aboutMetadata?: AboutMetadataData): Promise<void> {
     switch (type) {
       case 'copy':
         await this.controller?.runJavaScript('document.execCommand("copy")');
@@ -41,18 +52,36 @@ export class PredefinedActionExecutor {
         await this.controller?.runJavaScript('document.execCommand("redo")');
         break;
       case 'minimize':
+        await this.win?.minimize();
+        break;
       case 'hide':
         await this.win?.minimize();
         break;
       case 'maximize':
-      case 'fullscreen':
         await this.win?.maximize();
         break;
+      case 'fullscreen':
+        AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::main", false);
+        AppStorage.setOrCreate("__openharmony_ability_menu_shown__::main", false);
+        this.notifyMenubarVisibilityFn?.("main", false);
+        try {
+          const displayInfo = display.getDefaultDisplaySync();
+          if (displayInfo.width > 800) {
+            await this.win?.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
+          } else {
+            await this.win?.setWindowLayoutFullScreen(true);
+            await this.win?.setWindowSystemBarEnable([]);
+          }
+        } catch (e) {
+          await this.win?.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
+        }
+        break;
       case 'recover':
+        AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::main", true);
+        this.notifyMenubarVisibilityFn?.("main", true);
         await this.win?.recover();
         break;
       case 'close':
-      case 'destroyWindow':
         await this.win?.minimize();
         break;
       case 'quit':
@@ -62,6 +91,7 @@ export class PredefinedActionExecutor {
       case 'showAll':
         break;
       case 'about':
+        this.showAboutFn?.(aboutMetadata ?? {} as AboutMetadataData);
         break;
       case 'restore':
         break;
@@ -71,9 +101,9 @@ export class PredefinedActionExecutor {
 
 export class MenuManager {
   private executor: PredefinedActionExecutor;
-  private emitMenuEventFn: (menuId: string) => void;
+  private emitMenuEventFn: (menuId: string, windowId?: string) => void;
 
-  constructor(executor: PredefinedActionExecutor, emitMenuEventFn: (menuId: string) => void) {
+  constructor(executor: PredefinedActionExecutor, emitMenuEventFn: (menuId: string, windowId?: string) => void) {
     this.executor = executor;
     this.emitMenuEventFn = emitMenuEventFn;
     setMenuClickHandler((item: MenuItemData) => {
@@ -81,14 +111,15 @@ export class MenuManager {
     });
   }
 
-  popupFromJson(jsonData: string, x?: number, y?: number): void {
+  popupFromJson(jsonData: string, x?: number, y?: number, windowId?: string): void {
     try {
-      AppStorage.setOrCreate("__openharmony_ability_menu_shown__", false);
-      AppStorage.setOrCreate("__openharmony_ability_menu_json__", jsonData);
-      AppStorage.setOrCreate("__openharmony_ability_menu_x__", x ?? 0);
-      AppStorage.setOrCreate("__openharmony_ability_menu_y__", y ?? 0);
+      const wid = windowId ?? "main";
+      AppStorage.setOrCreate("__openharmony_ability_menu_shown__::" + wid, false);
+      AppStorage.setOrCreate("__openharmony_ability_menu_json__::" + wid, jsonData);
+      AppStorage.setOrCreate("__openharmony_ability_menu_x__::" + wid, x ?? 0);
+      AppStorage.setOrCreate("__openharmony_ability_menu_y__::" + wid, y ?? 0);
       setTimeout(() => {
-        AppStorage.setOrCreate("__openharmony_ability_menu_shown__", true);
+        AppStorage.setOrCreate("__openharmony_ability_menu_shown__::" + wid, true);
       }, 0);
     } catch (e) {
       console.error('[Menu] Failed to popup menu:', e);
@@ -97,9 +128,9 @@ export class MenuManager {
 
   handleItemClick(item: MenuItemData): void {
     if (item.type === 'predefined' && item.predefinedType) {
-      this.executor.execute(item.predefinedType);
+      this.executor.execute(item.predefinedType, item.aboutMetadata);
     } else {
-      this.emitMenuEventFn(item.id);
+      this.emitMenuEventFn(item.id, "main");
     }
   }
 }

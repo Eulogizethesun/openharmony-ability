@@ -69,7 +69,7 @@ static TSFN_PREDEFINED: Mutex<Option<TrayTsfnPredefined>> = Mutex::new(None);
 
 /// Initialize all tray ThreadsafeFunctions. Must be called on ArkTS main thread.
 pub fn init_tray_tsfn(env: &Env) -> Result<()> {
-    let mut helper_obj = {
+    let helper_obj = {
         let helper_rc = unsafe { get_helper() };
         let helper_guard = helper_rc.borrow();
         let helper_ref = helper_guard
@@ -80,41 +80,17 @@ pub fn init_tray_tsfn(env: &Env) -> Result<()> {
 
     log_to_js(env, "[StatusBar] init_tray_tsfn: got helper_obj, creating TSFNs...");
 
-    // Set event callbacks directly on helper object (avoids Function::call issues in render context)
-    {
-        let icon_sender = super::event::icon_click_sender().clone();
-        let on_icon_click: Function<'_, Object<'_>, ()> = env.create_function_from_closure(
-            "_onIconClick",
-            move |ctx: FunctionCallContext| {
-                let event_data: Object = ctx.first_arg()?;
-                if let Ok(Some(data)) = event_data.get::<Object>("data") {
-                    if let Ok(Some(click_type)) = data.get::<String>("iconClickType") {
-                        let event = super::types::StatusBarClickEvent::IconClick { click_type };
-                        let _ = icon_sender.send(event);
-                    }
-                }
-                Ok(())
-            },
-        )?;
-        helper_obj.set("_onIconClick", on_icon_click)?;
-
-        let menu_sender = super::event::menu_click_sender().clone();
-        let on_menu_click: Function<'_, Object<'_>, ()> = env.create_function_from_closure(
-            "_onMenuClick",
-            move |ctx: FunctionCallContext| {
-                let event_data: Object = ctx.first_arg()?;
-                log::debug!("[StatusBar] _onMenuClick callback invoked");
-                if let Ok(Some(data)) = event_data.get::<Object>("data") {
-                    if let Ok(Some(menu_code)) = data.get::<String>("menuCode") {
-                        log::debug!("[StatusBar] menu_code from event: {}", menu_code);
-                        let event = super::types::StatusBarClickEvent::MenuClick { menu_code };
-                        let _ = menu_sender.send(event);
-                    }
-                }
-                Ok(())
-            },
-        )?;
-        helper_obj.set("_onMenuClick", on_menu_click)?;
+    // Register event callbacks on helper object via event.rs
+    // (register_icon_click_handler/register_menu_click_handler set _onIconClick/_onMenuClick)
+    if let Err(e) = super::event::register_icon_click_handler() {
+        log_to_js(env, &format!("[StatusBar] register_icon_click_handler failed: {}", e));
+    } else {
+        log_to_js(env, "[StatusBar] register_icon_click_handler OK");
+    }
+    if let Err(e) = super::event::register_menu_click_handler() {
+        log_to_js(env, &format!("[StatusBar] register_menu_click_handler failed: {}", e));
+    } else {
+        log_to_js(env, "[StatusBar] register_menu_click_handler OK");
     }
 
     let add_fn: Function<
@@ -191,17 +167,6 @@ pub fn init_tray_tsfn(env: &Env) -> Result<()> {
     *TSFN_UPDATE_MENU.lock().unwrap() = Some(update_menu_tsfn);
     *TSFN_UPDATE_TIPS.lock().unwrap() = Some(update_tips_tsfn);
     *TSFN_PREDEFINED.lock().unwrap() = Some(predefined_tsfn);
-
-    if let Err(e) = super::event::register_icon_click_handler() {
-        log_to_js(env, &format!("[StatusBar] register_icon_click_handler failed: {}", e));
-    } else {
-        log_to_js(env, "[StatusBar] register_icon_click_handler OK");
-    }
-    if let Err(e) = super::event::register_menu_click_handler() {
-        log_to_js(env, &format!("[StatusBar] register_menu_click_handler failed: {}", e));
-    } else {
-        log_to_js(env, "[StatusBar] register_menu_click_handler OK");
-    }
 
     Ok(())
 }

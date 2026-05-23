@@ -7,9 +7,11 @@ import * as Entry from "../components/MainPage";
 import { AbilityInitContext, ApplicationLifecycle, Module } from "./type";
 import { Loadable } from "../helper/loadable";
 import { MenuManager, PredefinedActionExecutor } from "../helper/menu";
+import { AboutMetadataData } from "../helper/menu_types";
 import { menuStateController } from "../helper/menu_state";
 import { setCurrentAbilityName } from "../helper/StatusBarUtils";
 import { WindowManager } from "../window/WindowManager";
+import { setPrimaryWebviewControllerCallback } from "../components/DefaultXComponent";
 
 export const STATE_KEY = "ohos.rs.ability.application.state";
 
@@ -69,7 +71,6 @@ export class NativeAbility extends UIAbility {
   }
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
-    // Store ability name globally for statusBarManager quickOperation
     setCurrentAbilityName(want.abilityName ?? "");
 
     const isRestore: boolean =
@@ -123,24 +124,83 @@ export class NativeAbility extends UIAbility {
 
   private setupMenuPopup(windowStage: window.WindowStage): void {
     const primaryModule: ESObject = this.nativeModules[0] as ESObject;
-    if (!primaryModule || typeof primaryModule.onPopupRequest !== 'function') {
+    if (!primaryModule || typeof primaryModule.onMenuRequest !== 'function') {
       return;
     }
-    const emitMenuEventFn: (menuId: string) => void = primaryModule.emitMenuEvent as (menuId: string) => void;
+
+    AppStorage.setOrCreate("__openharmony_ability_is_desktop__", primaryModule.isDesktopDevice());
+
+    const emitMenuEventFn: (menuId: string, windowId?: string) => void = primaryModule.emitMenuEvent as (menuId: string, windowId?: string) => void;
 
     const executor = new PredefinedActionExecutor((code: number) => {
       this.context?.terminateSelf();
     });
-    executor.setWindow(windowStage.getMainWindowSync());
+    const mainWindow = windowStage.getMainWindowSync();
+    executor.setWindow(mainWindow);
+    executor.setNotifyMenubarVisibilityFn((windowId: string, visible: boolean) => {
+      primaryModule.notifyMenubarVisibility(windowId, visible);
+    });
+    executor.setShowAboutFn((metadata: AboutMetadataData) => {
+      const appName = metadata.name ?? '';
+      const appVersion = metadata.version ?? '';
+      const appCopyright = metadata.copyright ?? '';
+      const appAuthors = metadata.authors?.join(', ') ?? '';
+      const appComments = metadata.comments ?? '';
+      const appWebsite = metadata.website ?? '';
+
+      const lines: string[] = [];
+      if (appName) lines.push(appName);
+      if (appVersion) lines.push(`Version: ${appVersion}`);
+      if (appCopyright) lines.push(appCopyright);
+      if (appAuthors) lines.push(`Authors: ${appAuthors}`);
+      if (appComments) lines.push(appComments);
+      if (appWebsite) lines.push(appWebsite);
+      const message = lines.join('\n');
+      const title = appName || 'About';
+
+      try {
+        const uiContext = mainWindow.getUIContext();
+        uiContext.showAlertDialog({
+          title: title,
+          message: message,
+          autoCancel: true,
+          confirm: {
+            value: 'OK',
+            action: () => {},
+          },
+        });
+      } catch (_) {}
+    });
 
     const menuManager = new MenuManager(executor, emitMenuEventFn);
 
-    primaryModule.onPopupRequest((data: { jsonData: string; x?: number; y?: number }) => {
-      try {
-        menuManager.popupFromJson(data.jsonData, data.x ?? 0, data.y ?? 0);
-      } catch (e) {
-        console.error(`[Menu] Popup failed: ${e}`);
+    Entry.setRecoverFn(() => {
+      mainWindow.recover();
+    });
+
+    setPrimaryWebviewControllerCallback((controller: webview.WebviewController) => {
+      executor.setController(controller);
+    });
+
+    primaryModule.onMenuRequest((data: { jsonData: string; x?: number; y?: number; visible?: boolean; windowId?: string }) => {
+      const windowId = data.windowId ?? "main";
+
+      if (data.visible !== undefined && data.visible !== null) {
+        AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::" + windowId, data.visible);
+        primaryModule.notifyMenubarVisibility(windowId, data.visible);
+        return;
       }
+
+      if (data.x !== undefined && data.y !== undefined) {
+        try {
+          menuManager.popupFromJson(data.jsonData, data.x ?? 0, data.y ?? 0, windowId);
+        } catch (e) {
+          console.error(`[Menu] Popup failed: ${e}`);
+        }
+        return;
+      }
+
+      AppStorage.setOrCreate("__openharmony_ability_menubar_json__::" + windowId, data.jsonData);
     });
   }
 
@@ -170,6 +230,10 @@ export class NativeAbility extends UIAbility {
           );
         });
         win.on("windowRectChange", (options: window.RectChangeOptions) => {
+          if (!AppStorage.get<boolean>("__openharmony_ability_menubar_visible__::main") &&
+              options.reason === window.RectChangeReason.RECOVER) {
+            AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::main", true);
+          }
           this.forEachLifecycle((lifecycle) =>
             lifecycle.windowStageEventCallback.onWindowRectChange(options),
           );
@@ -193,7 +257,6 @@ export class NativeAbility extends UIAbility {
       } catch (_) {}
     }
 
-    // Register popup callback for menu system (must be after loadContentByName so UIContext is available)
     try {
       this.setupMenuPopup(windowStage);
     } catch (menuErr) {

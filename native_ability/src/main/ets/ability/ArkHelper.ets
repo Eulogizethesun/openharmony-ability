@@ -1,5 +1,6 @@
 import common from "@ohos.app.ability.common";
 import window from "@ohos.window";
+import display from "@ohos.display";
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { statusBarManager } from "@kit.DeskTopExtensionKit";
 import { emitter, BusinessError } from "@kit.BasicServicesKit";
@@ -28,6 +29,7 @@ import {
   processMenuItemIcons,
   helperRef,
 } from "../helper/StatusBarUtils";
+import { primaryWebviewControllerCallback, clearPrimaryWebviewControllerCallback } from "../components/DefaultXComponent";
 
 const DOMAIN: number = 0x1999;
 
@@ -210,6 +212,10 @@ export function createArkHelper(): ArkHelper {
 
         // 4. 正常创建
         const ret = targetController.addWebview(init);
+        if (primaryWebviewControllerCallback && init.controller) {
+          primaryWebviewControllerCallback(init.controller);
+          clearPrimaryWebviewControllerCallback();
+        }
         const applyStyle = (style: WebviewStyle) => {
           objectAssign(init.style as Record<string, ESObject>, style);
           targetController!.updateWebviewStyle(ret.webTag, init.style as WebviewStyle);
@@ -514,9 +520,25 @@ export function createArkHelper(): ArkHelper {
             break;
           }
           case 'maximize':
-          case 'fullscreen':
             context.windowStage.getMainWindowSync().maximize();
             break;
+          case 'fullscreen': {
+            AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::main", false);
+            AppStorage.setOrCreate("__openharmony_ability_menu_shown__::main", false);
+            const fullscreenWin = context.windowStage.getMainWindowSync();
+            try {
+              const displayInfo = display.getDefaultDisplaySync();
+              if (displayInfo.width > 800) {
+                fullscreenWin.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
+              } else {
+                fullscreenWin.setWindowLayoutFullScreen(true);
+                fullscreenWin.setWindowSystemBarEnable([]);
+              }
+            } catch (_) {
+              fullscreenWin.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
+            }
+            break;
+          }
         }
       } catch (e) {
         const err = e as BusinessError;

@@ -13,6 +13,18 @@ export interface MenuItemData {
   checked?: boolean;
   icon?: string;
   submenuItems?: MenuItemData[];
+  aboutMetadata?: AboutMetadataData;
+}
+
+export interface AboutMetadataData {
+  name?: string;
+  version?: string;
+  shortVersion?: string;
+  authors?: string[];
+  comments?: string;
+  copyright?: string;
+  license?: string;
+  website?: string;
 }
 
 /**
