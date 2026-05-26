@@ -35,6 +35,8 @@ pub struct WebViewBuilder {
     on_download_end: Option<OnDownloadEnd>,
     on_navigation_request: Option<Box<dyn Fn(String) -> bool>>,
     on_title_change: Option<Box<dyn Fn(String)>>,
+    on_page_begin: Option<Box<dyn Fn(String)>>,
+    on_page_end: Option<Box<dyn Fn(String)>>,
 }
 
 impl WebViewBuilder {
@@ -203,6 +205,30 @@ impl WebViewBuilder {
         }
     }
 
+    pub fn on_page_begin<F: Fn(String)>(self, on_page_begin: F) -> WebViewBuilder {
+        let static_handler = unsafe {
+            std::mem::transmute::<Box<dyn Fn(String)>, Box<dyn Fn(String) + 'static>>(Box::new(
+                on_page_begin,
+            ))
+        };
+        WebViewBuilder {
+            on_page_begin: Some(static_handler),
+            ..self
+        }
+    }
+
+    pub fn on_page_end<F: Fn(String)>(self, on_page_end: F) -> WebViewBuilder {
+        let static_handler = unsafe {
+            std::mem::transmute::<Box<dyn Fn(String)>, Box<dyn Fn(String) + 'static>>(Box::new(
+                on_page_end,
+            ))
+        };
+        WebViewBuilder {
+            on_page_end: Some(static_handler),
+            ..self
+        }
+    }
+
     pub fn build(self) -> Result<Webview> {
         let id = self
             .id
@@ -229,7 +255,7 @@ impl WebViewBuilder {
                 #[cfg(feature = "drag_and_drop")]
                 let on_drag_and_drop = self.on_drag_and_drop.and_then(|handler| {
                     env.create_function_from_closure("on_drag_and_drop", move |ctx| {
-                        let ret = ctx.try_get::<String>(1)?;
+                        let ret = ctx.try_get::<String>(0)?;
                         let ret = match ret {
                             Either::A(s) => s,
                             Either::B(_ret) => String::new(),
@@ -242,8 +268,8 @@ impl WebViewBuilder {
 
                 let on_download_start = self.on_download_start.and_then(|handler| {
                     env.create_function_from_closure("on_download_start", move |ctx| {
-                        let origin_url = ctx.try_get::<String>(1)?;
-                        let temp_path = ctx.try_get::<String>(2)?;
+                        let origin_url = ctx.try_get::<String>(0)?;
+                        let temp_path = ctx.try_get::<String>(1)?;
                         let origin_url_str = match origin_url {
                             Either::A(s) => s,
                             Either::B(_ret) => String::new(),
@@ -264,9 +290,9 @@ impl WebViewBuilder {
 
                 let on_download_end = self.on_download_end.and_then(|handler| {
                     env.create_function_from_closure("on_download_end", move |ctx| {
-                        let origin_url = ctx.try_get::<String>(1)?;
-                        let temp_path = ctx.try_get::<String>(2)?;
-                        let success = ctx.try_get::<bool>(3)?;
+                        let origin_url = ctx.try_get::<String>(0)?;
+                        let temp_path = ctx.try_get::<String>(1)?;
+                        let success = ctx.try_get::<bool>(2)?;
                         let origin_url_str = match origin_url {
                             Either::A(s) => s,
                             Either::B(_ret) => String::new(),
@@ -287,7 +313,7 @@ impl WebViewBuilder {
 
                 let on_navigation_request = self.on_navigation_request.and_then(|handler| {
                     env.create_function_from_closure("on_navigation_request", move |ctx| {
-                        let ret = ctx.try_get::<String>(1)?;
+                        let ret = ctx.try_get::<String>(0)?;
                         let ret = match ret {
                             Either::A(s) => s,
                             Either::B(_ret) => String::new(),
@@ -300,12 +326,38 @@ impl WebViewBuilder {
 
                 let on_title_change = self.on_title_change.and_then(|handler| {
                     env.create_function_from_closure("on_title_change", move |ctx| {
-                        let ret = ctx.try_get::<String>(1)?;
+                        let ret = ctx.try_get::<String>(0)?;
                         let ret = match ret {
                             Either::A(s) => s,
                             Either::B(_ret) => String::new(),
                         };
                         handler(ret);
+                        Ok(())
+                    })
+                    .ok()
+                });
+
+                let on_page_begin = self.on_page_begin.and_then(|handler| {
+                    env.create_function_from_closure("on_page_begin", move |ctx| {
+                        let url = ctx.try_get::<String>(0)?;
+                        let url_str = match url {
+                            Either::A(s) => s,
+                            Either::B(_ret) => String::new(),
+                        };
+                        handler(url_str);
+                        Ok(())
+                    })
+                    .ok()
+                });
+
+                let on_page_end = self.on_page_end.and_then(|handler| {
+                    env.create_function_from_closure("on_page_end", move |ctx| {
+                        let url = ctx.try_get::<String>(0)?;
+                        let url_str = match url {
+                            Either::A(s) => s,
+                            Either::B(_ret) => String::new(),
+                        };
+                        handler(url_str);
                         Ok(())
                     })
                     .ok()
@@ -333,6 +385,8 @@ impl WebViewBuilder {
                     on_download_end,
                     on_navigation_request,
                     on_title_change,
+                    on_page_begin,
+                    on_page_end,
                 })?;
 
                 let web = Webview::new(id.clone(), webview)?;

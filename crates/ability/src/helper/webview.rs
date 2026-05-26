@@ -55,6 +55,8 @@ pub struct WebViewInitData<'a> {
     pub on_download_end: OnDownloadEnd<'a>,
     pub on_navigation_request: Option<Function<'a, String, bool>>,
     pub on_title_change: Option<Function<'a, String, ()>>,
+    pub on_page_begin: Option<Function<'a, String, ()>>,
+    pub on_page_end: Option<Function<'a, String, ()>>,
 }
 
 #[derive(Clone)]
@@ -206,7 +208,7 @@ impl Webview {
                 )?;
 
             let cb = env.create_function_from_closure("evaluate_js_callback", move |ctx| {
-                let ret = ctx.try_get::<String>(1)?;
+                let ret = ctx.try_get::<String>(0)?;
                 let ret = match ret {
                     Either::A(s) => s,
                     Either::B(_ret) => String::from("undefined"),

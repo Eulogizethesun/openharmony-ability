@@ -163,7 +163,19 @@ export function createArkHelper(): ArkHelper {
           onDownloadEnd: data?.onDownloadEnd,
           onNavigationRequest: data?.onNavigationRequest,
           onTitleChange: data?.onTitleChange,
+          onPageBegin: data?.onPageBegin,
+          onPageEnd: data?.onPageEnd,
         } as WebviewInitData;
+
+        hilog.info(DOMAIN, 'ArkHelper',
+          'createWebview event handlers: nav=%{public}s, title=%{public}s, dlStart=%{public}s, dlEnd=%{public}s, pgBegin=%{public}s, pgEnd=%{public}s',
+          typeof init.onNavigationRequest === 'function' ? 'YES' : 'NO',
+          typeof init.onTitleChange === 'function' ? 'YES' : 'NO',
+          typeof init.onDownloadStart === 'function' ? 'YES' : 'NO',
+          typeof init.onDownloadEnd === 'function' ? 'YES' : 'NO',
+          typeof init.onPageBegin === 'function' ? 'YES' : 'NO',
+          typeof init.onPageEnd === 'function' ? 'YES' : 'NO',
+        );
 
         init.style = init.style || {};
         if (data?.transparent && !init.style.backgroundColor) {
@@ -251,7 +263,19 @@ export function createArkHelper(): ArkHelper {
           onDownloadEnd: data?.onDownloadEnd,
           onNavigationRequest: data?.onNavigationRequest,
           onTitleChange: data?.onTitleChange,
+          onPageBegin: data?.onPageBegin,
+          onPageEnd: data?.onPageEnd,
         } as WebviewInitData;
+
+        hilog.info(DOMAIN, 'ArkHelper',
+          'createWebview event handlers: nav=%{public}s, title=%{public}s, dlStart=%{public}s, dlEnd=%{public}s, pgBegin=%{public}s, pgEnd=%{public}s',
+          typeof init.onNavigationRequest === 'function' ? 'YES' : 'NO',
+          typeof init.onTitleChange === 'function' ? 'YES' : 'NO',
+          typeof init.onDownloadStart === 'function' ? 'YES' : 'NO',
+          typeof init.onDownloadEnd === 'function' ? 'YES' : 'NO',
+          typeof init.onPageBegin === 'function' ? 'YES' : 'NO',
+          typeof init.onPageEnd === 'function' ? 'YES' : 'NO',
+        );
 
         init.style = init.style || {};
 
