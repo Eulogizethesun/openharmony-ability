@@ -44,6 +44,10 @@ pub struct MenuItemData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nativeIcon")]
+    #[napi(js_name = "nativeIcon")]
+    pub native_icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[napi(js_name = "submenuItems")]
     #[serde(rename = "submenuItems")]
     pub submenu_items: Option<Vec<MenuItemData>>,
@@ -95,6 +99,7 @@ impl Menu {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: Some(self.items.clone()),
             about_metadata: None,
         }
@@ -161,6 +166,7 @@ impl MenuItem {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: None,
             about_metadata: None,
         }
@@ -221,6 +227,7 @@ impl Submenu {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: Some(self.items.clone()),
             about_metadata: None,
         }
@@ -242,6 +249,7 @@ mod tests {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: None,
             about_metadata: None,
         };
@@ -260,6 +268,7 @@ mod tests {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: Some(vec![MenuItemData {
                 id: "item_1".to_string(),
                 item_type: "item".to_string(),
@@ -269,6 +278,7 @@ mod tests {
                 predefined_type: None,
                 checked: None,
                 icon: None,
+            native_icon: None,
                 submenu_items: None,
                 about_metadata: None,
             }]),
@@ -303,6 +313,7 @@ mod tests {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: None,
             about_metadata: None,
         };
@@ -331,6 +342,7 @@ mod tests {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: None,
             about_metadata: None,
         };
@@ -354,6 +366,7 @@ mod tests {
             predefined_type: Some("quit".to_string()),
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: None,
             about_metadata: None,
         };
@@ -366,6 +379,7 @@ mod tests {
             predefined_type: None,
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: Some(vec![predefined]),
             about_metadata: None,
         };

@@ -57,6 +57,9 @@ pub struct MenuRequest {
 // Per-window menubar visibility state (default true for each window)
 static MENUBAR_VISIBLE: LazyLock<RwLock<HashMap<String, bool>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
+// Per-window menu content state: true if JSON is not "[]" (default true for each window)
+static MENU_HAS_CONTENT: LazyLock<RwLock<HashMap<String, bool>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
+
 // Event channel: ArkTS → muda
 static MENU_EVENT_CHANNEL: LazyLock<(Sender<String>, Receiver<String>)> = LazyLock::new(unbounded);
 
@@ -118,10 +121,20 @@ pub fn notify_menubar_visibility(window_id: String, visible: bool) {
     map.insert(window_id, visible);
 }
 
-/// Rust API: Check if menubar is visible for a specific window (default true)
+/// Rust API: Check if menubar is visible for a specific window
+/// Returns true only if: menubar is not hidden AND menu has content (JSON != "[]")
 pub fn is_menubar_visible(window_id: &str) -> bool {
-    let map = MENUBAR_VISIBLE.read().unwrap();
-    map.get(window_id).copied().unwrap_or(true)
+    let visible = MENUBAR_VISIBLE.read().unwrap()
+        .get(window_id)
+        .copied()
+        .unwrap_or(true);
+
+    let has_content = MENU_HAS_CONTENT.read().unwrap()
+        .get(window_id)
+        .copied()
+        .unwrap_or(true);
+
+    visible && has_content
 }
 
 /// Rust API: Set menubar visibility and push to ArkTS via TSFN
@@ -219,8 +232,16 @@ pub fn popup_context_menu(json_data: String, x: Option<f64>, y: Option<f64>, win
 }
 
 /// Rust API: Set menu bar JSON (for menubar) — x/y/visible absent
+/// Updates MENU_HAS_CONTENT: false if JSON is "[]", true otherwise
 pub fn set_menu_json(json_data: String, window_id: String) -> Result<()> {
     log::debug!("[Menu] set_menu_json called: window_id={window_id}, json_len={}", json_data.len());
+
+    // Track whether menu has content (JSON != "[]")
+    let has_content = json_data.trim() != "[]";
+    if let Ok(mut map) = MENU_HAS_CONTENT.write() {
+        map.insert(window_id.clone(), has_content);
+    }
+
     if let Ok(mut buffer) = LAST_MENUBAR_JSON.lock() {
         buffer.insert(window_id.clone(), json_data.clone());
     }
@@ -246,69 +267,91 @@ mod tests {
         assert_eq!(received, "test_menu_id");
     }
 
+    /// All MENU_CHANNEL send/recv tests merged to avoid races on the shared static channel.
     #[test]
-    fn test_menu_channel_popup() {
-        let request = MenuRequest {
+    fn test_menu_channel_requests() {
+        drain_menu_channel();
+
+        // 1. popup request
+        let popup = MenuRequest {
             json_data: "{\"items\":[]}".to_string(),
             x: Some(100.0),
             y: Some(200.0),
             visible: None,
-            window_id: "main".to_string(),
+            window_id: "ch_popup".to_string(),
         };
-        MENU_CHANNEL.0.send(request.clone()).unwrap();
-        let received = MENU_CHANNEL.1.recv().unwrap();
-        assert_eq!(received.json_data, request.json_data);
-        assert_eq!(received.x, Some(100.0));
-        assert_eq!(received.y, Some(200.0));
-        assert_eq!(received.visible, None);
-        assert_eq!(received.window_id, "main");
-    }
+        MENU_CHANNEL.0.send(popup.clone()).unwrap();
+        let r = MENU_CHANNEL.1.recv().unwrap();
+        assert_eq!(r.json_data, popup.json_data);
+        assert_eq!(r.x, Some(100.0));
+        assert_eq!(r.y, Some(200.0));
+        assert!(r.visible.is_none());
 
-    #[test]
-    fn test_menu_channel_menubar() {
-        let request = MenuRequest {
+        // 2. menubar request
+        let menubar = MenuRequest {
             json_data: "[{\"type\":\"submenu\",\"text\":\"File\"}]".to_string(),
             x: None,
             y: None,
             visible: None,
-            window_id: "main".to_string(),
+            window_id: "ch_menubar".to_string(),
         };
-        MENU_CHANNEL.0.send(request.clone()).unwrap();
-        let received = MENU_CHANNEL.1.recv().unwrap();
-        assert_eq!(received.json_data, request.json_data);
-        assert_eq!(received.x, None);
-        assert_eq!(received.y, None);
-        assert_eq!(received.visible, None);
-        assert_eq!(received.window_id, "main");
-    }
+        MENU_CHANNEL.0.send(menubar.clone()).unwrap();
+        let r = MENU_CHANNEL.1.recv().unwrap();
+        assert_eq!(r.json_data, menubar.json_data);
+        assert!(r.x.is_none());
+        assert!(r.y.is_none());
+        assert!(r.visible.is_none());
+        assert_eq!(r.window_id, "ch_menubar");
 
-    #[test]
-    fn test_menu_channel_visibility_hide() {
-        let request = MenuRequest {
+        // 3. visibility hide
+        let hide = MenuRequest {
             json_data: "".to_string(),
             x: None,
             y: None,
             visible: Some(false),
-            window_id: "main".to_string(),
+            window_id: "ch_vis".to_string(),
         };
-        MENU_CHANNEL.0.send(request.clone()).unwrap();
-        let received = MENU_CHANNEL.1.recv().unwrap();
-        assert_eq!(received.visible, Some(false));
-        assert_eq!(received.window_id, "main");
-    }
+        MENU_CHANNEL.0.send(hide).unwrap();
+        let r = MENU_CHANNEL.1.recv().unwrap();
+        assert_eq!(r.visible, Some(false));
+        assert_eq!(r.window_id, "ch_vis");
 
-    #[test]
-    fn test_menu_channel_visibility_show() {
-        let request = MenuRequest {
+        // 4. visibility show
+        let show = MenuRequest {
             json_data: "".to_string(),
             x: None,
             y: None,
             visible: Some(true),
-            window_id: "main".to_string(),
+            window_id: "ch_vis".to_string(),
         };
-        MENU_CHANNEL.0.send(request.clone()).unwrap();
-        let received = MENU_CHANNEL.1.recv().unwrap();
-        assert_eq!(received.visible, Some(true));
+        MENU_CHANNEL.0.send(show).unwrap();
+        let r = MENU_CHANNEL.1.recv().unwrap();
+        assert_eq!(r.visible, Some(true));
+
+        // 5. set_menubar_visible sends channel request
+        MENUBAR_VISIBLE.write().unwrap().remove("ch_set_vis");
+        set_menubar_visible(false, "ch_set_vis".to_string()).unwrap();
+        let r = MENU_CHANNEL.1.recv().unwrap();
+        assert_eq!(r.visible, Some(false));
+        assert_eq!(r.window_id, "ch_set_vis");
+        assert!(r.json_data.is_empty());
+
+        // 6. set_menu_json sends channel request
+        let json = "[{\"type\":\"submenu\",\"text\":\"Edit\",\"id\":\"edit\"}]";
+        set_menu_json(json.to_string(), "ch_json".to_string()).unwrap();
+        let r = MENU_CHANNEL.1.recv().unwrap();
+        assert_eq!(r.json_data, json);
+        assert_eq!(r.window_id, "ch_json");
+        assert!(r.visible.is_none());
+        assert!(r.x.is_none());
+
+        // 7. popup_context_menu sends channel request
+        popup_context_menu("{\"items\":[]}".to_string(), Some(50.0), Some(100.0), "ch_ctx".to_string()).unwrap();
+        let r = MENU_CHANNEL.1.recv().unwrap();
+        assert_eq!(r.x, Some(50.0));
+        assert_eq!(r.y, Some(100.0));
+        assert_eq!(r.window_id, "ch_ctx");
+        assert!(r.visible.is_none());
     }
 
     #[test]
@@ -387,54 +430,52 @@ mod tests {
         assert!(!json.contains("\"window_id\":"));
     }
 
+    /// All MENUBAR_VISIBLE + MENU_HAS_CONTENT state tests merged to avoid
+    /// races on the shared static HashMaps.
     #[test]
-    fn test_menubar_visible_default_true() {
-        assert!(is_menubar_visible("unknown_window"));
-    }
+    fn test_menubar_visible_state() {
+        // Clean state
+        MENUBAR_VISIBLE.write().unwrap().clear();
+        MENU_HAS_CONTENT.write().unwrap().clear();
 
-    #[test]
-    fn test_menubar_visible_per_window() {
-        set_menubar_visible(false, "A".to_string()).ok();
-        assert!(!is_menubar_visible("A"));
-        assert!(is_menubar_visible("B"));
-        set_menubar_visible(true, "A".to_string()).ok();
-        assert!(is_menubar_visible("A"));
-    }
+        // 1. Default: unknown window → visible && has_content → true
+        assert!(is_menubar_visible("st_unknown"));
 
-    #[test]
-    fn test_menubar_visible_sends_channel_request() {
-        drain_menu_channel();
-        MENUBAR_VISIBLE.write().unwrap().remove("test_vis_ch");
-        set_menubar_visible(false, "test_vis_ch".to_string()).unwrap();
-        let received = MENU_CHANNEL.1.recv().unwrap();
-        assert_eq!(received.visible, Some(false));
-        assert_eq!(received.window_id, "test_vis_ch");
-        assert!(received.json_data.is_empty());
-        assert!(received.x.is_none());
-        assert!(received.y.is_none());
-    }
+        // 2. Per-window visibility toggle
+        set_menubar_visible(false, "st_A".to_string()).ok();
+        assert!(!is_menubar_visible("st_A"));
+        assert!(is_menubar_visible("st_B")); // different window unaffected
+        set_menubar_visible(true, "st_A".to_string()).ok();
+        assert!(is_menubar_visible("st_A"));
 
-    #[test]
-    fn test_set_menu_json_with_window_id() {
-        drain_menu_channel();
-        let json = "[{\"type\":\"submenu\",\"text\":\"Edit\",\"id\":\"edit\"}]";
-        set_menu_json(json.to_string(), "win1".to_string()).unwrap();
-        let received = MENU_CHANNEL.1.recv().unwrap();
-        assert_eq!(received.json_data, json);
-        assert_eq!(received.window_id, "win1");
-        assert!(received.visible.is_none());
-        assert!(received.x.is_none());
-    }
+        // 3. Empty menu JSON → has_content = false → not visible
+        set_menu_json("[]".to_string(), "st_empty".to_string()).unwrap();
+        assert!(!is_menubar_visible("st_empty"));
 
-    #[test]
-    fn test_popup_context_menu_with_window_id() {
-        drain_menu_channel();
-        popup_context_menu("{\"items\":[]}".to_string(), Some(50.0), Some(100.0), "win2".to_string()).unwrap();
-        let received = MENU_CHANNEL.1.recv().unwrap();
-        assert_eq!(received.x, Some(50.0));
-        assert_eq!(received.y, Some(100.0));
-        assert_eq!(received.window_id, "win2");
-        assert!(received.visible.is_none());
+        // 4. Non-empty menu JSON → has_content = true → visible
+        set_menu_json("[{\"type\":\"submenu\"}]".to_string(), "st_content".to_string()).unwrap();
+        assert!(is_menubar_visible("st_content"));
+
+        // 5. Both conditions: hide + content → not visible
+        set_menu_json("[{\"type\":\"submenu\"}]".to_string(), "st_both".to_string()).unwrap();
+        assert!(is_menubar_visible("st_both"));
+        set_menubar_visible(false, "st_both".to_string()).unwrap();
+        assert!(!is_menubar_visible("st_both")); // hidden
+
+        // 6. Show + empty content → not visible
+        set_menubar_visible(true, "st_both".to_string()).unwrap();
+        set_menu_json("[]".to_string(), "st_both".to_string()).unwrap();
+        assert!(!is_menubar_visible("st_both")); // no content
+
+        // 7. Restore content → visible again
+        set_menu_json("[{\"type\":\"submenu\"}]".to_string(), "st_both".to_string()).unwrap();
+        assert!(is_menubar_visible("st_both"));
+
+        // 8. notify_menubar_visibility updates state
+        notify_menubar_visibility("st_notify".to_string(), false);
+        assert!(!is_menubar_visible("st_notify"));
+        notify_menubar_visibility("st_notify".to_string(), true);
+        assert!(is_menubar_visible("st_notify"));
     }
 
     #[test]
@@ -475,27 +516,5 @@ mod tests {
         assert!(deserialized.y.is_none());
         assert!(deserialized.visible.is_none());
         assert!(deserialized.window_id.is_none());
-    }
-
-    #[test]
-    fn test_menubar_visible_independent_windows() {
-        MENUBAR_VISIBLE.write().unwrap().clear();
-        assert!(is_menubar_visible("winA"));
-        assert!(is_menubar_visible("winB"));
-        set_menubar_visible(false, "winA".to_string()).unwrap();
-        assert!(!is_menubar_visible("winA"));
-        assert!(is_menubar_visible("winB"));
-        set_menubar_visible(false, "winB".to_string()).unwrap();
-        assert!(!is_menubar_visible("winA"));
-        assert!(!is_menubar_visible("winB"));
-    }
-
-    #[test]
-    fn test_notify_menubar_visibility_updates_state() {
-        MENUBAR_VISIBLE.write().unwrap().remove("notify_test");
-        notify_menubar_visibility("notify_test".to_string(), false);
-        assert!(!is_menubar_visible("notify_test"));
-        notify_menubar_visibility("notify_test".to_string(), true);
-        assert!(is_menubar_visible("notify_test"));
     }
 }

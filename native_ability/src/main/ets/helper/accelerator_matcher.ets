@@ -40,6 +40,8 @@ const CLIPBOARD_ACCELERATORS: Set<string> = new Set([
   'ctrl+x',   // cut
   'ctrl+v',   // paste
   'ctrl+a',   // selectAll
+  'ctrl+z',   // undo
+  'ctrl+y',   // redo
 ]);
 
 export class AcceleratorMatcher {

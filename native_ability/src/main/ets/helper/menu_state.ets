@@ -78,18 +78,3 @@ export class MenuStateController {
     this.notifyStateChange();
   }
 }
-
-export const menuStateController = new MenuStateController();
-
-// Global callback for direct popup trigger (bypasses state subscription)
-let globalPopupCallback: ((items: MenuItemData[], x: number, y: number) => void) | null = null;
-
-export function setGlobalPopupCallback(callback: (items: MenuItemData[], x: number, y: number) => void): void {
-  globalPopupCallback = callback;
-}
-
-export function triggerGlobalPopup(items: MenuItemData[], x: number, y: number): void {
-  if (globalPopupCallback) {
-    globalPopupCallback(items, x, y);
-  }
-}

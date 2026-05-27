@@ -28,9 +28,9 @@ use crate::{
         resource_manager as global_resource_manager,
         set_resource_manager as set_global_resource_manager,
     },
-    unknown_to_permission_promise, AbilityError, AvoidArea, AvoidAreaType, Configuration, Event,
-    OpenHarmonyWaker, PermissionRequest, PermissionRequestCode, PermissionRequestOutput, Rect,
-    ResourceManager, WAKER,
+    unknown_to_permission_promise, AbilityError, AvoidArea, AvoidAreaType, ColorMode, Configuration,
+    Event, OpenHarmonyWaker, PermissionRequest, PermissionRequestCode, PermissionRequestOutput,
+    Rect, ResourceManager, WAKER,
 };
 
 static ID: AtomicI64 = AtomicI64::new(0);
@@ -258,6 +258,29 @@ impl OpenHarmonyAppInner {
         }
         Ok(())
     }
+
+    /// Set app color mode (dark/light/system) by calling ArkTS helper `setColorMode(mode)`.
+    ///
+    /// Mode values match OHOS `ConfigurationConstant.ColorMode`:
+    /// - `-1` = COLOR_MODE_NOT_SET (follow system)
+    /// - `0` = COLOR_MODE_DARK
+    /// - `1` = COLOR_MODE_LIGHT
+    pub fn set_color_mode(&self, mode: ColorMode) -> Result<()> {
+        let ret = unsafe { get_helper() };
+        if let Some(h) = ret.borrow().as_ref() {
+            if let Some(env) = get_main_thread_env().borrow().as_ref() {
+                let ret = h.get_value(env)?;
+                let set_color_mode_fn =
+                    ret.get_named_property::<Function<'_, i32, ()>>("setColorMode")?;
+                set_color_mode_fn.call(mode as i32)?;
+            } else {
+                return Err(Error::from_reason(
+                    AbilityError::OnlyRunWithMainThread("set_color_mode".to_string()).to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 type EventLoop = Arc<RefCell<Option<Box<dyn FnMut(Event) + Sync + Send>>>>;
@@ -468,6 +491,12 @@ impl OpenHarmonyApp {
 /// Exit current app with code
     pub fn exit(&self, code: i32) {
         self.inner.read().unwrap().exit(code).unwrap();
+    }
+
+    /// Set app color mode (dark/light/system).
+    /// Delegates to ArkTS helper `setColorMode(mode)`.
+    pub fn set_color_mode(&self, mode: ColorMode) -> Result<()> {
+        self.inner.read().unwrap().set_color_mode(mode)
     }
 
     /// Request one or more runtime permissions through ArkTS helper.

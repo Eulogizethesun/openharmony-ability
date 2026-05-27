@@ -277,6 +277,7 @@ impl PredefinedMenuItem {
             predefined_type: Some(self.predefined_type.as_str().to_string()),
             checked: None,
             icon: None,
+            native_icon: None,
             submenu_items: None,
             about_metadata: None,
         }
