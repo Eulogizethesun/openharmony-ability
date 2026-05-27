@@ -278,6 +278,7 @@ impl PredefinedMenuItem {
             checked: None,
             icon: None,
             submenu_items: None,
+            about_metadata: None,
         }
     }
 }

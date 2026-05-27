@@ -1,6 +1,8 @@
 import { DefaultXComponent } from "./DefaultXComponent";
 import { Loadable } from "../helper/loadable";
 import { MenuItemData } from "../helper/menu_types";
+import { AcceleratorMatcher } from "../helper/accelerator_matcher";
+import { KeyCode } from "@kit.InputKit";
 import { image } from "@kit.ImageKit";
 import { buffer } from "@kit.ArkTS";
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -10,9 +12,14 @@ const DOMAIN: number = 0x1999;
 export const RouteName = "NativeAbility";
 
 let globalMenuClickHandler: ((item: MenuItemData) => void) | null = null;
+let globalRecoverFn: (() => void) | null = null;
 
 export function setMenuClickHandler(handler: (item: MenuItemData) => void): void {
   globalMenuClickHandler = handler;
+}
+
+export function setRecoverFn(fn: () => void): void {
+  globalRecoverFn = fn;
 }
 
 @Entry({ routeName: RouteName })
@@ -24,29 +31,69 @@ struct MainPage {
   @State private nativeModule: ESObject | null = null;
   @State private resolvedModuleName: string = "";
 
-  @StorageLink("__openharmony_ability_menu_shown__") menuShown: boolean = false;
-  @StorageLink("__openharmony_ability_menu_x__") menuX: number = 0;
-  @StorageLink("__openharmony_ability_menu_y__") menuY: number = 0;
-  @Watch("onMenuJsonChange") @StorageLink("__openharmony_ability_menu_json__") menuJson: string = "[]";
+  @StorageProp("__openharmony_ability_menu_shown__::main") menuShown: boolean = false;
+  @StorageProp("__openharmony_ability_menu_x__::main") menuX: number = 0;
+  @StorageProp("__openharmony_ability_menu_y__::main") menuY: number = 0;
+  @Watch("onMenuJsonChange") @StorageProp("__openharmony_ability_menu_json__::main") menuJson: string = "[]";
   @State private menuItems: MenuItemData[] = [];
   private iconPixelMaps: Map<string, image.PixelMap> = new Map();
+  private popupIconIds: Set<string> = new Set();
+  private menubarIconIds: Set<string> = new Set();
+
+  @StorageProp("__openharmony_ability_is_desktop__") isDesktop: boolean = false;
+  @Watch("onMenubarJsonChange") @StorageProp("__openharmony_ability_menubar_json__::main") menubarJson: string = "[]";
+  @StorageProp("__openharmony_ability_menubar_visible__::main") menubarVisible: boolean = true;
+  @State private menubarItems: MenuItemData[] = [];
+  @State private activeDropdownId: string = "";
+  @State private activeDropdownShown: boolean = false;
+  @State private hoveredItemId: string = "";
+  private acceleratorMatcher: AcceleratorMatcher = new AcceleratorMatcher();
 
   onMenuJsonChange(): void {
     try {
       const items = JSON.parse(this.menuJson) as MenuItemData[];
-      for (const pm of this.iconPixelMaps.values()) {
-        pm.release();
-      }
-      this.iconPixelMaps.clear();
+      this.popupIconIds.clear();
+      this.collectIconIds(items, this.popupIconIds);
       this.prepareIcons(items);
+      this.cleanupStaleIcons();
       this.menuItems = items;
     } catch (e) {
+      this.popupIconIds.clear();
+      this.cleanupStaleIcons();
       this.menuItems = [];
     }
   }
 
+  onMenubarJsonChange(): void {
+    try {
+      const items = JSON.parse(this.menubarJson) as MenuItemData[];
+      this.menubarIconIds.clear();
+      this.collectIconIds(items, this.menubarIconIds);
+      this.prepareIcons(items);
+      this.cleanupStaleIcons();
+      this.menubarItems = items.filter(i => i.type === 'submenu' && i.text);
+      this.acceleratorMatcher.buildFromItems(items);
+      const submenuDetails = this.menubarItems.map(i => `${i.text}: [${(i.submenuItems ?? []).map(s => s.text ?? s.id).join(',')}]`);
+      console.info(`[Menubar] onMenubarJsonChange: items=${items.length}, submenuItems=${this.menubarItems.length}, details=${submenuDetails.join('; ')}`);
+      // If dropdown is open, close and reopen to force re-render with updated data
+      if (this.activeDropdownShown && this.activeDropdownId) {
+        this.activeDropdownShown = false;
+        setTimeout(() => {
+          this.activeDropdownShown = true;
+        }, 0);
+      }
+    } catch (e) {
+      this.menubarIconIds.clear();
+      this.cleanupStaleIcons();
+      this.menubarItems = [];
+      console.error(`[Menubar] onMenubarJsonChange failed: ${e}`);
+    }
+  }
+
   private prepareIcons(items: MenuItemData[]): void {
-    for (const item of items) {
+    const queue: MenuItemData[] = [...items];
+    while (queue.length > 0) {
+      const item = queue.shift()!;
       if (item.icon) {
         try {
           const decoded = buffer.from(item.icon, 'base64');
@@ -60,11 +107,37 @@ struct MainPage {
         }
       }
       if (item.submenuItems) {
-        this.prepareIcons(item.submenuItems);
+        queue.push(...item.submenuItems);
       }
     }
   }
 
+  private cleanupStaleIcons(): void {
+    const liveIds = new Set<string>();
+    for (const id of this.popupIconIds) { liveIds.add(id); }
+    for (const id of this.menubarIconIds) { liveIds.add(id); }
+    for (const [id, pm] of this.iconPixelMaps) {
+      if (!liveIds.has(id)) {
+        pm.release();
+        this.iconPixelMaps.delete(id);
+      }
+    }
+  }
+
+  private collectIconIds(items: MenuItemData[], ids: Set<string>): void {
+    const queue: MenuItemData[] = [...items];
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      if (item.icon) {
+        ids.add(item.id);
+      }
+      if (item.submenuItems) {
+        queue.push(...item.submenuItems);
+      }
+    }
+  }
+
+  
   @Builder
   RenderMenuItems(items: MenuItemData[]) {
     ForEach(this.splitByDivider(items), (group: MenuItemData[], index: number) => {
@@ -150,6 +223,71 @@ struct MainPage {
     }
   }
 
+  @Builder
+  MenuBarRow() {
+    Row() {
+      ForEach(this.menubarItems, (item: MenuItemData) => {
+        Row() {
+          if (item.icon && this.iconPixelMaps.has(item.id)) {
+            Image(this.iconPixelMaps.get(item.id))
+              .width(16)
+              .height(16)
+              .margin({ right: 4 })
+          }
+          Text(item.text ?? '')
+            .fontSize(14)
+            .fontColor((item.enabled ?? true) ? '#333333' : '#999999')
+        }
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        .enabled(item.enabled ?? true)
+        .opacity((item.enabled ?? true) ? 1.0 : 0.5)
+        .backgroundColor(
+          this.activeDropdownId === item.id ? '#E0E0E0' :
+          this.hoveredItemId === item.id ? '#EBEBEB' :
+          '#F5F5F5'
+        )
+        .onClick(() => {
+          this.activeDropdownId = item.id;
+          this.activeDropdownShown = true;
+        })
+        .onHover((isHover: boolean) => {
+          this.hoveredItemId = isHover ? item.id : "";
+        })
+        .bindMenu(
+          this.activeDropdownShown && this.activeDropdownId === item.id,
+          this.MenubarDropdownContent(item),
+          {
+            showInSubWindow: true,
+            onWillDisappear: () => {
+              this.activeDropdownShown = false;
+              this.activeDropdownId = "";
+            }
+          }
+        )
+      }, (item: MenuItemData) => item.id)
+    }
+    .width("100%")
+    .height(40)
+    .backgroundColor('#F5F5F5')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  MenubarDropdownContent(item: MenuItemData) {
+    Menu() {
+      this.RenderMenuItems(this.getActiveDropdownItem()?.submenuItems ?? [])
+    }
+  }
+
+  private getActiveDropdownItem(): MenuItemData | null {
+    for (const item of this.menubarItems) {
+      if (item.id === this.activeDropdownId) {
+        return item;
+      }
+    }
+    return null;
+  }
+
   async aboutToAppear(): Promise<void> {
     hilog.info(DOMAIN, 'MainPage', '=== MainPage aboutToAppear START ===');
     hilog.info(DOMAIN, 'MainPage', 'Initializing MAIN WINDOW');
@@ -186,18 +324,39 @@ struct MainPage {
 
   build() {
     Stack() {
-      Row() {
-        Column() {
-          if (this.resolvedModuleName !== "") {
-        // 主窗口固定 windowId 为 0
-            DefaultXComponent({ moduleName: this.resolvedModuleName, windowId: 0 })
-          } else {
-            Text("Loading Main Window...")
-              .fontSize(20)
-              .fontColor(Color.Gray)
+      Column() {
+        if (this.isDesktop && this.menubarItems.length > 0 && this.menubarVisible) {
+          this.MenuBarRow()
+        }
+
+        Row() {
+          Column() {
+            if (this.resolvedModuleName !== "") {
+              DefaultXComponent({ moduleName: this.resolvedModuleName, windowId: 0 })
+            } else {
+              Text("Loading Main Window...")
+                .fontSize(20)
+                .fontColor(Color.Gray)
+            }
+          }.width("100%")
+        }.layoutWeight(1).height("100%")
+
+      }.width("100%").height("100%")
+      .onKeyPreIme((event: KeyEvent) => {
+        if (event.type === KeyType.Down && this.acceleratorMatcher.matches(event)) {
+          const matchedItem = this.acceleratorMatcher.getMatchedItem();
+          if (matchedItem && globalMenuClickHandler) {
+            globalMenuClickHandler(matchedItem);
           }
-        }.width("100%")
-      }.height("100%")
+          return true;
+        }
+        if (event.type === KeyType.Down && event.keyCode === KeyCode.KEYCODE_ESCAPE && !this.menubarVisible) {
+          AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::main", true);
+          globalRecoverFn?.();
+          return true;
+        }
+        return false;
+      })
 
       Column()
         .width(1)

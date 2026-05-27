@@ -1,4 +1,5 @@
 import { NodeContent } from "@kit.ArkUI";
+import display from '@ohos.display';
 import {
   ArkHelper,
   StatusBarIconRgba,
@@ -31,6 +32,18 @@ import {
 const DOMAIN: number = 0x1999;
 
 export const RouteName = "NativeAbility";
+
+import web_webview from '@ohos.web.webview';
+
+export let primaryWebviewControllerCallback: ((controller: web_webview.WebviewController) => void) | null = null;
+
+export function setPrimaryWebviewControllerCallback(cb: (controller: web_webview.WebviewController) => void): void {
+  primaryWebviewControllerCallback = cb;
+}
+
+export function clearPrimaryWebviewControllerCallback(): void {
+  primaryWebviewControllerCallback = null;
+}
 
 @Component
 export struct DefaultXComponent {

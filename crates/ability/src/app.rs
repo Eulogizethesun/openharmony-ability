@@ -465,7 +465,7 @@ impl OpenHarmonyApp {
         self.inner.read().unwrap().scale()
     }
 
-    /// Exit current app with code
+/// Exit current app with code
     pub fn exit(&self, code: i32) {
         self.inner.read().unwrap().exit(code).unwrap();
     }
@@ -599,6 +599,12 @@ impl Default for OpenHarmonyApp {
 // TODO: Can we remove this?
 unsafe impl Send for OpenHarmonyApp {}
 unsafe impl Sync for OpenHarmonyApp {}
+
+#[napi]
+#[cfg(target_env = "ohos")]
+pub fn is_desktop_device() -> bool {
+    cfg!(desktop)
+}
 
 #[derive(Clone)]
 pub struct SaveSaver<'a> {

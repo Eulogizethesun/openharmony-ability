@@ -22,7 +22,14 @@ mod webview;
 pub mod menu;
 
 #[cfg(feature = "menu")]
-pub use menu::{on_popup_request, start_popup_forwarder, PopupRequestData};
+pub use menu::{
+    on_menu_request, on_popup_request,
+    start_menu_forwarder, start_popup_forwarder,
+    MenuRequestData, PopupRequestData,
+    popup_context_menu, set_menu_json,
+    menu_event_receiver, popup_request_receiver, menu_request_receiver,
+    set_menubar_visible, is_menubar_visible, notify_menubar_visibility,
+};
 
 pub use app::*;
 pub use area::*;
