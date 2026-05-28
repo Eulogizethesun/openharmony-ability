@@ -1,6 +1,5 @@
 import common from "@ohos.app.ability.common";
 import window from "@ohos.window";
-import display from "@ohos.display";
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { statusBarManager } from "@kit.DeskTopExtensionKit";
 import { emitter, BusinessError } from "@kit.BasicServicesKit";
@@ -14,6 +13,8 @@ import {
 } from "../ability/type";
 import { exit, objectAssign } from "../helper";
 import { requestPermission } from "../helper/permission";
+import { getPredefinedActionExecutor } from "../helper/menu";
+import { PredefinedType } from "../helper/menu_types";
 import {
   EmbeddedWebviewManager,
   RustWebviewNodeController,
@@ -29,6 +30,7 @@ import {
   processMenuItemIcons,
   helperRef,
 } from "../helper/StatusBarUtils";
+import { ConfigurationConstant } from '@kit.AbilityKit';
 import { primaryWebviewControllerCallback, clearPrimaryWebviewControllerCallback } from "../components/DefaultXComponent";
 
 const DOMAIN: number = 0x1999;
@@ -480,69 +482,45 @@ export function createArkHelper(): ArkHelper {
     },
 
     executePredefinedAction: (actionType: string) => {
-      const context = getAbilityContext();
-      if (!context) return;
+      const executor = getPredefinedActionExecutor();
+      if (executor) {
+        // Tray actions always target main window (no targetWindowId → defaults to this.win)
+        executor.execute(actionType as PredefinedType);
+      } else {
+        hilog.warn(DOMAIN, 'ArkHelper',
+          'PredefinedActionExecutor not initialized, action: %{public}s', actionType);
+      }
+    },
+
+    setColorMode: (mode: number) => {
       try {
-        switch (actionType) {
-          case 'quit':
-            exit(0);
-            break;
-          case 'minimize':
-          case 'hide':
-          case 'close': {
-            const win = context.windowStage.getMainWindowSync();
-            let timerId: number | null = null;
-
-            const doMinimize = () => {
-              if (timerId !== null) { clearTimeout(timerId); timerId = null; }
-              try { context.windowStage.off("windowStageEvent", handler); } catch (_) {}
-              try { win.minimize(); } catch (e) {
-                const err = e as BusinessError;
-                console.error(`[StatusBar] minimize failed: ${err.code} ${err.message}`);
-              }
-            };
-
-            const handler = (event: window.WindowStageEventType) => {
-              if (event === window.WindowStageEventType.SHOWN) {
-                doMinimize();
-              }
-            };
-            context.windowStage.on("windowStageEvent", handler);
-
-            timerId = setTimeout(() => {
-              timerId = null;
-              try { context.windowStage.off("windowStageEvent", handler); } catch (_) {}
-              try { win.minimize(); } catch (e) {
-                const err = e as BusinessError;
-                console.error(`[StatusBar] minimize(fallback) failed: ${err.code} ${err.message}`);
-              }
-            }, 500);
-            break;
-          }
-          case 'maximize':
-            context.windowStage.getMainWindowSync().maximize();
-            break;
-          case 'fullscreen': {
-            AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::main", false);
-            AppStorage.setOrCreate("__openharmony_ability_menu_shown__::main", false);
-            const fullscreenWin = context.windowStage.getMainWindowSync();
-            try {
-              const displayInfo = display.getDefaultDisplaySync();
-              if (displayInfo.width > 800) {
-                fullscreenWin.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
-              } else {
-                fullscreenWin.setWindowLayoutFullScreen(true);
-                fullscreenWin.setWindowSystemBarEnable([]);
-              }
-            } catch (_) {
-              fullscreenWin.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
-            }
-            break;
-          }
+        const context = getUIAbilityContext();
+        if (!context) {
+          hilog.error(DOMAIN, 'ArkHelper', 'setColorMode: UIAbilityContext not available');
+          return;
         }
-      } catch (e) {
-        const err = e as BusinessError;
-        console.error(`[StatusBar] executePredefinedAction(${actionType}) failed: ${err.code} ${err.message}`);
+        let colorMode: ConfigurationConstant.ColorMode;
+        switch (mode) {
+          case 0:
+            colorMode = ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+            break;
+          case 1:
+            colorMode = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
+            break;
+          default:
+            colorMode = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
+            break;
+        }
+        // Defer setColorMode to next event loop to avoid deadlock:
+        // setColorMode synchronously triggers onConfigurationUpdate callback,
+        // which calls back into Rust. If we're already in a NAPI call from Rust,
+        // this creates a deadlock on the main thread.
+        setTimeout(() => {
+          context!.getApplicationContext().setColorMode(colorMode);
+          hilog.info(DOMAIN, 'ArkHelper', 'setColorMode: applied mode %{public}d', mode);
+        }, 0);
+      } catch (err) {
+        hilog.error(DOMAIN, 'ArkHelper', 'setColorMode failed: %{public}s', JSON.stringify(err));
       }
     },
 

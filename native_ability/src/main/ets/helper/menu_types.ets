@@ -12,6 +12,7 @@ export interface MenuItemData {
   predefinedType?: PredefinedType;
   checked?: boolean;
   icon?: string;
+  nativeIcon?: string;
   submenuItems?: MenuItemData[];
   aboutMetadata?: AboutMetadataData;
 }
@@ -36,7 +37,8 @@ export type PredefinedType =
   | 'copy' | 'cut' | 'paste' | 'selectAll'
   | 'undo' | 'redo'
   | 'minimize' | 'maximize' | 'fullscreen' | 'recover' | 'restore' | 'destroyWindow' | 'close'
-  | 'quit' | 'about' | 'hide' | 'hideOthers' | 'showAll';
+  | 'quit' | 'about' | 'hide' | 'hideOthers' | 'showAll'
+  | 'services' | 'bringAllToFront' | 'none';
 
 export interface MenuCreateOptions {
   id?: string;

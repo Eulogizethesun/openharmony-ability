@@ -1,4 +1,12 @@
 import { DefaultXComponent } from "./DefaultXComponent";
+import {
+  MenuBarComponent,
+  getMenuClickHandler,
+  getMenuBarRecoverFn,
+  isMenubarVisible,
+} from "./MenuBarComponent";
+import { AcceleratorMatcher } from "../helper/accelerator_matcher";
+import { KeyCode } from "@kit.InputKit";
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window as arkWindow } from '@kit.ArkUI';
 
@@ -9,25 +17,27 @@ export const RouteName = "FloatWindow";
 @Entry({ routeName: RouteName, storage: LocalStorage.getShared() })
 @Component
 struct FloatPage {
-  // 接收 WindowManager.createSubWindow 传入的 windowId
+  // Receive windowId from WindowManager.createSubWindow
   @LocalStorageProp('windowId') windowId: number = 0;
-  
-  // 窗口控制相关
+  @StorageProp("__openharmony_ability_is_desktop__") isDesktop: boolean = false;
+
+  // Window control
   private windowClass: arkWindow.Window | null = null;
   @State offsetX: number = 100;
   @State offsetY: number = 100;
+  private acceleratorMatcher: AcceleratorMatcher = new AcceleratorMatcher();
 
   async aboutToAppear(): Promise<void> {
     hilog.info(DOMAIN, 'FloatPage', '=== FloatPage aboutToAppear START ===');
     hilog.info(DOMAIN, 'FloatPage', 'Received windowId: %{public}d', this.windowId);
 
-    // 校验 windowId
+    // Validate windowId
     if (this.windowId <= 0) {
       hilog.error(DOMAIN, 'FloatPage', 'Invalid windowId: %{public}d. FloatPage requires windowId > 0.', this.windowId);
       return;
     }
 
-    // 获取 Window 实例用于拖拽和关闭
+    // Get Window instance for dragging and closing
     try {
       const ui = this.getUIContext();
       const winName = ui.getWindowName();
@@ -48,52 +58,86 @@ struct FloatPage {
   }
 
   build() {
-    Stack({ alignContent: Alignment.TopEnd }) {
-      // 1. WebView 内容区域（占满全屏）
-      DefaultXComponent({ windowId: this.windowId })
-        .width('100%')
-        .height('100%');
-
-      // 2. 顶部拖拽控制区域 + 右侧关闭按钮
-      //    拖拽条在顶部 40px，可接收触摸；关闭按钮的 onClick 拦截该区域的触摸
-      if (this.windowClass) {
-        Row() {
-          // 拖拽空白区域（占满除按钮外的空间）
-          Row() {}
-            .layoutWeight(1)
-            .height(40);
-
-          // 右上角灰色关闭按钮
-          Button() {
-            Text('×')
-              .fontSize(20)
-              .fontColor('#666666')
-              .fontWeight(FontWeight.Bold);
-          }
-          .width(32)
-          .height(32)
-          .borderRadius(16)
-          .backgroundColor('#f0f0f0')
-          .margin({ top: 4, right: 8 })
-          .onClick(() => {
-            hilog.info(DOMAIN, 'FloatPage', 'Close button clicked for window %{public}d', this.windowId);
-            this.windowClass?.destroyWindow();
-          });
-        }
-        .width('100%')
-        .height(40)
-        .align(Alignment.TopEnd)
-        .gesture(
-          PanGesture({ direction: PanDirection.All })
-            .onActionUpdate((event) => {
-              this.offsetX += event.offsetX;
-              this.offsetY += event.offsetY;
-              this.windowClass?.moveWindowTo(this.offsetX, this.offsetY);
-            })
-        );
+    Column() {
+      // Menubar (only on desktop when menu items are available)
+      if (this.isDesktop) {
+        MenuBarComponent({
+          windowId: this.windowId,
+          acceleratorMatcher: this.acceleratorMatcher,
+        })
       }
+
+      Stack({ alignContent: Alignment.TopEnd }) {
+        // 1. WebView content area (full screen)
+        DefaultXComponent({ windowId: this.windowId })
+          .width('100%')
+          .height('100%');
+
+        // 2. Top drag control area + right close button
+        //    Drag bar is 40px at top, receives touches; close button onClick intercepts that area's touches
+        if (this.windowClass) {
+          Row() {
+            // Drag empty area (fills space except button)
+            Row() {}
+              .layoutWeight(1)
+              .height(40);
+
+            // Top right gray close button
+            Button() {
+              Text('×')
+                .fontSize(20)
+                .fontColor('#666666')
+                .fontWeight(FontWeight.Bold);
+            }
+            .width(32)
+            .height(32)
+            .borderRadius(16)
+            .backgroundColor('#f0f0f0')
+            .margin({ top: 4, right: 8 })
+            .onClick(() => {
+              hilog.info(DOMAIN, 'FloatPage', 'Close button clicked for window %{public}d', this.windowId);
+              this.windowClass?.destroyWindow();
+            });
+          }
+          .width('100%')
+          .height(40)
+          .align(Alignment.TopEnd)
+          .gesture(
+            PanGesture({ direction: PanDirection.All })
+              .onActionUpdate((event) => {
+                this.offsetX += event.offsetX;
+                this.offsetY += event.offsetY;
+                this.windowClass?.moveWindowTo(this.offsetX, this.offsetY);
+              })
+          );
+        }
+      }
+      .layoutWeight(1)
+      .width('100%');
     }
     .width('100%')
-    .height('100%');
+    .height('100%')
+    .onKeyPreIme((event: KeyEvent) => {
+      // Accelerator matching (non-clipboard shortcuts)
+      if (event.type === KeyType.Down && this.acceleratorMatcher.matches(event)) {
+        const matchedItem = this.acceleratorMatcher.getMatchedItem();
+        if (matchedItem) {
+          const handler = getMenuClickHandler(this.windowId);
+          if (handler) {
+            handler(matchedItem);
+          }
+        }
+        return true;
+      }
+      // ESC to restore menubar from fullscreen
+      if (event.type === KeyType.Down && event.keyCode === KeyCode.KEYCODE_ESCAPE && !isMenubarVisible(this.windowId)) {
+        const recoverFn = getMenuBarRecoverFn(this.windowId);
+        if (recoverFn) {
+          recoverFn();
+        }
+        return true;
+      }
+      return false;
+    })
   }
 }

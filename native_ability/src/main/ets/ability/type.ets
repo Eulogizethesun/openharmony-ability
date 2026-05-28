@@ -123,6 +123,7 @@ export interface ArkHelper {
   updateStatusBarHoverTips: (hoverTips: string) => void;
   removeFromStatusBar: () => void;
   executePredefinedAction: (actionType: string) => void;
+  setColorMode: (mode: number) => void;
 }
 
 export interface WindowAvoidAreaInfo {

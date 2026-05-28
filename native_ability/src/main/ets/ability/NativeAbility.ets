@@ -3,12 +3,12 @@ import common from "@ohos.app.ability.common";
 import window from "@ohos.window";
 import webview from "@ohos.web.webview";
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import * as Entry from "../components/MainPage";
+import { RouteName } from "../components/MainPage";
+import { setMenuClickHandler, setMenuBarRecoverFn, getMenuDataCallback } from "../components/MenuBarComponent";
 import { AbilityInitContext, ApplicationLifecycle, Module } from "./type";
 import { Loadable } from "../helper/loadable";
-import { MenuManager, PredefinedActionExecutor } from "../helper/menu";
+import { MenuManager, PredefinedActionExecutor, setPredefinedActionExecutor } from "../helper/menu";
 import { AboutMetadataData } from "../helper/menu_types";
-import { menuStateController } from "../helper/menu_state";
 import { setCurrentAbilityName } from "../helper/StatusBarUtils";
 import { WindowManager } from "../window/WindowManager";
 import { setPrimaryWebviewControllerCallback } from "../components/DefaultXComponent";
@@ -137,9 +137,7 @@ export class NativeAbility extends UIAbility {
     });
     const mainWindow = windowStage.getMainWindowSync();
     executor.setWindow(mainWindow);
-    executor.setNotifyMenubarVisibilityFn((windowId: string, visible: boolean) => {
-      primaryModule.notifyMenubarVisibility(windowId, visible);
-    });
+    setPredefinedActionExecutor(executor);
     executor.setShowAboutFn((metadata: AboutMetadataData) => {
       const appName = metadata.name ?? '';
       const appVersion = metadata.version ?? '';
@@ -174,7 +172,13 @@ export class NativeAbility extends UIAbility {
 
     const menuManager = new MenuManager(executor, emitMenuEventFn);
 
-    Entry.setRecoverFn(() => {
+    // Wire up per-window menu click handler (MW-1): routes through MenuManager for predefined/custom actions
+    setMenuClickHandler(0, (item) => {
+      menuManager.handleItemClick(item);
+    });
+
+    // Wire up per-window recover function (MW-1)
+    setMenuBarRecoverFn(0, () => {
       mainWindow.recover();
     });
 
@@ -182,15 +186,19 @@ export class NativeAbility extends UIAbility {
       executor.setController(controller);
     });
 
+    // Route menu requests via callback (MW-5) instead of AppStorage
     primaryModule.onMenuRequest((data: { jsonData: string; x?: number; y?: number; visible?: boolean; windowId?: string }) => {
       const windowId = data.windowId ?? "main";
 
+      // Handle menubar visibility changes via callback
       if (data.visible !== undefined && data.visible !== null) {
-        AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::" + windowId, data.visible);
+        const cb = getMenuDataCallback(windowId);
+        cb?.onMenubarVisible?.(data.visible);
         primaryModule.notifyMenubarVisibility(windowId, data.visible);
         return;
       }
 
+      // Handle popup menu requests via callback
       if (data.x !== undefined && data.y !== undefined) {
         try {
           menuManager.popupFromJson(data.jsonData, data.x ?? 0, data.y ?? 0, windowId);
@@ -200,7 +208,9 @@ export class NativeAbility extends UIAbility {
         return;
       }
 
-      AppStorage.setOrCreate("__openharmony_ability_menubar_json__::" + windowId, data.jsonData);
+      // Handle menubar JSON updates via callback
+      const cb = getMenuDataCallback(windowId);
+      cb?.onMenubarJson?.(data.jsonData);
     });
   }
 
@@ -230,9 +240,9 @@ export class NativeAbility extends UIAbility {
           );
         });
         win.on("windowRectChange", (options: window.RectChangeOptions) => {
-          if (!AppStorage.get<boolean>("__openharmony_ability_menubar_visible__::main") &&
-              options.reason === window.RectChangeReason.RECOVER) {
-            AppStorage.setOrCreate("__openharmony_ability_menubar_visible__::main", true);
+          if (options.reason === window.RectChangeReason.RECOVER) {
+            const cb = getMenuDataCallback("main");
+            cb?.onMenubarVisible?.(true);
           }
           this.forEachLifecycle((lifecycle) =>
             lifecycle.windowStageEventCallback.onWindowRectChange(options),
@@ -253,7 +263,7 @@ export class NativeAbility extends UIAbility {
 
     if (this.defaultPage) {
       try {
-        await windowStage.loadContentByName(Entry.RouteName);
+        await windowStage.loadContentByName(RouteName);
       } catch (_) {}
     }
 
