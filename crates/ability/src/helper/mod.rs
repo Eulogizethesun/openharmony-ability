@@ -3,11 +3,15 @@ use std::{cell::RefCell, rc::Rc};
 use napi_ohos::{bindgen_prelude::ObjectRef, Env};
 
 mod permission;
+mod restart;
+mod updater;
 #[cfg(feature = "webview")]
 mod webview;
 mod window_info;
 
 pub use permission::*;
+pub use restart::*;
+pub use updater::*;
 #[cfg(feature = "webview")]
 pub use webview::*;
 

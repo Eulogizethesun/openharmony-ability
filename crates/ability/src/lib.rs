@@ -12,6 +12,7 @@ mod render;
 mod resource;
 mod stage;
 pub mod statusbar;
+mod updater;
 mod waker;
 pub mod window;
 
@@ -28,6 +29,7 @@ pub use menu::{
     MenuRequestData, PopupRequestData,
     popup_context_menu, set_menu_json,
     menu_event_receiver, popup_request_receiver, menu_request_receiver,
+    send_menu_event,
     set_menubar_visible, is_menubar_visible, notify_menubar_visibility,
 };
 
@@ -45,6 +47,7 @@ pub use render::*;
 pub use resource::*;
 pub use stage::*;
 pub use statusbar::*;
+pub use updater::*;
 pub use waker::*;
 pub use window::*;
 

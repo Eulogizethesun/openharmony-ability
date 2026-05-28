@@ -101,6 +101,10 @@ export interface WindowConfig {
 
 export interface ArkHelper {
   exit: (code: number) => void;
+  restart: () => number;
+  updaterCheck: () => Promise<Object>;
+  updaterShowDialog: () => Promise<number>;
+  updaterDownloadAndInstall: () => Promise<void>;
   createWebview: (data: WebViewInitData) => Object;
   createEmbeddedWebview: (data: WebViewInitData) => Object;
   requestPermission: (permission: string | string[]) => Promise<number | number[]>;
