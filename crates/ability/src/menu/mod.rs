@@ -97,6 +97,13 @@ pub fn menu_event_receiver() -> &'static Receiver<String> {
     &MENU_EVENT_CHANNEL.1
 }
 
+/// Rust API: Send a menu event into the shared channel (for tray-icon to bridge StatusBar clicks).
+/// This pushes the menu_id into the same channel that muda's event listener reads from,
+/// so tauri's `on_menu_event` chain is triggered for tray menu item clicks.
+pub fn send_menu_event(menu_id: String) {
+    MENU_EVENT_CHANNEL.0.send(menu_id).ok();
+}
+
 /// Rust API: Get menu request receiver (unified popup + menubar + visibility)
 pub fn menu_request_receiver() -> &'static Receiver<MenuRequest> {
     &MENU_CHANNEL.1

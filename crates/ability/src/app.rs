@@ -259,6 +259,46 @@ impl OpenHarmonyAppInner {
         Ok(())
     }
 
+    /// Restart the application by calling ArkTS helper `restart()` via TSFN.
+    ///
+    /// Uses a ThreadsafeFunction to dispatch the call to the main thread,
+    /// since tauri commands run on worker threads where `get_main_thread_env()`
+    /// returns None.
+    ///
+    /// Returns 0 on success, negative on failure.
+    pub fn restart(&self) -> Result<i32> {
+        let tsfn = crate::get_restart_tsfn()
+            .ok_or_else(|| Error::from_reason("RESTART_TSFN not initialized"))?;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let status = tsfn.call_with_return_value(
+            (),
+            napi_ohos::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+            move |result: std::result::Result<napi_ohos::bindgen_prelude::Unknown<'static>, napi_ohos::Error>, _env| {
+                let code = match result {
+                    Ok(unknown) => unsafe { unknown.cast::<i32>().unwrap_or(-1) },
+                    Err(e) => {
+                        eprintln!("restart TSFN callback error: {}", e);
+                        -1
+                    }
+                };
+                let _ = tx.send(code);
+                Ok(())
+            },
+        );
+
+        if status != napi_ohos::Status::Ok {
+            return Err(Error::from_reason(format!(
+                "call restart TSFN failed: {:?}",
+                status
+            )));
+        }
+
+        rx.recv()
+            .map_err(|_| Error::from_reason("restart TSFN channel closed"))
+    }
+
     /// Set app color mode (dark/light/system) by calling ArkTS helper `setColorMode(mode)`.
     ///
     /// Mode values match OHOS `ConfigurationConstant.ColorMode`:
@@ -493,10 +533,26 @@ impl OpenHarmonyApp {
         self.inner.read().unwrap().exit(code).unwrap();
     }
 
+    /// Restart the application.
+    ///
+    /// This is a hard process kill — `onDestroy` is NOT triggered.
+    /// Requires the app to be in the foreground.
+    /// Has a 3-second cooldown between calls.
+    ///
+    /// Returns 0 on success, negative error code on failure.
+    pub fn restart(&self) -> Result<i32> {
+        self.inner.read().unwrap().restart()
+    }
+
     /// Set app color mode (dark/light/system).
     /// Delegates to ArkTS helper `setColorMode(mode)`.
     pub fn set_color_mode(&self, mode: ColorMode) -> Result<()> {
         self.inner.read().unwrap().set_color_mode(mode)
+    }
+
+    /// Get an updater handle for checking and installing updates via AppGallery.
+    pub fn updater(&self) -> super::updater::Updater {
+        super::updater::Updater
     }
 
     /// Request one or more runtime permissions through ArkTS helper.

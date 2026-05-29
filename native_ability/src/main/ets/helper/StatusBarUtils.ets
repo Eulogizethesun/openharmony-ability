@@ -8,6 +8,10 @@ import { ArkHelper } from "../ability/type";
 let abilityContext: common.UIAbilityContext | null = null;
 let currentAbilityName: string = "";
 export let helperRef: ArkHelper | null = null;
+// Guard: statusBarManager.on() must be called exactly once per app lifetime.
+// Re-calling on() overwrites the previous handler; if the new helper object
+// lacks the callbacks (e.g. after DefaultXComponent re-creation), events break.
+let clickHandlersRegistered: boolean = false;
 
 export function setAbilityContext(ctx: common.UIAbilityContext): void {
   abilityContext = ctx;
@@ -15,6 +19,14 @@ export function setAbilityContext(ctx: common.UIAbilityContext): void {
 
 export function setHelperRef(ref: ArkHelper | null): void {
   helperRef = ref;
+}
+
+export function isClickHandlersRegistered(): boolean {
+  return clickHandlersRegistered;
+}
+
+export function setClickHandlersRegistered(value: boolean): void {
+  clickHandlersRegistered = value;
 }
 
 export function setCurrentAbilityName(name: string): void {

@@ -4,8 +4,9 @@ use ohos_arkui_binding::{ArkUIHandle, RootNode, XComponent};
 use ohos_ime_binding::IME;
 
 use crate::{
-    create_permission_request_tsfn, input, set_helper, set_main_thread_env, Event, InputEvent,
-    IntervalInfo, OpenHarmonyApp, Rect, Size,
+    create_permission_request_tsfn, create_restart_tsfn, create_updater_check_tsfn,
+    create_updater_download_and_install_tsfn, create_updater_show_dialog_tsfn, input, set_helper,
+    set_main_thread_env, Event, InputEvent, IntervalInfo, OpenHarmonyApp, Rect, Size,
 };
 
 /// create lifecycle object and return to arkts
@@ -26,6 +27,14 @@ pub fn render(
 
     // Initialize permission request threadsafe function
     let _ = create_permission_request_tsfn(env);
+
+    // Initialize restart threadsafe function
+    let _ = create_restart_tsfn(env);
+
+    // Initialize updater threadsafe functions
+    let _ = create_updater_check_tsfn(env);
+    let _ = create_updater_show_dialog_tsfn(env);
+    let _ = create_updater_download_and_install_tsfn(env);
 
     let mut root = RootNode::new(slot);
     let xcomponent_native =
