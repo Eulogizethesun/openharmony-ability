@@ -274,12 +274,22 @@ export class NativeAbility extends UIAbility {
     }
   }
 
+  onWindowStageDestroy(): void | Promise<void> {
+    this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onWindowStageDestroy());
+  }
+
   onMemoryLevel(level: AbilityConstant.MemoryLevel): void {
     this.forEachLifecycle((lifecycle) => lifecycle.environmentCallback.onMemoryLevel(level));
   }
 
   onDestroy(): void | Promise<void> {
     this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onAbilityDestroy());
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    const uri = want.uri ?? '';
+    hilog.info(0x0000, 'NativeAbility', 'onNewWant - uri: %{public}s', uri);
+    this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onNewWant(uri));
   }
 
   onConfigurationUpdate(newConfig: Configuration): void {

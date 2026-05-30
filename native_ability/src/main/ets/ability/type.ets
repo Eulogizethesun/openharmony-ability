@@ -29,6 +29,7 @@ export interface WindowStageEventCallback {
   onWindowSizeChange: (arg: object) => void;
   onWindowRectChange: (arg: object) => void;
   onAvoidAreaChange: (arg: object) => void;
+  onNewWant: (uri: string) => void;
 }
 
 export interface WebViewComponentEventCallback {

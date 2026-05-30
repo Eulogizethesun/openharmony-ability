@@ -344,7 +344,10 @@ function buildJsHelper(controller: WebviewController): JsHelper {
 
   const runJavaScript = (code: string, cb: (result?: string) => void) => {
     controller.runJavaScript(code).then((ret) => {
-      cb(ret);
+      cb(ret ?? undefined);
+    }).catch((err) => {
+      hilog.error(DOMAIN, 'DefaultWebview', 'runJavaScript ERR %{public}s', JSON.stringify(err));
+      cb(undefined);
     });
   };
 
