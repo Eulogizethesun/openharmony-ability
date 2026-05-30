@@ -282,10 +282,6 @@ export class NativeAbility extends UIAbility {
     this.forEachLifecycle((lifecycle) => lifecycle.environmentCallback.onMemoryLevel(level));
   }
 
-  onWindowStageDestroy(): void | Promise<void> {
-    this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onWindowStageDestroy());
-  }
-
   onDestroy(): void | Promise<void> {
     this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onAbilityDestroy());
   }
