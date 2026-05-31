@@ -217,6 +217,9 @@ export class NativeAbility extends UIAbility {
   async onWindowStageCreate(windowStage: window.WindowStage): Promise<void> {
     this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onWindowStageCreate());
 
+    // Pass windowStage to WindowManager for createSubWindow support
+    WindowManager.getInstance().setWindowStage(windowStage);
+
     try {
       windowStage.on("windowStageEvent", (event: window.WindowStageEventType) => {
         this.forEachLifecycle((lifecycle) =>
