@@ -10,6 +10,7 @@ const DOMAIN: number = 0x1999;
 export class WindowManager {
   private static instance: WindowManager | null = null;
   private context: common.UIAbilityContext;
+  private windowStage: window.WindowStage | null = null;
   private windows: Map<number, window.Window> = new Map();
   private controllers: Map<number, RustWebviewNodeController> = new Map();
   private uiContexts: Map<number, UIContext> = new Map();
@@ -42,6 +43,11 @@ export class WindowManager {
     return WindowManager.instance;
   }
 
+  setWindowStage(windowStage: window.WindowStage): void {
+    this.windowStage = windowStage;
+    hilog.info(DOMAIN, 'WindowManager', 'WindowStage set');
+  }
+
   async createSubWindow(name: string, type: number, windowId: number, width: number = 800, height: number = 600, x: number = 100, y: number = 100): Promise<number> {
     // 校验 windowId：子窗口 ID 必须大于 0
     if (windowId <= 0) {
@@ -49,21 +55,22 @@ export class WindowManager {
       throw new Error(`Invalid windowId: ${windowId}. Must be greater than 0.`);
     }
 
-    hilog.info(DOMAIN, 'WindowManager', `Creating window: %{public}s, id: %{public}d, type: %{public}d`, name, windowId, type);
-    
-    const config: window.Configuration = {
-      name: name,
-      windowType: type,
-      ctx: this.context
-    };
-    
+    // 检查 windowStage 是否已设置
+    if (!this.windowStage) {
+      hilog.error(DOMAIN, 'WindowManager', 'WindowStage not set. Call setWindowStage() first.');
+      throw new Error('WindowStage not set');
+    }
+
+    hilog.info(DOMAIN, 'WindowManager', `Creating sub-window via windowStage: %{public}s, id: %{public}d`, name, windowId);
+
     let win: window.Window;
     try {
-      win = await window.createWindow(config);
+      // 使用 windowStage.createSubWindow(name) 替代 window.createWindow(config)
+      win = await this.windowStage.createSubWindow(name);
       this.windows.set(windowId, win);
-      hilog.info(DOMAIN, 'WindowManager', `Window created successfully: %{public}d`, windowId);
+      hilog.info(DOMAIN, 'WindowManager', `Sub-window created successfully: %{public}d`, windowId);
     } catch (err) {
-      hilog.error(DOMAIN, 'WindowManager', `Failed to create window: %{public}s`, JSON.stringify(err));
+      hilog.error(DOMAIN, 'WindowManager', `Failed to create sub-window: %{public}s`, JSON.stringify(err));
       throw err;
     }
     
