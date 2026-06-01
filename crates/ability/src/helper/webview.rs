@@ -24,6 +24,47 @@ pub struct WebViewStyle {
     pub background_color: Option<String>,
 }
 
+#[derive(Default, Clone, Debug)]
+pub struct PdfConfig {
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+    pub margin_top: Option<f64>,
+    pub margin_bottom: Option<f64>,
+    pub margin_left: Option<f64>,
+    pub margin_right: Option<f64>,
+    pub should_print_background: Option<bool>,
+}
+
+impl PdfConfig {
+    /// Convert to HashMap for NAPI transport. Only includes fields that are Some.
+    /// Keys use camelCase to match ArkTS PdfConfiguration naming.
+    pub fn to_napi_map(&self) -> HashMap<String, Either<f64, bool>> {
+        let mut map = HashMap::new();
+        if let Some(v) = self.width {
+            map.insert("width".to_string(), Either::A(v));
+        }
+        if let Some(v) = self.height {
+            map.insert("height".to_string(), Either::A(v));
+        }
+        if let Some(v) = self.margin_top {
+            map.insert("marginTop".to_string(), Either::A(v));
+        }
+        if let Some(v) = self.margin_bottom {
+            map.insert("marginBottom".to_string(), Either::A(v));
+        }
+        if let Some(v) = self.margin_left {
+            map.insert("marginLeft".to_string(), Either::A(v));
+        }
+        if let Some(v) = self.margin_right {
+            map.insert("marginRight".to_string(), Either::A(v));
+        }
+        if let Some(v) = self.should_print_background {
+            map.insert("shouldPrintBackground".to_string(), Either::B(v));
+        }
+        map
+    }
+}
+
 #[napi(object)]
 #[derive(Default)]
 pub struct DownloadStartResult {
@@ -284,6 +325,45 @@ impl Webview {
                 .get_value(env)?
                 .get_named_property::<Function<'_, (), ()>>("clearAllBrowsingData")?;
             clear_all_browsing_data_js_function.call(())?;
+            Ok(())
+        } else {
+            Err(Error::from_reason("Failed to get main thread env"))
+        }
+    }
+
+    pub fn create_pdf(
+        &self,
+        path: &str,
+        config: Option<PdfConfig>,
+        callback: Box<dyn Fn(bool) + Send + 'static>,
+    ) -> Result<()> {
+        if let Some(env) = get_main_thread_env().borrow().as_ref() {
+            let config_map = config.unwrap_or_default().to_napi_map();
+
+            let create_pdf_fn = self
+                .inner
+                .get_value(env)?
+                .get_named_property::<Function<
+                    '_,
+                    FnArgs<(
+                        String,
+                        HashMap<String, Either<f64, bool>>,
+                        Function<'_, bool, ()>,
+                    )>,
+                    (),
+                >>("createPdf")?;
+
+            let cb = env.create_function_from_closure("create_pdf_callback", move |ctx| {
+                let success = ctx.try_get::<bool>(0)?;
+                let success = match success {
+                    Either::A(b) => b,
+                    Either::B(_) => false,
+                };
+                callback(success);
+                Ok(())
+            })?;
+
+            create_pdf_fn.call((path.to_string(), config_map, cb).into())?;
             Ok(())
         } else {
             Err(Error::from_reason("Failed to get main thread env"))
