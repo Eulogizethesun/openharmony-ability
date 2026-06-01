@@ -10,6 +10,7 @@ import { router } from '@kit.ArkUI';
 import { WindowManager } from '../window/WindowManager';
 import { DOMAIN } from '../helper/constants';
 import { openNewWindowDialog } from "./NewWindowDialog";
+import { fileIo } from '@kit.CoreFileKit';
 
 /**
  * Shared onWindowNew handler for both WebBuilder and EmbeddedWebBuilder.
@@ -55,6 +56,16 @@ function handleWindowNew(
     event.handler.setWebController(null);
   }
 }
+
+const DEFAULT_PDF_CONFIG: web_webview.PdfConfiguration = {
+  width: 8.27,              // A4 宽度 (210mm ÷ 25.4)
+  height: 11.69,            // A4 高度 (297mm ÷ 25.4)
+  marginTop: 0,
+  marginBottom: 0,
+  marginRight: 0,
+  marginLeft: 0,
+  shouldPrintBackground: true
+};
 
 export interface WebviewStyle {
   x?: number | string;
@@ -463,6 +474,44 @@ function buildJsHelper(controller: WebviewController): JsHelper {
     });
   };
 
+  const createPdf = (path: string, config: Record<string, number | boolean>, callback: (success: boolean) => void) => {
+    // 合并用户配置与默认值
+    const mergedConfig: web_webview.PdfConfiguration = { ...DEFAULT_PDF_CONFIG };
+    if (config) {
+      if (config['width'] !== undefined) mergedConfig.width = config['width'] as number;
+      if (config['height'] !== undefined) mergedConfig.height = config['height'] as number;
+      if (config['marginTop'] !== undefined) mergedConfig.marginTop = config['marginTop'] as number;
+      if (config['marginBottom'] !== undefined) mergedConfig.marginBottom = config['marginBottom'] as number;
+      if (config['marginLeft'] !== undefined) mergedConfig.marginLeft = config['marginLeft'] as number;
+      if (config['marginRight'] !== undefined) mergedConfig.marginRight = config['marginRight'] as number;
+      if (config['shouldPrintBackground'] !== undefined) mergedConfig.shouldPrintBackground = config['shouldPrintBackground'] as boolean;
+    }
+
+    controller.createPdf(mergedConfig)
+      .then((result) => {
+        try {
+          const buffer = result.pdfArrayBuffer().buffer;
+          const file = fileIo.openSync(path, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+          try {
+            fileIo.writeSync(file.fd, buffer);
+            callback(true);
+          } catch (writeErr) {
+            hilog.error(DOMAIN, 'DefaultWebview', 'createPdf write failed: %{public}s', JSON.stringify(writeErr));
+            callback(false);
+          } finally {
+            fileIo.closeSync(file);
+          }
+        } catch (err) {
+          hilog.error(DOMAIN, 'DefaultWebview', 'createPdf file IO failed: %{public}s', JSON.stringify(err));
+          callback(false);
+        }
+      })
+      .catch((err) => {
+        hilog.error(DOMAIN, 'DefaultWebview', 'createPdf failed: %{public}s', JSON.stringify(err));
+        callback(false);
+      });
+  };
+
   return {
     getUrl,
     getCookies: getCookiesHelper,
@@ -476,6 +525,7 @@ function buildJsHelper(controller: WebviewController): JsHelper {
     setBackgroundColor: (_color: number) => {},
     setVisible: (_visible: boolean) => {},
     dispose: () => {},
+    createPdf,
   } as JsHelper;
 }
 
