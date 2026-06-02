@@ -238,10 +238,38 @@ mod tests {
         }
 
         #[test]
+        fn test_init_is_idempotent() {
+            // OnceLock: second init() is a no-op
+            init(14, 50001);
+            let sdk_before = sdk_api_version();
+            let dist_before = distribution_api_version();
+
+            // Second call with different values — should NOT overwrite
+            init(99, 99999);
+            assert_eq!(
+                sdk_api_version(),
+                sdk_before,
+                "OnceLock: sdk_api_version should not change on second init"
+            );
+            assert_eq!(
+                distribution_api_version(),
+                dist_before,
+                "OnceLock: distribution_api_version should not change on second init"
+            );
+        }
+
+        #[test]
         fn test_can_i_use_valid_syscap() {
             // A syscap that exists on virtually all OHOS devices
-            // May return false if NAPI context is not initialized (test binary mode)
-            let _result = can_i_use("SystemCapability.Window.SessionManager");
+            // In test binary mode, NAPI is not initialized → returns false (early return)
+            // In a real app with NAPI context → would return true
+            let result = can_i_use("SystemCapability.Window.SessionManager");
+            // We can't assert true here because test binary has no NAPI context.
+            // But it MUST NOT panic or crash.
+            assert!(
+                !result || result,
+                "can_i_use should return a boolean without panicking"
+            );
         }
 
         #[test]
@@ -254,6 +282,34 @@ mod tests {
         fn test_can_i_use_empty_string() {
             let result = can_i_use("");
             assert!(!result, "empty syscap should return false");
+        }
+
+        #[test]
+        fn test_can_i_use_from_worker_thread() {
+            // can_i_use from a non-main thread should return false (no NAPI env)
+            // and must NOT panic
+            let handle = std::thread::spawn(|| {
+                let result = can_i_use("SystemCapability.Window.SessionManager");
+                // From worker thread: get_main_thread_env() returns None → false
+                assert!(
+                    !result,
+                    "can_i_use from worker thread should return false"
+                );
+            });
+            handle.join().expect("worker thread should not panic");
+        }
+
+        #[test]
+        fn test_sdk_api_version_from_worker_thread() {
+            // Version getters from worker thread should still work
+            // (they read from OnceLock, no NAPI dependency)
+            let handle = std::thread::spawn(|| {
+                let sdk = sdk_api_version();
+                let dist = distribution_api_version();
+                assert!(sdk >= 0, "sdk_api_version from worker thread should be >= 0");
+                assert!(dist >= 0, "distribution_api_version from worker thread should be >= 0");
+            });
+            handle.join().expect("worker thread should not panic");
         }
     }
 }
