@@ -13,6 +13,7 @@ mod resource;
 mod stage;
 pub mod statusbar;
 mod updater;
+pub mod version;
 mod waker;
 pub mod window;
 
@@ -48,6 +49,7 @@ pub use resource::*;
 pub use stage::*;
 pub use statusbar::*;
 pub use updater::*;
+pub use version::*;
 pub use waker::*;
 pub use window::*;
 

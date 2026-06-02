@@ -77,6 +77,8 @@ export interface AbilityInitContext {
   preferredLocales?: string;
   moduleName?: string;
   resourceManager?: resourceManager.ResourceManager;
+  sdkApiVersion?: number;
+  distributionOSApiVersion?: number;
 }
 
 export interface Module {
@@ -129,6 +131,7 @@ export interface ArkHelper {
   removeFromStatusBar: () => void;
   executePredefinedAction: (actionType: string) => void;
   setColorMode: (mode: number) => void;
+  checkCanIUse: (syscap: string) => boolean;
 }
 
 export interface WindowAvoidAreaInfo {

@@ -576,5 +576,9 @@ export function createArkHelper(): ArkHelper {
       }
     },
 
+    checkCanIUse: (syscap: string): boolean => {
+      return canIUse(syscap);
+    },
+
   };
 }

@@ -78,6 +78,9 @@ pub struct AbilityInitContext {
     pub pref_path: Option<String>,
     pub preferred_locales: Option<String>,
     pub module_name: Option<String>,
+    pub sdk_api_version: Option<i32>,
+    #[napi(js_name = "distributionOSApiVersion")]
+    pub distribution_api_version: Option<i32>,
 }
 
 impl AbilityInitContext {
@@ -91,6 +94,8 @@ impl AbilityInitContext {
             pref_path: context.get("prefPath")?,
             preferred_locales: context.get("preferredLocales")?,
             module_name: context.get("moduleName")?,
+            sdk_api_version: context.get("sdkApiVersion")?,
+            distribution_api_version: context.get("distributionOSApiVersion")?,
         })
     }
 }
