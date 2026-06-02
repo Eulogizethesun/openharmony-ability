@@ -3,6 +3,7 @@ import common from "@ohos.app.ability.common";
 import window from "@ohos.window";
 import webview from "@ohos.web.webview";
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { deviceInfo } from '@kit.BasicServicesKit';
 import { RouteName } from "../components/MainPage";
 import { setMenuClickHandler, setMenuBarRecoverFn, getMenuDataCallback } from "../components/MenuBarComponent";
 import { AbilityInitContext, ApplicationLifecycle, Module } from "./type";
@@ -67,6 +68,8 @@ export class NativeAbility extends UIAbility {
       preferredLocales: context?.config?.language ?? "",
       moduleName,
       resourceManager: context?.resourceManager,
+      sdkApiVersion: deviceInfo.sdkApiVersion,
+      distributionOSApiVersion: deviceInfo.distributionOSApiVersion,
     };
   }
 
