@@ -432,28 +432,32 @@ export function createArkHelper(): ArkHelper {
       try {
         statusBarManager.addToStatusBar(context, opts);
         console.info('[StatusBar] addToStatusBar succeeded');
-        // statusBarManager.on() must be called exactly once per app lifetime.
-        // Subsequent calls overwrite the previous handler — if the current helperRef
-        // has been replaced (e.g. after DefaultXComponent re-creation), the new helper
-        // object may lack the _onIconClick/_onMenuClick NAPI callbacks, breaking events.
+        // statusBarManager.on() should be registered once per app lifetime (per OHOS docs).
+        // We use proxy callbacks that dynamically read the current helperRef at event time,
+        // so even if DefaultXComponent is re-created and helperRef is replaced, the proxy
+        // always dispatches to the current helper's NAPI callbacks.
         if (!isClickHandlersRegistered()) {
-          const h = helperRef as ESObject;
-          setTimeout(() => {
-            try {
-              if (h && h._onIconClick) {
-                statusBarManager.on('statusBarIconClick' as 'statusBarIconClick', h._onIconClick as Callback<emitter.EventData>);
-                console.info('[StatusBar] registered iconClick handler');
-              }
-              if (h && h._onMenuClick) {
-                statusBarManager.on('rightMenuClick' as 'rightMenuClick', h._onMenuClick as Callback<emitter.EventData>);
-                console.info('[StatusBar] registered menuClick handler');
-              }
-              setClickHandlersRegistered(true);
-            } catch (e2) {
-              const err2 = e2 as BusinessError;
-              console.error(`[StatusBar] on() registration failed: ${err2.code} ${err2.message}`);
+          setClickHandlersRegistered(true);
+          const stableIconClickHandler = (event: emitter.EventData): void => {
+            const h = helperRef as ESObject;
+            if (h && h._onIconClick) {
+              h._onIconClick(event);
             }
-          }, 200);
+          };
+          const stableMenuClickHandler = (event: emitter.EventData): void => {
+            const h = helperRef as ESObject;
+            if (h && h._onMenuClick) {
+              h._onMenuClick(event);
+            }
+          };
+          try {
+            statusBarManager.on('statusBarIconClick' as 'statusBarIconClick', stableIconClickHandler as Callback<emitter.EventData>);
+            statusBarManager.on('rightMenuClick' as 'rightMenuClick', stableMenuClickHandler as Callback<emitter.EventData>);
+            console.info('[StatusBar] registered iconClick and menuClick proxy handlers');
+          } catch (e2) {
+            const err2 = e2 as BusinessError;
+            console.error(`[StatusBar] on() registration failed: ${err2.code} ${err2.message}`);
+          }
         }
       } catch (e) {
         const err = e as BusinessError;

@@ -8,9 +8,9 @@ import { ArkHelper } from "../ability/type";
 let abilityContext: common.UIAbilityContext | null = null;
 let currentAbilityName: string = "";
 export let helperRef: ArkHelper | null = null;
-// Guard: statusBarManager.on() must be called exactly once per app lifetime.
-// Re-calling on() overwrites the previous handler; if the new helper object
-// lacks the callbacks (e.g. after DefaultXComponent re-creation), events break.
+// Guard: statusBarManager.on() should be registered once per app lifetime (per OHOS docs).
+// The registered proxy callbacks dynamically read helperRef at event time,
+// so they always dispatch to the current helper's NAPI callbacks.
 let clickHandlersRegistered: boolean = false;
 
 export function setAbilityContext(ctx: common.UIAbilityContext): void {

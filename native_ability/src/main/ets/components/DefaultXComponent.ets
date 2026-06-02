@@ -75,7 +75,14 @@ export struct DefaultXComponent {
       this.moduleName, this.windowId);
 
     setAbilityContext(this.getUIContext().getHostContext() as common.UIAbilityContext);
-    setHelperRef(this.helper);
+    // Only set helperRef for main window. Sub-windows (FloatPage) create their own
+    // ArkHelper but must NOT overwrite the global helperRef, because:
+    // - Rust's init_tray_tsfn() sets _onIconClick/_onMenuClick only on the main window's helper
+    // - The statusBarManager PROXY callback reads helperRef to dispatch click events
+    // - If a FloatPage overwrites helperRef, the PROXY reads a helper without NAPI callbacks
+    if (this.isMainWindow()) {
+      setHelperRef(this.helper);
+    }
 
     try {
       // 注册 UIContext 到 WindowManager
@@ -136,7 +143,6 @@ export struct DefaultXComponent {
       hilog.error(DOMAIN, 'DefaultXComponent', 'aboutToAppear FAILED: %{public}s', JSON.stringify(err));
       throw err;
     }
-    console.info(`[StatusBar] afterRender: _onIconClick=${!!(this.helper as ESObject)._onIconClick}, _onMenuClick=${!!(this.helper as ESObject)._onMenuClick}`);
   }
 
   build() {
