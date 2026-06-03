@@ -29,8 +29,7 @@ import {
   fillMenuItemAbilityName,
   processMenuItemIcons,
   helperRef,
-  isClickHandlersRegistered,
-  setClickHandlersRegistered,
+  reRegisterStatusBarClickHandlers,
 } from "../helper/StatusBarUtils";
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { primaryWebviewControllerCallback, clearPrimaryWebviewControllerCallback } from "../components/DefaultXComponent";
@@ -429,36 +428,12 @@ export function createArkHelper(): ArkHelper {
       if (hoverTips && hoverTips.length > 0 && hoverTips.length <= 128) {
         opts.hoverTips = hoverTips;
       }
+      // Register click handlers AFTER addToStatusBar returns, because addToStatusBar
+      // internally calls initScbServerMessageReceiver which creates a new receiver
+      // and wipes any handlers registered before it.
       try {
         statusBarManager.addToStatusBar(context, opts);
-        console.info('[StatusBar] addToStatusBar succeeded');
-        // statusBarManager.on() should be registered once per app lifetime (per OHOS docs).
-        // We use proxy callbacks that dynamically read the current helperRef at event time,
-        // so even if DefaultXComponent is re-created and helperRef is replaced, the proxy
-        // always dispatches to the current helper's NAPI callbacks.
-        if (!isClickHandlersRegistered()) {
-          setClickHandlersRegistered(true);
-          const stableIconClickHandler = (event: emitter.EventData): void => {
-            const h = helperRef as ESObject;
-            if (h && h._onIconClick) {
-              h._onIconClick(event);
-            }
-          };
-          const stableMenuClickHandler = (event: emitter.EventData): void => {
-            const h = helperRef as ESObject;
-            if (h && h._onMenuClick) {
-              h._onMenuClick(event);
-            }
-          };
-          try {
-            statusBarManager.on('statusBarIconClick' as 'statusBarIconClick', stableIconClickHandler as Callback<emitter.EventData>);
-            statusBarManager.on('rightMenuClick' as 'rightMenuClick', stableMenuClickHandler as Callback<emitter.EventData>);
-            console.info('[StatusBar] registered iconClick and menuClick proxy handlers');
-          } catch (e2) {
-            const err2 = e2 as BusinessError;
-            console.error(`[StatusBar] on() registration failed: ${err2.code} ${err2.message}`);
-          }
-        }
+        reRegisterStatusBarClickHandlers();
       } catch (e) {
         const err = e as BusinessError;
         console.error(`[StatusBar] addToStatusBar failed: ${err.code} ${err.message}`);

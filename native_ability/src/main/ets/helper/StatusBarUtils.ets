@@ -8,10 +8,6 @@ import { ArkHelper } from "../ability/type";
 let abilityContext: common.UIAbilityContext | null = null;
 let currentAbilityName: string = "";
 export let helperRef: ArkHelper | null = null;
-// Guard: statusBarManager.on() should be registered once per app lifetime (per OHOS docs).
-// The registered proxy callbacks dynamically read helperRef at event time,
-// so they always dispatch to the current helper's NAPI callbacks.
-let clickHandlersRegistered: boolean = false;
 
 export function setAbilityContext(ctx: common.UIAbilityContext): void {
   abilityContext = ctx;
@@ -21,12 +17,56 @@ export function setHelperRef(ref: ArkHelper | null): void {
   helperRef = ref;
 }
 
-export function isClickHandlersRegistered(): boolean {
-  return clickHandlersRegistered;
+// ─── PROXY handlers ───
+// Defined once at module level. Handlers dynamically read helperRef at event time.
+// Re-registered after each addToStatusBar() to bind to the current ScbServerMessageReceiver.
+const iconClickHandler = (event: emitter.EventData): void => {
+  console.info('[StatusBar] PROXY iconClickHandler fired!');
+  const h = helperRef as ESObject;
+  if (h && h._onIconClick) {
+    console.info('[StatusBar] dispatching to Rust _onIconClick');
+    h._onIconClick(event);
+  } else {
+    console.warn(`[StatusBar] iconClickHandler: helperRef=${!!h}, hasCallback=${!!(h && h._onIconClick)}`);
+  }
+};
+
+const menuClickHandler = (event: emitter.EventData): void => {
+  console.info('[StatusBar] PROXY menuClickHandler fired!');
+  const h = helperRef as ESObject;
+  if (h && h._onMenuClick) {
+    console.info('[StatusBar] dispatching to Rust _onMenuClick');
+    h._onMenuClick(event);
+  } else {
+    console.warn(`[StatusBar] menuClickHandler: helperRef=${!!h}, hasCallback=${!!(h && h._onMenuClick)}`);
+  }
+};
+
+// Re-register PROXY handlers on the current ScbServerMessageReceiver.
+// Must be called AFTER addToStatusBar() returns, because addToStatusBar internally
+// calls initScbServerMessageReceiver which creates a new receiver and wipes any
+// previously registered handlers. Calling after addToStatusBar ensures the on()
+// binds to the freshly created receiver.
+export function reRegisterStatusBarClickHandlers(): void {
+  doRegisterStatusBarClickHandlers('rebind-to-current-receiver');
 }
 
-export function setClickHandlersRegistered(value: boolean): void {
-  clickHandlersRegistered = value;
+function doRegisterStatusBarClickHandlers(reason: string): void {
+  try {
+    // Remove any stale handlers first (safe to call even if none exist).
+    try {
+      statusBarManager.off('statusBarIconClick' as 'statusBarIconClick', iconClickHandler as Callback<emitter.EventData>);
+    } catch (_) {}
+    try {
+      statusBarManager.off('rightMenuClick' as 'rightMenuClick', menuClickHandler as Callback<emitter.EventData>);
+    } catch (_) {}
+    statusBarManager.on('statusBarIconClick' as 'statusBarIconClick', iconClickHandler as Callback<emitter.EventData>);
+    statusBarManager.on('rightMenuClick' as 'rightMenuClick', menuClickHandler as Callback<emitter.EventData>);
+    console.info(`[StatusBar] PROXY handlers registered (${reason})`);
+  } catch (e) {
+    const err = e as BusinessError;
+    console.error(`[StatusBar] on() registration failed: ${err.code} ${err.message}`);
+  }
 }
 
 export function setCurrentAbilityName(name: string): void {
@@ -87,6 +127,10 @@ export function fillMenuItemAbilityName(groups: ESObject[][], abilityName: strin
   for (const group of groups) {
     for (const item of group) {
       if (item.menuAction && (!item.menuAction.abilityName || item.menuAction.abilityName === '')) {
+        // Always fill abilityName with the current ability name.
+        // Empty abilityName causes system to show "暂无可用打开方式" toast.
+        // When notifyOnly: true and menuCode is set, system fires rightMenuClick event
+        // instead of launching the ability, so having abilityName set is safe.
         item.menuAction.abilityName = abilityName;
       }
       if (item.subMenu) {
