@@ -11,7 +11,7 @@ import {
   WindowAvoidAreaInfo,
   WindowConfig,
 } from "../ability/type";
-import { exit, restart, check as updaterCheckFn, showUpdateDialog as updaterShowDialogFn, downloadAndInstall as updaterDownloadAndInstallFn, objectAssign } from "../helper";
+import { exit, restart, check as updaterCheckFn, showUpdateDialog as updaterShowDialogFn, downloadAndInstall as updaterDownloadAndInstallFn, objectAssign, writeImageToClipboard } from "../helper";
 import { requestPermission } from "../helper/permission";
 import { getPredefinedActionExecutor } from "../helper/menu";
 import { PredefinedType } from "../helper/menu_types";
@@ -557,6 +557,10 @@ export function createArkHelper(): ArkHelper {
 
     checkCanIUse: (syscap: string): boolean => {
       return canIUse(syscap);
+    },
+
+    writeImageToClipboard: async (rgbaData: Uint8Array, width: number, height: number): Promise<void> => {
+      return await writeImageToClipboard(rgbaData, width, height);
     },
 
   };

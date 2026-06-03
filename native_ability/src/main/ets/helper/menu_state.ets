@@ -1,10 +1,15 @@
 import { MenuItemData } from './menu_types';
 
+export interface MenuOffset {
+  x: number;
+  y: number;
+}
+
 export interface MenuState {
   isShown: boolean;
   menuId: string;
   items: MenuItemData[];
-  offset: { x: number; y: number };
+  offset: MenuOffset;
   onDisappear?: () => void;
 }
 

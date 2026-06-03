@@ -15,3 +15,5 @@ export * from "./menu";
 export * from "./menu_state";
 
 export * from "./predefined";
+
+export * from "./ClipboardHelper";

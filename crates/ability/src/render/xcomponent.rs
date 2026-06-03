@@ -25,6 +25,12 @@ pub fn render(
         eprintln!("init_tray_tsfn failed: {}", e);
     }
 
+    // Initialize clipboard ThreadsafeFunction (must be called after set_main_thread_env)
+    #[cfg(feature = "clipboard")]
+    if let Err(e) = crate::clipboard::init_clipboard_tsfn(env) {
+        eprintln!("init_clipboard_tsfn failed: {}", e);
+    }
+
     // Initialize permission request threadsafe function
     let _ = create_permission_request_tsfn(env);
 
