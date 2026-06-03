@@ -29,8 +29,7 @@ import {
   fillMenuItemAbilityName,
   processMenuItemIcons,
   helperRef,
-  isClickHandlersRegistered,
-  setClickHandlersRegistered,
+  reRegisterStatusBarClickHandlers,
 } from "../helper/StatusBarUtils";
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { primaryWebviewControllerCallback, clearPrimaryWebviewControllerCallback } from "../components/DefaultXComponent";
@@ -429,32 +428,12 @@ export function createArkHelper(): ArkHelper {
       if (hoverTips && hoverTips.length > 0 && hoverTips.length <= 128) {
         opts.hoverTips = hoverTips;
       }
+      // Register click handlers AFTER addToStatusBar returns, because addToStatusBar
+      // internally calls initScbServerMessageReceiver which creates a new receiver
+      // and wipes any handlers registered before it.
       try {
         statusBarManager.addToStatusBar(context, opts);
-        console.info('[StatusBar] addToStatusBar succeeded');
-        // statusBarManager.on() must be called exactly once per app lifetime.
-        // Subsequent calls overwrite the previous handler — if the current helperRef
-        // has been replaced (e.g. after DefaultXComponent re-creation), the new helper
-        // object may lack the _onIconClick/_onMenuClick NAPI callbacks, breaking events.
-        if (!isClickHandlersRegistered()) {
-          const h = helperRef as ESObject;
-          setTimeout(() => {
-            try {
-              if (h && h._onIconClick) {
-                statusBarManager.on('statusBarIconClick' as 'statusBarIconClick', h._onIconClick as Callback<emitter.EventData>);
-                console.info('[StatusBar] registered iconClick handler');
-              }
-              if (h && h._onMenuClick) {
-                statusBarManager.on('rightMenuClick' as 'rightMenuClick', h._onMenuClick as Callback<emitter.EventData>);
-                console.info('[StatusBar] registered menuClick handler');
-              }
-              setClickHandlersRegistered(true);
-            } catch (e2) {
-              const err2 = e2 as BusinessError;
-              console.error(`[StatusBar] on() registration failed: ${err2.code} ${err2.message}`);
-            }
-          }, 200);
-        }
+        reRegisterStatusBarClickHandlers();
       } catch (e) {
         const err = e as BusinessError;
         console.error(`[StatusBar] addToStatusBar failed: ${err.code} ${err.message}`);
