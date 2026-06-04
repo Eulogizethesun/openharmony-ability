@@ -10,6 +10,7 @@ default = []
 drag_and_drop = []
 webview = ["dep:ohos-web-binding", "dep:http"]
 menu = []
+clipboard = ["dep:ohos-hilog-binding"]
 
 [dependencies]
 # common dependencies
@@ -33,6 +34,9 @@ ohos-xcomponent-binding = { workspace = true }
 ohos-ime-binding = { workspace = true }
 ohos-display-binding = { workspace = true }
 ohos-resource-manager-binding = { workspace = true }
+
+# for clipboard feature
+ohos-hilog-binding = { workspace = true, optional = true }
 
 # for webview feature
 ohos-web-binding = { workspace = true, optional = true }

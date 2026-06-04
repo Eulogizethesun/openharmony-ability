@@ -34,6 +34,12 @@ pub use menu::{
     set_menubar_visible, is_menubar_visible, notify_menubar_visibility,
 };
 
+#[cfg(feature = "clipboard")]
+pub mod clipboard;
+
+#[cfg(feature = "clipboard")]
+pub use clipboard::{clipboard_write_image, init_clipboard_tsfn};
+
 pub use app::*;
 pub use area::*;
 pub use configuration::*;
