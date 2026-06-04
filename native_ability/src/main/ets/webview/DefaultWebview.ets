@@ -104,18 +104,18 @@ function WebBuilder(data: WebviewNodeData) {
     })
     .onLoadIntercept((event) => {
       const url = event.data.getRequestUrl();
-      // OHOS: intercept #close-window URL to destroy the parent window.
+      // OHOS: intercept close-window URL to destroy the parent window.
       // This is used by test windows that cannot attach JS event listeners
       // due to OHOS Web component initialization_script limitations.
-      if (url && url.includes('#close-window')) {
-        hilog.info(DOMAIN, 'DefaultWebview', 'Intercepted #close-window URL, destroying window %{public}d', data?.windowId ?? -1);
+      if (url && url.includes('close-window.invalid')) {
+        hilog.info(DOMAIN, 'DefaultWebview', 'Intercepted close-window URL, destroying window %{public}d', data?.windowId ?? -1);
         if (data?.windowId !== undefined) {
           try {
             const wm = WindowManager.getInstance();
             const entry = wm.getWindow(data.windowId);
             if (entry) {
               entry.destroyWindow();
-              hilog.info(DOMAIN, 'DefaultWebview', 'Window %{public}d destroyed via #close-window', data.windowId);
+              hilog.info(DOMAIN, 'DefaultWebview', 'Window %{public}d destroyed via close-window', data.windowId);
             }
           } catch (e) {
             hilog.error(DOMAIN, 'DefaultWebview', 'Failed to destroy window: %{public}s', JSON.stringify(e));
