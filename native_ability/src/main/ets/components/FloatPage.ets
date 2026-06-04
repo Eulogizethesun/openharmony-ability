@@ -25,6 +25,7 @@ interface Position {
 struct FloatPage {
   // Receive windowId from WindowManager.createSubWindow
   @LocalStorageProp('windowId') windowId: number = 0;
+  @LocalStorageProp('decorations') decorations: boolean = true;
   @StorageProp("__openharmony_ability_is_desktop__") isDesktop: boolean = false;
 
   // Window control
@@ -94,8 +95,8 @@ struct FloatPage {
   build() {
     Stack() {
       Column() {
-        // Menubar (only on desktop when menu items are available)
-        if (this.isDesktop) {
+        // Menubar (only on desktop when menu items are available and decorations are enabled)
+        if (this.isDesktop && this.decorations) {
           MenuBarComponent({
             windowId: this.windowId,
             acceleratorMatcher: this.acceleratorMatcher,
@@ -108,8 +109,8 @@ struct FloatPage {
             .width('100%')
             .height('100%');
 
-          // 2. Top drag control area + right close button
-          if (this.windowClass) {
+          // 2. Top drag control area + right close button (only when decorations are enabled)
+          if (this.windowClass && this.decorations) {
             Row() {
               Row() {}
                 .layoutWeight(1)

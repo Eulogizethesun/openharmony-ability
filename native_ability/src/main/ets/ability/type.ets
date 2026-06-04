@@ -68,7 +68,7 @@ export interface WebViewStyle {
   x?: number | string;
   y?: number | string;
   visible?: boolean;
-  backgroundColor?: string | Color;
+  backgroundColor?: Color | number;
 }
 
 export interface AbilityInitContext {
@@ -100,6 +100,9 @@ export interface WindowConfig {
   height?: number;
   x?: number;
   y?: number;
+  decorations?: boolean;     // Phase 2: show/hide title bar, default true
+  transparent?: boolean;     // Phase 3: window background transparent, default false
+  backgroundColor?: number;  // Phase 3: window background color in 0xAARRGGBB format
 }
 
 export interface ArkHelper {
@@ -113,6 +116,8 @@ export interface ArkHelper {
   requestPermission: (permission: string | string[]) => Promise<number | number[]>;
   getWindowAvoidArea: (type: number, windowId: number) => WindowAvoidAreaInfo | undefined;
   createOSWindow: (config: WindowConfig) => Promise<number>;
+  setWindowDecorations: (windowId: number, decorations: boolean) => void;
+  setWindowBackgroundColor: (windowId: number, color: number) => void;
   loadUrl: (id: number, url: string) => void;
   createMenu?: (options: MenuCreateOptions) => Promise<string>;
   createMenuItem?: (options: MenuItemCreateOptions) => Promise<string>;

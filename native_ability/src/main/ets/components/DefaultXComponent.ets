@@ -153,10 +153,14 @@ export struct DefaultXComponent {
           NodeContainer(this.webviewController)
             .height("100%")
             .width("100%")
-        }.width("100%")
+        }
+        .width("100%")
+        .backgroundColor(Color.Transparent)
       }
       .height("100%")
       .hitTestBehavior(HitTestMode.Transparent)
-    };
+      .backgroundColor(Color.Transparent)
+    }
+    .backgroundColor(Color.Transparent);
   }
 }

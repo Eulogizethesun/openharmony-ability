@@ -4,21 +4,24 @@ import { ComponentContent, NodeController, BuilderNode, FrameNode } from "@ohos.
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { randomString } from "../helper";
 import { OnDownloadStartResult } from "../ability/type";
-import { getCookies, JsHelper } from "./Utils";
+import { getCookies, JsHelper, convertRRGGBBAAtoAARRGGBB } from "./Utils";
 import { WebHeader } from "@kit.ArkUI";
+import { router } from '@kit.ArkUI';
+import { WindowManager } from '../window/WindowManager';
 
 const DOMAIN: number = 0x1999;
 
 export interface WebviewStyle {
   x?: number | string;
   y?: number | string;
-  backgroundColor?: string | Color;
+  backgroundColor?: Color | number;
   visible?: boolean;
 }
 
 export interface WebviewInitData {
   webTag?: string;
   url: string;
+  windowId?: number;
   style?: WebviewStyle;
   controller?: WebviewController;
   javascriptEnable?: boolean;
@@ -52,7 +55,7 @@ function WebBuilder(data: WebviewNodeData) {
       x: data.style?.x ?? 0,
       y: data.style?.y ?? 0,
     })
-    .backgroundColor(data?.style?.backgroundColor)
+    .backgroundColor(convertRRGGBBAAtoAARRGGBB(data?.style?.backgroundColor))
     .visibility(data?.style?.visible === false ? Visibility.Hidden : Visibility.Visible)
     .javaScriptAccess(data?.javascriptEnable)
     .domStorageAccess(true)
@@ -100,8 +103,27 @@ function WebBuilder(data: WebviewNodeData) {
       }
     })
     .onLoadIntercept((event) => {
+      const url = event.data.getRequestUrl();
+      // OHOS: intercept #close-window URL to destroy the parent window.
+      // This is used by test windows that cannot attach JS event listeners
+      // due to OHOS Web component initialization_script limitations.
+      if (url && url.includes('#close-window')) {
+        hilog.info(DOMAIN, 'DefaultWebview', 'Intercepted #close-window URL, destroying window %{public}d', data?.windowId ?? -1);
+        if (data?.windowId !== undefined) {
+          try {
+            const wm = WindowManager.getInstance();
+            const entry = wm.getWindow(data.windowId);
+            if (entry) {
+              entry.destroyWindow();
+              hilog.info(DOMAIN, 'DefaultWebview', 'Window %{public}d destroyed via #close-window', data.windowId);
+            }
+          } catch (e) {
+            hilog.error(DOMAIN, 'DefaultWebview', 'Failed to destroy window: %{public}s', JSON.stringify(e));
+          }
+        }
+        return true; // block navigation
+      }
       if (typeof data?.onNavigationRequest === "function") {
-        const url = event.data.getRequestUrl();
         hilog.info(DOMAIN, 'DefaultWebview', 'onLoadIntercept → onNavigationRequest called: %{public}s', url);
         // onLoadIntercept: true = block, false = allow
         // onNavigationRequest: true = allow, false = block
@@ -139,7 +161,7 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
     Web({ src: "", controller: data.controller as web_webview.WebviewController })
       .width("100%")
       .height("100%")
-      .backgroundColor(data?.style?.backgroundColor)
+      .backgroundColor(convertRRGGBBAAtoAARRGGBB(data?.style?.backgroundColor))
       .javaScriptAccess(data?.javascriptEnable)
       .domStorageAccess(true)
       .mediaPlayGestureAccess(
@@ -489,7 +511,7 @@ export class EmbeddedWebviewManager {
 // extend WebviewController method
 declare class WebviewController extends web_webview.WebviewController {
   getCookies: (url: string) => string;
-  setBackgroundColor: (color: string) => void;
+  setBackgroundColor: (color: number) => void;
   setVisible: (visible: boolean) => void;
   dispose: () => void;
   clearAllBrowsingData: () => void;

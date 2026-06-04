@@ -21,7 +21,7 @@ pub struct WebViewStyle {
     pub x: Option<Either<f64, String>>,
     pub y: Option<Either<f64, String>>,
     pub visible: Option<bool>,
-    pub background_color: Option<String>,
+    pub background_color: Option<u32>,
 }
 
 #[napi(object)]
@@ -238,15 +238,27 @@ impl Webview {
         }
     }
 
-    pub fn set_background_color(&self, color: &str) -> Result<()> {
+    pub fn set_background_color(&self, color: u32) -> Result<()> {
+        log::debug!("[openharmony-ability] set_background_color called with color: 0x{:08X}", color);
         if let Some(env) = get_main_thread_env().borrow().as_ref() {
+            log::debug!("[openharmony-ability] Got main thread env, calling setBackgroundColor");
             let set_background_color_js_function = self
                 .inner
                 .get_value(env)?
-                .get_named_property::<Function<'_, String, ()>>("setBackgroundColor")?;
-            set_background_color_js_function.call(color.to_string())?;
-            Ok(())
+                .get_named_property::<Function<'_, u32, ()>>("setBackgroundColor")?;
+            log::debug!("[openharmony-ability] Got setBackgroundColor function, calling it");
+            match set_background_color_js_function.call(color) {
+                Ok(_) => {
+                    log::debug!("[openharmony-ability] setBackgroundColor call succeeded");
+                    Ok(())
+                }
+                Err(e) => {
+                    log::error!("[openharmony-ability] setBackgroundColor call failed: {:?}", e);
+                    Err(e)
+                }
+            }
         } else {
+            log::error!("[openharmony-ability] Failed to get main thread env");
             Err(Error::from_reason("Failed to get main thread env"))
         }
     }

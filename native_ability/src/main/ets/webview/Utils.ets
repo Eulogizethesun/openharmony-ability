@@ -7,10 +7,27 @@ export const getCookies = (url: string): string => {
   return webview.WebCookieManager.fetchCookieSync(url);
 };
 
+/**
+ * 将 wry 传入的 `#RRGGBBAA` 格式转换为 OHOS 接受的 `#AARRGGBB` 格式。
+ * 支持 string、Color 枚举、number undefined 三种输入：
+ * - Color 枚举直接透传
+ * - number（0xAARRGGBB）直接透传
+ * - undefined 返回 undefined
+ * - 仅转换 `#RRGGBBAA` 格式的字符串（如 `#FF000080`）
+ */
+export function convertRRGGBBAAtoAARRGGBB(color: string | Color | number | undefined): string | Color | number | undefined {
+  if (color === undefined) return undefined;
+  if (typeof color !== 'string') return color;
+  if (!color.startsWith('#') || color.length !== 9) return color;
+  const rrggbb = color.substring(1, 7);
+  const aa = color.substring(7, 9);
+  return `#${aa}${rrggbb}`;
+}
+
 export interface JsWebviewStyle {
   x?: number | string;
   y?: number | string;
-  backgroundColor?: string | Color;
+  backgroundColor?: Color | number;
   visible?: boolean;
 }
 
@@ -23,7 +40,7 @@ export interface JsHelper {
   refresh: () => void;
   requestFocus: () => void;
   runJavaScript: (code: string, callback: (result?: string) => void) => void;
-  setBackgroundColor: (color: string) => void;
+  setBackgroundColor: (color: number) => void;
   setVisible: (visible: boolean) => void;
   dispose: () => void;
   clearAllBrowsingData: () => void;
@@ -110,7 +127,7 @@ export class ProxyJsHelper implements JsHelper {
     }
   }
 
-  setBackgroundColor(color: string): void {
+  setBackgroundColor(color: number): void {
     if (this.realController) {
       this.realController.setBackgroundColor(color);
     } else {

@@ -1,17 +1,24 @@
 import { window, UIContext } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { RustWebviewNodeController, WebviewInitData } from '../webview/DefaultWebview';
 import { ProxyJsHelper } from '../webview/Utils';
 import * as FloatPage from '../components/FloatPage';
 
 const DOMAIN: number = 0x1999;
 
+/** Per-window entry storing both the Window instance and its LocalStorage for reactive state. */
+interface WindowEntry {
+  window: window.Window;
+  storage: LocalStorage;
+}
+
 export class WindowManager {
   private static instance: WindowManager | null = null;
   private context: common.UIAbilityContext;
   private windowStage: window.WindowStage | null = null;
-  private windows: Map<number, window.Window> = new Map();
+  private windows: Map<number, WindowEntry> = new Map();
   private controllers: Map<number, RustWebviewNodeController> = new Map();
   private uiContexts: Map<number, UIContext> = new Map();
   
@@ -48,7 +55,7 @@ export class WindowManager {
     hilog.info(DOMAIN, 'WindowManager', 'WindowStage set');
   }
 
-  async createSubWindow(name: string, type: number, windowId: number, width: number = 800, height: number = 600, x: number = 100, y: number = 100): Promise<number> {
+  async createSubWindow(name: string, type: number, windowId: number, width: number = 800, height: number = 600, x: number = 100, y: number = 100, decorations: boolean = true, transparent: boolean = false, backgroundColor?: number): Promise<number> {
     // 校验 windowId：子窗口 ID 必须大于 0
     if (windowId <= 0) {
       hilog.error(DOMAIN, 'WindowManager', `Invalid windowId: %{public}d. Sub-window creation requires windowId > 0.`, windowId);
@@ -67,22 +74,25 @@ export class WindowManager {
     try {
       // 使用 windowStage.createSubWindow(name) 替代 window.createWindow(config)
       win = await this.windowStage.createSubWindow(name);
-      this.windows.set(windowId, win);
       hilog.info(DOMAIN, 'WindowManager', `Sub-window created successfully: %{public}d`, windowId);
     } catch (err) {
       hilog.error(DOMAIN, 'WindowManager', `Failed to create sub-window: %{public}s`, JSON.stringify(err));
       throw err;
     }
-    
-    // 使用 LocalStorage 传递 windowId，确保窗口间隔离
+
+    // 使用 LocalStorage 传递 per-window 状态（decorations, windowId），确保窗口间隔离
     let storage = new LocalStorage();
     storage.setOrCreate('windowId', windowId);
+    storage.setOrCreate('decorations', decorations);
+
+    // Store WindowEntry (window + storage) for runtime access
+    this.windows.set(windowId, { window: win, storage: storage });
 
     try {
       hilog.info(DOMAIN, 'WindowManager', `Loading content: FloatPage for window %{public}d`, windowId);
       await win.loadContentByName(FloatPage.RouteName, storage);
       hilog.info(DOMAIN, 'WindowManager', `UI content loaded successfully for window: %{public}d`, windowId);
-      
+
       // 注册子窗口的 UIContext
       try {
         const uiCtx = win.getUIContext();
@@ -97,7 +107,21 @@ export class WindowManager {
       hilog.error(DOMAIN, 'WindowManager', `Failed to load content for window %{public}d: %{public}s`, windowId, JSON.stringify(err));
       throw err;
     }
-    
+
+    // Phase 3: Set window background color (after loadContent, before showWindow)
+    try {
+      if (transparent) {
+        await win.setWindowBackgroundColor('#00000000');
+        hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to transparent`, windowId);
+      } else if (backgroundColor !== undefined) {
+        let colorStr = '#' + backgroundColor.toString(16).padStart(8, '0');
+        await win.setWindowBackgroundColor(colorStr);
+        hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to %{public}s`, windowId, colorStr);
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, 'WindowManager', `Failed to set background for window %{public}d: %{public}s`, windowId, JSON.stringify(e));
+    }
+
     try {
       hilog.info(DOMAIN, 'WindowManager', `Resizing window %{public}d to %{public}dx%{public}d`, windowId, width, height);
       await win.resize(width, height);
@@ -109,7 +133,7 @@ export class WindowManager {
       hilog.error(DOMAIN, 'WindowManager', `Failed to resize/move/show window: %{public}s`, JSON.stringify(err));
       throw err;
     }
-    
+
     return windowId;
   }
   
@@ -180,7 +204,80 @@ export class WindowManager {
   }
   
   getWindow(id: number): window.Window | undefined {
-    return this.windows.get(id);
+    const entry = this.windows.get(id);
+    return entry?.window;
+  }
+
+  // Phase 2: Update window decorations at runtime via LocalStorage reactive update
+  setDecorations(windowId: number, decorations: boolean): void {
+    const entry = this.windows.get(windowId);
+    if (entry && entry.storage) {
+      entry.storage.setOrCreate('decorations', decorations);
+      hilog.info(DOMAIN, 'WindowManager', `Decorations set to %{public}s for window %{public}d`, String(decorations), windowId);
+    }
+    // Main window (windowId=0): hide or restore system status bar
+    if (windowId === 0) {
+      if (!decorations) {
+        this.hideSystemBar();
+      } else {
+        this.showSystemBar();
+      }
+    }
+  }
+
+  // Phase 3: Update window background color at runtime
+  setWindowBackgroundColor(windowId: number, color: number): void {
+    const colorStr = '#' + color.toString(16).padStart(8, '0');
+    if (windowId === 0 && this.windowStage) {
+      // Main window: use windowStage.getMainWindowSync()
+      try {
+        const mainWindow = this.windowStage.getMainWindowSync();
+        mainWindow.setWindowBackgroundColor(colorStr);
+        hilog.info(DOMAIN, 'WindowManager', `Main window background set to %{public}s`, colorStr);
+      } catch (e) {
+        hilog.error(DOMAIN, 'WindowManager', `Failed to set main window background: %{public}s`, JSON.stringify(e));
+      }
+    } else {
+      const entry = this.windows.get(windowId);
+      if (entry) {
+        try {
+          entry.window.setWindowBackgroundColor(colorStr);
+          hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to %{public}s`, windowId, colorStr);
+        } catch (e) {
+          hilog.warn(DOMAIN, 'WindowManager', `Failed to set background for window %{public}d: %{public}s`, windowId, JSON.stringify(e));
+        }
+      }
+    }
+  }
+
+  // Phase 2: Hide system status bar for main window (decorations=false)
+  private hideSystemBar(): void {
+    if (!this.windowStage) return;
+    try {
+      const mainWindow = this.windowStage.getMainWindowSync();
+      const names: Array<'status' | 'navigation'> = [];
+      mainWindow.setWindowSystemBarEnable(names).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, 'WindowManager', `Failed to hide system bar: %{public}s`, err.message);
+      });
+      hilog.info(DOMAIN, 'WindowManager', 'System bar hide requested for main window');
+    } catch (e) {
+      hilog.error(DOMAIN, 'WindowManager', `Failed to get main window: %{public}s`, JSON.stringify(e));
+    }
+  }
+
+  // Phase 2: Restore system status bar for main window (decorations=true)
+  private showSystemBar(): void {
+    if (!this.windowStage) return;
+    try {
+      const mainWindow = this.windowStage.getMainWindowSync();
+      const names: Array<'status' | 'navigation'> = ['status', 'navigation'];
+      mainWindow.setWindowSystemBarEnable(names).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, 'WindowManager', `Failed to show system bar: %{public}s`, err.message);
+      });
+      hilog.info(DOMAIN, 'WindowManager', 'System bar show requested for main window');
+    } catch (e) {
+      hilog.error(DOMAIN, 'WindowManager', `Failed to get main window: %{public}s`, JSON.stringify(e));
+    }
   }
 
   getController(id: number): RustWebviewNodeController | undefined {

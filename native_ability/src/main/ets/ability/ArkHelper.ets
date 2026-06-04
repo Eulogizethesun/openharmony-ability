@@ -198,6 +198,7 @@ export function createArkHelper(): ArkHelper {
         const init: WebviewInitData = {
           webTag: data?.id,
           url: data?.url,
+          windowId: windowId,
           html: data?.html,
           headers: data?.headers,
           style: (data.style || {}) as WebviewStyle,
@@ -226,7 +227,7 @@ export function createArkHelper(): ArkHelper {
         );
 
         init.style = init.style || {};
-        if (data?.transparent && !init.style.backgroundColor) {
+        if (data?.transparent) {
           init.style.backgroundColor = Color.Transparent;
         }
 
@@ -267,7 +268,7 @@ export function createArkHelper(): ArkHelper {
           targetController!.updateWebviewStyle(ret.webTag, init.style as WebviewStyle);
         };
 
-        ret.controller.setBackgroundColor = (color: string) => {
+        ret.controller.setBackgroundColor = (color: number) => {
           applyStyle({ backgroundColor: color });
         };
 
@@ -302,6 +303,7 @@ export function createArkHelper(): ArkHelper {
         const init: WebviewInitData = {
           webTag: data?.id,
           url: data?.url,
+          windowId: windowId,
           html: data?.html,
           headers: data?.headers,
           style: (data.style || {}) as WebviewStyle,
@@ -331,7 +333,7 @@ export function createArkHelper(): ArkHelper {
 
         init.style = init.style || {};
 
-        if (data?.transparent && !init.style.backgroundColor) {
+        if (data?.transparent) {
           init.style.backgroundColor = Color.Transparent;
         }
 
@@ -341,7 +343,7 @@ export function createArkHelper(): ArkHelper {
           manager.updateWebviewStyle(ret.webTag, init.style as WebviewStyle);
         };
 
-        ret.controller.setBackgroundColor = (color: string) => {
+        ret.controller.setBackgroundColor = (color: number) => {
           applyStyle({ backgroundColor: color });
         };
 
@@ -376,11 +378,32 @@ export function createArkHelper(): ArkHelper {
           config.width,
           config.height,
           config.x,
-          config.y
+          config.y,
+          config.decorations ?? true,
+          config.transparent ?? false,
+          config.backgroundColor
         );
       } catch (err) {
         hilog.error(DOMAIN, 'ArkHelper', 'Failed to create OS window: %{public}s', JSON.stringify(err));
         throw err;
+      }
+    },
+
+    setWindowDecorations: (windowId: number, decorations: boolean): void => {
+      try {
+        const wm = WindowManager.getInstance();
+        wm.setDecorations(windowId, decorations);
+      } catch (err) {
+        hilog.error(DOMAIN, 'ArkHelper', 'setWindowDecorations failed: %{public}s', JSON.stringify(err));
+      }
+    },
+
+    setWindowBackgroundColor: (windowId: number, color: number): void => {
+      try {
+        const wm = WindowManager.getInstance();
+        wm.setWindowBackgroundColor(windowId, color);
+      } catch (err) {
+        hilog.error(DOMAIN, 'ArkHelper', 'setWindowBackgroundColor failed: %{public}s', JSON.stringify(err));
       }
     },
 
