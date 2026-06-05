@@ -27,7 +27,7 @@ export interface JsHelper {
   setVisible: (visible: boolean) => void;
   dispose: () => void;
   clearAllBrowsingData: () => void;
-  createPdf: (path: string, config: Record<string, number | boolean>, callback: (success: boolean) => void) => void;
+  createPdf: (path: string, callback: (success: boolean) => void) => void;
 }
 
 /**
@@ -143,11 +143,11 @@ export class ProxyJsHelper implements JsHelper {
     }
   }
 
-  createPdf(path: string, config: Record<string, number | boolean>, callback: (success: boolean) => void): void {
+  createPdf(path: string, callback: (success: boolean) => void): void {
     if (this.realController) {
-      this.realController.createPdf(path, config, callback);
+      this.realController.createPdf(path, callback);
     } else {
-      this.pendingOperations.push(() => this.realController!.createPdf(path, config, callback));
+      this.pendingOperations.push(() => this.realController!.createPdf(path, callback));
     }
   }
 }

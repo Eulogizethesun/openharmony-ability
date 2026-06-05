@@ -362,20 +362,8 @@ function buildJsHelper(controller: WebviewController): JsHelper {
     });
   };
 
-  const createPdf = (path: string, config: Record<string, number | boolean>, callback: (success: boolean) => void) => {
-    // 合并用户配置与默认值
-    const mergedConfig: web_webview.PdfConfiguration = { ...DEFAULT_PDF_CONFIG };
-    if (config) {
-      if (config['width'] !== undefined) mergedConfig.width = config['width'] as number;
-      if (config['height'] !== undefined) mergedConfig.height = config['height'] as number;
-      if (config['marginTop'] !== undefined) mergedConfig.marginTop = config['marginTop'] as number;
-      if (config['marginBottom'] !== undefined) mergedConfig.marginBottom = config['marginBottom'] as number;
-      if (config['marginLeft'] !== undefined) mergedConfig.marginLeft = config['marginLeft'] as number;
-      if (config['marginRight'] !== undefined) mergedConfig.marginRight = config['marginRight'] as number;
-      if (config['shouldPrintBackground'] !== undefined) mergedConfig.shouldPrintBackground = config['shouldPrintBackground'] as boolean;
-    }
-
-    controller.createPdf(mergedConfig)
+  const createPdf = (path: string, callback: (success: boolean) => void) => {
+    controller.createPdf(DEFAULT_PDF_CONFIG)
       .then((result) => {
         try {
           const buffer = result.pdfArrayBuffer().buffer;
