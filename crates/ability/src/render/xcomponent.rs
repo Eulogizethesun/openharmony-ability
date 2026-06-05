@@ -4,6 +4,7 @@ use ohos_arkui_binding::{ArkUIHandle, RootNode, XComponent};
 use ohos_ime_binding::IME;
 
 use crate::{
+    create_autostart_disable_tsfn, create_autostart_enable_tsfn, create_autostart_is_enabled_tsfn,
     create_permission_request_tsfn, create_restart_tsfn, create_updater_check_tsfn,
     create_updater_download_and_install_tsfn, create_updater_show_dialog_tsfn, input, set_helper,
     set_main_thread_env, Event, InputEvent, IntervalInfo, OpenHarmonyApp, Rect, Size,
@@ -41,6 +42,17 @@ pub fn render(
     let _ = create_updater_check_tsfn(env);
     let _ = create_updater_show_dialog_tsfn(env);
     let _ = create_updater_download_and_install_tsfn(env);
+
+    // Initialize autostart threadsafe functions
+    if let Err(e) = create_autostart_enable_tsfn(env) {
+        eprintln!("create_autostart_enable_tsfn failed: {}", e);
+    }
+    if let Err(e) = create_autostart_disable_tsfn(env) {
+        eprintln!("create_autostart_disable_tsfn failed: {}", e);
+    }
+    if let Err(e) = create_autostart_is_enabled_tsfn(env) {
+        eprintln!("create_autostart_is_enabled_tsfn failed: {}", e);
+    }
 
     let mut root = RootNode::new(slot);
     let xcomponent_native =

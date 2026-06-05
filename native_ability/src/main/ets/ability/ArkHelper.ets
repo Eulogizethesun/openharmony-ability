@@ -11,7 +11,7 @@ import {
   WindowAvoidAreaInfo,
   WindowConfig,
 } from "../ability/type";
-import { exit, restart, check as updaterCheckFn, showUpdateDialog as updaterShowDialogFn, downloadAndInstall as updaterDownloadAndInstallFn, objectAssign, writeImageToClipboard } from "../helper";
+import { exit, restart, check as updaterCheckFn, showUpdateDialog as updaterShowDialogFn, downloadAndInstall as updaterDownloadAndInstallFn, objectAssign, writeImageToClipboard, openAutostartSettings, getAutostartStatus } from "../helper";
 import { requestPermission } from "../helper/permission";
 import { getPredefinedActionExecutor } from "../helper/menu";
 import { PredefinedType } from "../helper/menu_types";
@@ -561,6 +561,48 @@ export function createArkHelper(): ArkHelper {
 
     writeImageToClipboard: async (rgbaData: Uint8Array, width: number, height: number): Promise<void> => {
       return await writeImageToClipboard(rgbaData, width, height);
+    },
+
+    autostartEnable: async (): Promise<void> => {
+      try {
+        const context = getUIAbilityContext();
+        if (!context) {
+          hilog.error(DOMAIN, 'ArkHelper', 'autostartEnable: UIAbilityContext not available');
+          throw new Error('UIAbilityContext not available');
+        }
+        await openAutostartSettings(context);
+      } catch (err) {
+        hilog.error(DOMAIN, 'ArkHelper', 'autostartEnable failed: %{public}s', JSON.stringify(err));
+        throw err;
+      }
+    },
+
+    autostartDisable: async (): Promise<void> => {
+      try {
+        const context = getUIAbilityContext();
+        if (!context) {
+          hilog.error(DOMAIN, 'ArkHelper', 'autostartDisable: UIAbilityContext not available');
+          throw new Error('UIAbilityContext not available');
+        }
+        await openAutostartSettings(context);
+      } catch (err) {
+        hilog.error(DOMAIN, 'ArkHelper', 'autostartDisable failed: %{public}s', JSON.stringify(err));
+        throw err;
+      }
+    },
+
+    autostartIsEnabled: async (): Promise<boolean> => {
+      try {
+        const context = getUIAbilityContext();
+        if (!context) {
+          hilog.error(DOMAIN, 'ArkHelper', 'autostartIsEnabled: UIAbilityContext not available');
+          throw new Error('UIAbilityContext not available');
+        }
+        return await getAutostartStatus(context);
+      } catch (err) {
+        hilog.error(DOMAIN, 'ArkHelper', 'autostartIsEnabled failed: %{public}s', JSON.stringify(err));
+        throw err;
+      }
     },
 
   };

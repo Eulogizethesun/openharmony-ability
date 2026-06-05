@@ -133,6 +133,9 @@ export interface ArkHelper {
   setColorMode: (mode: number) => void;
   checkCanIUse: (syscap: string) => boolean;
   writeImageToClipboard: (rgbaData: Uint8Array, width: number, height: number) => Promise<void>;
+  autostartEnable: () => Promise<void>;
+  autostartDisable: () => Promise<void>;
+  autostartIsEnabled: () => Promise<boolean>;
 }
 
 export interface WindowAvoidAreaInfo {

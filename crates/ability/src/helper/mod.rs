@@ -5,6 +5,7 @@ use napi_ohos::{bindgen_prelude::ObjectRef, Env};
 mod permission;
 mod restart;
 mod updater;
+mod autostart;
 #[cfg(feature = "webview")]
 mod webview;
 mod window_info;
@@ -12,6 +13,7 @@ mod window_info;
 pub use permission::*;
 pub use restart::*;
 pub use updater::*;
+pub use autostart::*;
 #[cfg(feature = "webview")]
 pub use webview::*;
 
