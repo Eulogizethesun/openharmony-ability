@@ -295,36 +295,54 @@ impl Webview {
         path: &str,
         callback: Box<dyn Fn(bool) + Send + 'static>,
     ) -> Result<()> {
-        if let Some(env) = get_main_thread_env().borrow().as_ref() {
-            let create_pdf_fn = self
-                .inner
-                .get_value(env)?
-                .get_named_property::<Function<
-                    '_,
-                    FnArgs<(
-                        String,
-                        Function<'_, bool, ()>,
-                    )>,
-                    (),
-                >>("createPdf")?;
+        let env = match get_main_thread_env().borrow().as_ref() {
+            Some(env) => env,
+            None => {
+                callback(false);
+                return Err(Error::from_reason("Failed to get main thread env"));
+            }
+        };
 
-            let cb = env.create_function_from_closure("create_pdf_callback", move |ctx| {
-                // napi-ohos try_get returns Either<T, JsUnknown>; Either::B covers
-                // the case where the ArkTS callback passes a non-bool (e.g. undefined).
-                let success = ctx.try_get::<bool>(0)?;
-                let success = match success {
-                    Either::A(b) => b,
-                    Either::B(_) => false,
-                };
-                callback(success);
-                Ok(())
-            })?;
+        let create_pdf_fn = match self.inner.get_value(env) {
+            Ok(v) => v,
+            Err(e) => {
+                callback(false);
+                return Err(e);
+            }
+        };
 
-            create_pdf_fn.call((path.to_string(), cb).into())?;
+        let create_pdf_fn = match create_pdf_fn.get_named_property::<Function<
+            '_,
+            FnArgs<(
+                String,
+                Function<'_, bool, ()>,
+            )>,
+            (),
+        >>("createPdf") {
+            Ok(f) => f,
+            Err(e) => {
+                callback(false);
+                return Err(e);
+            }
+        };
+
+        // callback is moved into the NAPI closure below.
+        // If create_function_from_closure or call() fails after this point,
+        // the callback cannot be invoked — these are catastrophic NAPI failures.
+        let cb = env.create_function_from_closure("create_pdf_callback", move |ctx| {
+            // napi-ohos try_get returns Either<T, JsUnknown>; Either::B covers
+            // the case where the ArkTS callback passes a non-bool (e.g. undefined).
+            let success = ctx.try_get::<bool>(0)?;
+            let success = match success {
+                Either::A(b) => b,
+                Either::B(_) => false,
+            };
+            callback(success);
             Ok(())
-        } else {
-            Err(Error::from_reason("Failed to get main thread env"))
-        }
+        })?;
+
+        create_pdf_fn.call((path.to_string(), cb).into())?;
+        Ok(())
     }
 
     pub fn on_controller_attach<F>(&self, callback: F) -> Result<()>
