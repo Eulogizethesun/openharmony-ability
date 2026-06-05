@@ -326,6 +326,8 @@ impl Webview {
                 >>("createPdf")?;
 
             let cb = env.create_function_from_closure("create_pdf_callback", move |ctx| {
+                // napi-ohos try_get returns Either<T, JsUnknown>; Either::B covers
+                // the case where the ArkTS callback passes a non-bool (e.g. undefined).
                 let success = ctx.try_get::<bool>(0)?;
                 let success = match success {
                     Either::A(b) => b,
