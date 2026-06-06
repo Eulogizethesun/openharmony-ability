@@ -227,7 +227,11 @@ export function createArkHelper(): ArkHelper {
         );
 
         init.style = init.style || {};
+        // OHOS: Set WebView transparent only when requested.
+        // The Web component only respects .backgroundColor() at creation, not at runtime.
+        // Window shell transparency is controlled separately by setWindowBackgroundColor().
         if (data?.transparent) {
+          init.transparent = true;
           init.style.backgroundColor = Color.Transparent;
         }
 
@@ -332,8 +336,9 @@ export function createArkHelper(): ArkHelper {
         );
 
         init.style = init.style || {};
-
+        // OHOS: Set WebView transparent only when requested (same as createWebview).
         if (data?.transparent) {
+          init.transparent = true;
           init.style.backgroundColor = Color.Transparent;
         }
 

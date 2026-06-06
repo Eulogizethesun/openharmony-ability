@@ -17,6 +17,10 @@ import { webview } from '@kit.ArkWeb';
 @Component
 struct TransparencyTest {
   @State testMode: number = 0; // 0=async(default), 1=sync
+  // Create controllers once in aboutToAppear to avoid recreating on every re-render
+  @State controller1: webview.WebviewController = new webview.WebviewController();
+  @State controller2: webview.WebviewController = new webview.WebviewController();
+  @State controller3: webview.WebviewController = new webview.WebviewController();
 
   // 内嵌 HTML：上半部分绿色条，下半部分透明
   // 如果透明生效，下半部分应该能看到底部的彩色背景
@@ -35,7 +39,7 @@ struct TransparencyTest {
 </html>`;
 
   @Builder
-  TestCard(title: string, bgColor: ResourceColor, renderMode: RenderMode) {
+  TestCard(title: string, bgColor: ResourceColor, renderMode: RenderMode, ctrl: webview.WebviewController) {
     Column({ space: 4 }) {
       Text(title)
         .fontSize(14)
@@ -57,7 +61,7 @@ struct TransparencyTest {
         .justifyContent(FlexAlign.Center)
 
         // 上层：Web 组件，背景设为透明
-        Web({ src: this.transparentHtml, controller: new webview.WebviewController() })
+        Web({ src: this.transparentHtml, controller: ctrl })
           .width("100%")
           .height(280)
           .backgroundColor(Color.Transparent)
@@ -90,14 +94,16 @@ struct TransparencyTest {
         this.TestCard(
           "Test 1: ASYNC_RENDER (默认模式)",
           Color.Red,
-          RenderMode.ASYNC_RENDER
+          RenderMode.ASYNC_RENDER,
+          this.controller1
         )
 
         // 测试 2：同步渲染模式
         this.TestCard(
           "Test 2: SYNC_RENDER (同步模式)",
           Color.Blue,
-          RenderMode.SYNC_RENDER
+          RenderMode.SYNC_RENDER,
+          this.controller2
         )
 
         // 测试 3：对照组 - 不透明 Web（验证非透明场景正常）
@@ -107,7 +113,7 @@ struct TransparencyTest {
             .fontWeight(FontWeight.Bold)
             .width("100%")
 
-          Web({ src: this.transparentHtml, controller: new webview.WebviewController() })
+          Web({ src: this.transparentHtml, controller: this.controller3 })
             .width("100%")
             .height(280)
             .renderMode(RenderMode.ASYNC_RENDER)

@@ -14,7 +14,7 @@ const DOMAIN: number = 0x1999;
 export interface WebviewStyle {
   x?: number | string;
   y?: number | string;
-  backgroundColor?: Color | number;
+  backgroundColor?: string | Color | number;
   visible?: boolean;
 }
 
@@ -31,6 +31,7 @@ export interface WebviewInitData {
   initializationScripts?: ScriptItem[];
   headers?: Record<string, string>;
   html?: string;
+  transparent?: boolean;
   onDragAndDrop?: (event: string) => void;
   onDownloadStart?: (url: string, tempPath: string | undefined) => OnDownloadStartResult;
   onDownloadEnd?: (url: string, tempPath: string | undefined, success: boolean) => void;
@@ -48,7 +49,11 @@ interface WebviewNodeData extends WebviewInitData {
 @Builder
 function WebBuilder(data: WebviewNodeData) {
   // init with empty url and reload with loadUrl or loadData with onControllerAttach
-  Web({ src: "", controller: data.controller as web_webview.WebviewController })
+  Web({
+    src: "",
+    controller: data.controller as web_webview.WebviewController,
+    renderMode: data?.transparent ? RenderMode.SYNC_RENDER : RenderMode.ASYNC_RENDER
+  })
     .width("100%")
     .height("100%")
     .position({
@@ -87,7 +92,19 @@ function WebBuilder(data: WebviewNodeData) {
         const ctrl = data.controller;
         const errorCode = event.error.getErrorCode();
         const errorInfo = event.error.getErrorInfo();
-        hilog.error(DOMAIN, 'DefaultWebview', 'Main frame load failed: %{public}d - %{public}s', errorCode, errorInfo);
+        hilog.error(DOMAIN, 'DefaultWebview', 'Frame load failed: %{public}d - %{public}s', errorCode, errorInfo);
+
+        // Check current URL to determine if this is an iframe error
+        const currentUrl = ctrl.getUrl();
+        hilog.info(DOMAIN, 'DefaultWebview', 'Current URL when error: %{public}s', currentUrl);
+
+        // If current URL is tauri://localhost, main page loaded successfully,
+        // this error is from an iframe (like isolation://), ignore it
+        if (currentUrl && currentUrl.startsWith('tauri://localhost')) {
+          hilog.warn(DOMAIN, 'DefaultWebview', 'Main page loaded, ignoring iframe error');
+          return;
+        }
+
         const errorHtml = `
           <html>
             <body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;font-family:sans-serif;">
@@ -107,7 +124,7 @@ function WebBuilder(data: WebviewNodeData) {
       // OHOS: intercept close-window URL to destroy the parent window.
       // This is used by test windows that cannot attach JS event listeners
       // due to OHOS Web component initialization_script limitations.
-      if (url && url.includes('close-window.invalid')) {
+      if (url && event.data.isMainFrame() && url.startsWith('http://close-window.invalid')) {
         hilog.info(DOMAIN, 'DefaultWebview', 'Intercepted close-window URL, destroying window %{public}d', data?.windowId ?? -1);
         if (data?.windowId !== undefined) {
           try {
@@ -158,7 +175,11 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
   // to the host slot owned by native. A bare `Web` component can render in the
   // right place while still participating in input as an unbounded layer.
   Stack() {
-    Web({ src: "", controller: data.controller as web_webview.WebviewController })
+    Web({
+      src: "",
+      controller: data.controller as web_webview.WebviewController,
+      renderMode: data?.transparent ? RenderMode.SYNC_RENDER : RenderMode.ASYNC_RENDER
+    })
       .width("100%")
       .height("100%")
       .backgroundColor(convertRRGGBBAAtoAARRGGBB(data?.style?.backgroundColor))
@@ -237,6 +258,7 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
     }
   .width("100%")
   .height("100%")
+  .backgroundColor(Color.Transparent)
   .clip(true)
   .visibility(data?.style?.visible === false ? Visibility.Hidden : Visibility.Visible)
   .hitTestBehavior(HitTestMode.Default);
@@ -368,7 +390,7 @@ function buildJsHelper(controller: WebviewController): JsHelper {
     controller.runJavaScript(code).then((ret) => {
       cb(ret ?? undefined);
     }).catch((err) => {
-      hilog.error(DOMAIN, 'DefaultWebview', 'runJavaScript ERR %{public}s', JSON.stringify(err));
+      hilog.error(DOMAIN, 'DefaultWebview', 'runJavaScript ERR message=%{public}s code=%{public}s', String(err?.message || err), code.substring(0, 120));
       cb(undefined);
     });
   };
@@ -383,6 +405,9 @@ function buildJsHelper(controller: WebviewController): JsHelper {
     requestFocus,
     clearAllBrowsingData,
     runJavaScript,
+    setBackgroundColor: (_color: number) => {},
+    setVisible: (_visible: boolean) => {},
+    dispose: () => {},
   } as JsHelper;
 }
 

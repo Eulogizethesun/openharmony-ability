@@ -76,10 +76,10 @@ struct MainPage {
                 .fontSize(20)
                 .fontColor(Color.Gray)
             }
-          }.width("100%")
-        }.layoutWeight(1).height("100%")
+          }.width("100%").backgroundColor(Color.Transparent)
+        }.layoutWeight(1).height("100%").backgroundColor(Color.Transparent)
 
-      }.width("100%").height("100%")
+      }.width("100%").height("100%").backgroundColor(Color.Transparent)
       .onKeyPreIme((event: KeyEvent) => {
         // Accelerator matching (non-clipboard shortcuts)
         if (event.type === KeyType.Down && this.acceleratorMatcher.matches(event)) {
@@ -102,6 +102,6 @@ struct MainPage {
         }
         return false;
       })
-    }
+    }.backgroundColor(Color.Transparent)
   }
 }

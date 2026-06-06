@@ -152,10 +152,11 @@ struct FloatPage {
         .width('100%');
       }
       .width('100%')
-      .height('100%');
+      .height('100%')
+      .backgroundColor(Color.Transparent);
 
-      // 3. Resize handles (only on desktop)
-      if (this.isDesktop && this.windowClass) {
+      // 3. Resize handles (only on desktop with decorations enabled)
+      if (this.isDesktop && this.windowClass && this.decorations) {
         // Right edge resize handle
         Row() {}
           .width(10)
@@ -248,6 +249,7 @@ struct FloatPage {
     }
     .width('100%')
     .height('100%')
+    .backgroundColor(Color.Transparent)
     .onKeyPreIme((event: KeyEvent) => {
       if (event.type === KeyType.Down && this.acceleratorMatcher.matches(event)) {
         const matchedItem = this.acceleratorMatcher.getMatchedItem();

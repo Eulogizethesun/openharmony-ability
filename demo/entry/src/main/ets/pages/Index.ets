@@ -66,7 +66,7 @@ struct Index {
           })
         Button("background red")
           .onClick(() => {
-            setBackgroundColor("red");
+            setBackgroundColor(0xFFFF0000);
           })
         Button(this.webviewVisible ? "hide webview" : "show webview")
           .onClick(() => this.handleToggleWebviewVisible())

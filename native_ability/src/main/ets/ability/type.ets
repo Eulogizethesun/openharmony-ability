@@ -68,7 +68,7 @@ export interface WebViewStyle {
   x?: number | string;
   y?: number | string;
   visible?: boolean;
-  backgroundColor?: Color | number;
+  backgroundColor?: string | Color | number;
 }
 
 export interface AbilityInitContext {

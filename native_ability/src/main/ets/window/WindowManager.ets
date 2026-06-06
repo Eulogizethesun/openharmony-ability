@@ -1,7 +1,7 @@
 import { window, UIContext } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { RustWebviewNodeController, WebviewInitData } from '../webview/DefaultWebview';
 import { ProxyJsHelper } from '../webview/Utils';
 import * as FloatPage from '../components/FloatPage';
@@ -112,10 +112,27 @@ export class WindowManager {
     try {
       if (transparent) {
         await win.setWindowBackgroundColor('#00000000');
+        // On PC, also set container color for full transparency (requires API 20+)
+        if (deviceInfo.sdkApiVersion >= 20) {
+          try {
+            await win.setWindowContainerColor('#00000000', '#00000000');
+            hilog.info(DOMAIN, 'WindowManager', `Window %{public}d container color set to transparent (API %{public}d)`, windowId, deviceInfo.sdkApiVersion);
+          } catch (containerErr) {
+            // Ignore - not all window types support this
+          }
+        }
         hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to transparent`, windowId);
       } else if (backgroundColor !== undefined) {
         let colorStr = '#' + backgroundColor.toString(16).padStart(8, '0');
         await win.setWindowBackgroundColor(colorStr);
+        if (deviceInfo.sdkApiVersion >= 20) {
+          try {
+            await win.setWindowContainerColor(colorStr, colorStr);
+            hilog.info(DOMAIN, 'WindowManager', `Window %{public}d container color set (API %{public}d)`, windowId, deviceInfo.sdkApiVersion);
+          } catch (containerErr) {
+            // Ignore
+          }
+        }
         hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to %{public}s`, windowId, colorStr);
       }
     } catch (e) {
@@ -228,11 +245,35 @@ export class WindowManager {
   // Phase 3: Update window background color at runtime
   setWindowBackgroundColor(windowId: number, color: number): void {
     const colorStr = '#' + color.toString(16).padStart(8, '0');
+    hilog.info(DOMAIN, 'WindowManager', `setWindowBackgroundColor called: windowId=%{public}d, color=%{public}s, windowStage=%{public}s`, windowId, colorStr, this.windowStage ? 'set' : 'null');
     if (windowId === 0 && this.windowStage) {
       // Main window: use windowStage.getMainWindowSync()
       try {
         const mainWindow = this.windowStage.getMainWindowSync();
+        hilog.info(DOMAIN, 'WindowManager', `Got main window, setting background to %{public}s`, colorStr);
         mainWindow.setWindowBackgroundColor(colorStr);
+        // On 2in1 devices, also set container color for full transparency (requires API 20+)
+        if (deviceInfo.sdkApiVersion >= 20) {
+          try {
+            // Both active and inactive use the same color.
+            // Note: OHOS docs say inactiveColor alpha is fixed to 'FF' by the system,
+            // but we still pass the transparent color to get the best possible result.
+            mainWindow.setWindowContainerColor(colorStr, colorStr);
+            hilog.info(DOMAIN, 'WindowManager', `Main window container color set: %{public}s (API %{public}d)`, colorStr, deviceInfo.sdkApiVersion);
+          } catch (containerErr: any) {
+            if (containerErr.code === 801) {
+              // Expected on non-2in1 devices that don't support this API
+              hilog.debug(DOMAIN, 'WindowManager', 'setWindowContainerColor not supported on this device (error 801)');
+            } else if (containerErr.code === 201) {
+              // Missing ohos.permission.SET_WINDOW_TRANSPARENT in module.json5
+              hilog.error(DOMAIN, 'WindowManager', 'setWindowContainerColor permission denied (error 201): missing ohos.permission.SET_WINDOW_TRANSPARENT');
+            } else {
+              hilog.error(DOMAIN, 'WindowManager', `Failed to set container color: code=%{public}d, message=%{public}s`, containerErr.code, containerErr.message);
+            }
+          }
+        } else {
+          hilog.info(DOMAIN, 'WindowManager', `Skipping setWindowContainerColor: requires API 20+, current API %{public}d`, deviceInfo.sdkApiVersion);
+        }
         hilog.info(DOMAIN, 'WindowManager', `Main window background set to %{public}s`, colorStr);
       } catch (e) {
         hilog.error(DOMAIN, 'WindowManager', `Failed to set main window background: %{public}s`, JSON.stringify(e));
@@ -242,10 +283,27 @@ export class WindowManager {
       if (entry) {
         try {
           entry.window.setWindowBackgroundColor(colorStr);
+          // Also set container color for sub-windows (requires API 20+)
+          if (deviceInfo.sdkApiVersion >= 20) {
+            try {
+              entry.window.setWindowContainerColor(colorStr, colorStr);
+              hilog.info(DOMAIN, 'WindowManager', `Window %{public}d container color set (API %{public}d)`, windowId, deviceInfo.sdkApiVersion);
+            } catch (containerErr: any) {
+              if (containerErr.code === 801) {
+                hilog.debug(DOMAIN, 'WindowManager', 'setWindowContainerColor not supported on this device (error 801)');
+              } else if (containerErr.code === 201) {
+                hilog.error(DOMAIN, 'WindowManager', 'setWindowContainerColor permission denied (error 201): missing ohos.permission.SET_WINDOW_TRANSPARENT');
+              } else {
+                hilog.warn(DOMAIN, 'WindowManager', `Sub-window container color failed: code=%{public}d`, containerErr.code);
+              }
+            }
+          }
           hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to %{public}s`, windowId, colorStr);
         } catch (e) {
           hilog.warn(DOMAIN, 'WindowManager', `Failed to set background for window %{public}d: %{public}s`, windowId, JSON.stringify(e));
         }
+      } else {
+        hilog.warn(DOMAIN, 'WindowManager', `Window %{public}d not found in windows map`, windowId);
       }
     }
   }
