@@ -1,10 +1,13 @@
 import { UIContext } from "@ohos.arkui.UIContext";
 import web_webview from "@ohos.web.webview";
 import { ComponentContent, NodeController, BuilderNode, FrameNode } from "@ohos.arkui.node";
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { randomString } from "../helper";
 import { OnDownloadStartResult } from "../ability/type";
 import { getCookies, JsHelper } from "./Utils";
 import { WebHeader } from "@kit.ArkUI";
+
+const DOMAIN: number = 0x1999;
 
 export interface WebviewStyle {
   x?: number | string;
@@ -30,6 +33,8 @@ export interface WebviewInitData {
   onDownloadEnd?: (url: string, tempPath: string | undefined, success: boolean) => void;
   onNavigationRequest?: (url: string) => boolean;
   onTitleChange?: (title: string) => void;
+  onPageBegin?: (url: string) => void;
+  onPageEnd?: (url: string) => void;
 }
 
 interface WebviewNodeData extends WebviewInitData {
@@ -50,12 +55,16 @@ function WebBuilder(data: WebviewNodeData) {
     .backgroundColor(data?.style?.backgroundColor)
     .visibility(data?.style?.visible === false ? Visibility.Hidden : Visibility.Visible)
     .javaScriptAccess(data?.javascriptEnable)
+    .domStorageAccess(true)
     .mediaPlayGestureAccess(
       typeof data?.autoplay === "boolean" && data.autoplay === true ? false : true,
     )
     .javaScriptOnDocumentStart(data?.initializationScripts)
     .onControllerAttached(() => {
+      hilog.info(DOMAIN, 'DefaultWebview', 'onControllerAttached fired');
       const ctrl = data.controller;
+      // Set up download delegate after controller is attached
+      setupDownloadDelegate(data);
       // load url or html string
       if (data?.url) {
         const header: WebHeader[] = Object.keys(
@@ -69,17 +78,54 @@ function WebBuilder(data: WebviewNodeData) {
         ctrl.loadData(data!.html, "text/html", "UTF-8", " ", " ");
       }
     })
+    .onErrorReceive((event) => {
+      hilog.error(DOMAIN, 'DefaultWebview', 'Web onErrorReceive: %{public}s', JSON.stringify(event));
+      if (event.error) {
+        const ctrl = data.controller;
+        const errorCode = event.error.getErrorCode();
+        const errorInfo = event.error.getErrorInfo();
+        hilog.error(DOMAIN, 'DefaultWebview', 'Main frame load failed: %{public}d - %{public}s', errorCode, errorInfo);
+        const errorHtml = `
+          <html>
+            <body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;font-family:sans-serif;">
+              <div style="text-align:center;padding:20px;">
+                <h2>Network Error</h2>
+                <p>Failed to load the page. Please check your connection.</p>
+                <p style="color:#666;font-size:12px;">Error: ${errorCode} - ${errorInfo}</p>
+              </div>
+            </body>
+          </html>
+        `;
+        ctrl.loadData(errorHtml, 'text/html', 'UTF-8', ' ', ' ');
+      }
+    })
     .onLoadIntercept((event) => {
       if (typeof data?.onNavigationRequest === "function") {
         const url = event.data.getRequestUrl();
+        hilog.info(DOMAIN, 'DefaultWebview', 'onLoadIntercept → onNavigationRequest called: %{public}s', url);
+        // onLoadIntercept: true = block, false = allow
+        // onNavigationRequest: true = allow, false = block
+        // So we negate the return value
         const ret = data.onNavigationRequest(url);
-        return ret;
+        hilog.info(DOMAIN, 'DefaultWebview', 'onNavigationRequest result: %{public}s, onLoadIntercept returns: %{public}s', ret ? 'allow' : 'block', ret ? 'false(allow)' : 'true(block)');
+        return !ret;
       }
       return false;
     })
     .onTitleReceive((e) => {
       if (typeof data?.onTitleChange === "function") {
+        hilog.info(DOMAIN, 'DefaultWebview', 'onTitleReceive → onTitleChange called: %{public}s', e.title);
         data.onTitleChange(e.title);
+      }
+    })
+    .onPageBegin((e) => {
+      if (typeof data?.onPageBegin === "function") {
+        data.onPageBegin(e.url);
+      }
+    })
+    .onPageEnd((e) => {
+      if (typeof data?.onPageEnd === "function") {
+        data.onPageEnd(e.url);
       }
     });
 }
@@ -95,6 +141,7 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
       .height("100%")
       .backgroundColor(data?.style?.backgroundColor)
       .javaScriptAccess(data?.javascriptEnable)
+      .domStorageAccess(true)
       .mediaPlayGestureAccess(
         typeof data?.autoplay === "boolean" && data.autoplay === true ? false : true,
       )
@@ -105,6 +152,8 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
         }
         data.didInitialLoad = true;
         const ctrl = data.controller;
+        // Set up download delegate after controller is attached
+        setupDownloadDelegate(data);
         if (data?.url) {
           const header: WebHeader[] = Object.keys(
             (data?.headers || {}) as Record<string, string>,
@@ -117,11 +166,34 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
           ctrl.loadData(data!.html, "text/html", "UTF-8", " ", " ");
         }
       })
+      .onErrorReceive((event) => {
+        hilog.error(DOMAIN, 'DefaultWebview', 'Embedded Web onErrorReceive: %{public}s', JSON.stringify(event));
+        if (event.error) {
+          const ctrl = data.controller;
+          const errorCode = event.error.getErrorCode();
+          const errorInfo = event.error.getErrorInfo();
+          hilog.error(DOMAIN, 'DefaultWebview', 'Embedded Main frame load failed: %{public}d - %{public}s', errorCode, errorInfo);
+          const errorHtml = `
+            <html>
+              <body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;font-family:sans-serif;">
+                <div style="text-align:center;padding:20px;">
+                  <h2>Network Error</h2>
+                  <p>Failed to load the page. Please check your connection.</p>
+                  <p style="color:#666;font-size:12px;">Error: ${errorCode} - ${errorInfo}</p>
+                </div>
+              </body>
+            </html>
+          `;
+          ctrl.loadData(errorHtml, 'text/html', 'UTF-8', ' ', ' ');
+        }
+      })
       .onLoadIntercept((event) => {
         if (typeof data?.onNavigationRequest === "function") {
           const url = event.data.getRequestUrl();
+          // onLoadIntercept: true = block, false = allow
+          // onNavigationRequest: true = allow, false = block
           const ret = data.onNavigationRequest(url);
-          return ret;
+          return !ret;
         }
         return false;
       })
@@ -130,7 +202,17 @@ function EmbeddedWebBuilder(data: WebviewNodeData) {
           data.onTitleChange(e.title);
         }
       })
-  }
+      .onPageBegin((e) => {
+        if (typeof data?.onPageBegin === "function") {
+          data.onPageBegin(e.url);
+        }
+      })
+      .onPageEnd((e) => {
+        if (typeof data?.onPageEnd === "function") {
+          data.onPageEnd(e.url);
+        }
+      })
+    }
   .width("100%")
   .height("100%")
   .clip(true)
@@ -178,15 +260,18 @@ function ensureWebviewNodeData(data: WebviewInitData): WebviewNodeData {
 
 function setupDownloadDelegate(data: WebviewNodeData) {
   if (typeof data?.onDownloadStart !== "function" && typeof data?.onDownloadEnd !== "function") {
+    hilog.info(DOMAIN, 'DefaultWebview', 'setupDownloadDelegate: no download handlers registered');
     return;
   }
 
+  hilog.info(DOMAIN, 'DefaultWebview', 'setupDownloadDelegate: registering download delegate');
   const download = new web_webview.WebDownloadDelegate();
 
   if (typeof data?.onDownloadStart === "function") {
     download.onBeforeDownload((e) => {
       const url = e.getUrl();
       const tempPath = e.getFullPath();
+      hilog.info(DOMAIN, 'DefaultWebview', 'onBeforeDownload → onDownloadStart: %{public}s', url);
       const ret = data.onDownloadStart!(url, tempPath);
 
       if (ret.allow) {
@@ -201,10 +286,12 @@ function setupDownloadDelegate(data: WebviewNodeData) {
     download.onDownloadFinish((e) => {
       const url = e.getUrl();
       const tempPath = e.getFullPath();
+      hilog.info(DOMAIN, 'DefaultWebview', 'onDownloadFinish → onDownloadEnd: %{public}s, success=true', url);
       data.onDownloadEnd!(url, tempPath, true);
     });
     download.onDownloadFailed((e) => {
       const url = e.getUrl();
+      hilog.info(DOMAIN, 'DefaultWebview', 'onDownloadFailed → onDownloadEnd: %{public}s, success=false', url);
       data.onDownloadEnd!(url, undefined, false);
     });
   }
@@ -257,7 +344,10 @@ function buildJsHelper(controller: WebviewController): JsHelper {
 
   const runJavaScript = (code: string, cb: (result?: string) => void) => {
     controller.runJavaScript(code).then((ret) => {
-      cb(ret);
+      cb(ret ?? undefined);
+    }).catch((err) => {
+      hilog.error(DOMAIN, 'DefaultWebview', 'runJavaScript ERR %{public}s', JSON.stringify(err));
+      cb(undefined);
     });
   };
 
@@ -318,7 +408,6 @@ export class RustWebviewNodeController extends NodeController {
     node.build(webViewWrap, prepared);
 
     const controller = this.buildData(prepared.controller);
-    setupDownloadDelegate(prepared);
     this.webviewEntries.set(webTag, prepared);
     this.webviewList.set(webTag, node);
 
@@ -354,7 +443,6 @@ export class EmbeddedWebviewManager {
   createWebview(data: WebviewInitData): EmbeddedWebviewHandle {
     const prepared = ensureWebviewNodeData(data);
     const webTag = prepared.webTag!;
-    setupDownloadDelegate(prepared);
 
     const content = new ComponentContent<WebviewNodeData>(
       this.uiContext,
