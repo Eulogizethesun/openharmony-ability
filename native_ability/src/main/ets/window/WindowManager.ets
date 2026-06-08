@@ -1,17 +1,17 @@
 import { window, UIContext } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
+import { deviceInfo } from '@kit.BasicServicesKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { RustWebviewNodeController, WebviewInitData } from '../webview/DefaultWebview';
 import { ProxyJsHelper } from '../webview/Utils';
 import * as FloatPage from '../components/FloatPage';
 
 const DOMAIN: number = 0x1999;
 
-/** Per-window entry storing both the Window instance and its LocalStorage for reactive state. */
 interface WindowEntry {
   window: window.Window;
-  storage: LocalStorage;
+  storage?: LocalStorage;
 }
 
 export class WindowManager {
@@ -55,7 +55,8 @@ export class WindowManager {
     hilog.info(DOMAIN, 'WindowManager', 'WindowStage set');
   }
 
-  async createSubWindow(name: string, type: number, windowId: number, width: number = 800, height: number = 600, x: number = 100, y: number = 100, decorations: boolean = true, transparent: boolean = false, backgroundColor?: number): Promise<number> {
+  async createSubWindow(name: string, type: number, windowId: number, width: number = 800, height: number = 600, x: number = 100, y: number = 100,
+      decorations: boolean = true, transparent: boolean = false, backgroundColor?: number): Promise<number> {
     // 校验 windowId：子窗口 ID 必须大于 0
     if (windowId <= 0) {
       hilog.error(DOMAIN, 'WindowManager', `Invalid windowId: %{public}d. Sub-window creation requires windowId > 0.`, windowId);
@@ -79,20 +80,18 @@ export class WindowManager {
       hilog.error(DOMAIN, 'WindowManager', `Failed to create sub-window: %{public}s`, JSON.stringify(err));
       throw err;
     }
-
-    // 使用 LocalStorage 传递 per-window 状态（decorations, windowId），确保窗口间隔离
+    
+    // 使用 LocalStorage 传递 windowId 和 decorations，确保窗口间隔离
     let storage = new LocalStorage();
     storage.setOrCreate('windowId', windowId);
     storage.setOrCreate('decorations', decorations);
-
-    // Store WindowEntry (window + storage) for runtime access
-    this.windows.set(windowId, { window: win, storage: storage });
+    this.windows.set(windowId, { window: win, storage });
 
     try {
       hilog.info(DOMAIN, 'WindowManager', `Loading content: FloatPage for window %{public}d`, windowId);
       await win.loadContentByName(FloatPage.RouteName, storage);
       hilog.info(DOMAIN, 'WindowManager', `UI content loaded successfully for window: %{public}d`, windowId);
-
+      
       // 注册子窗口的 UIContext
       try {
         const uiCtx = win.getUIContext();
@@ -107,39 +106,33 @@ export class WindowManager {
       hilog.error(DOMAIN, 'WindowManager', `Failed to load content for window %{public}d: %{public}s`, windowId, JSON.stringify(err));
       throw err;
     }
-
-    // Phase 3: Set window background color (after loadContent, before showWindow)
+    
     try {
+      // Apply transparent/backgroundColor settings
       if (transparent) {
+        hilog.info(DOMAIN, 'WindowManager', `Setting window %{public}d to transparent`, windowId);
         await win.setWindowBackgroundColor('#00000000');
-        // On PC, also set container color for full transparency (requires API 20+)
+        // On 2in1 devices (API 20+), also set container color for full transparency
         if (deviceInfo.sdkApiVersion >= 20) {
           try {
             await win.setWindowContainerColor('#00000000', '#00000000');
             hilog.info(DOMAIN, 'WindowManager', `Window %{public}d container color set to transparent (API %{public}d)`, windowId, deviceInfo.sdkApiVersion);
-          } catch (containerErr) {
-            // Ignore - not all window types support this
+          } catch (containerErr: any) {
+            if (containerErr.code === 801) {
+              hilog.debug(DOMAIN, 'WindowManager', 'setWindowContainerColor not supported on this device (error 801)');
+            } else if (containerErr.code === 201) {
+              hilog.error(DOMAIN, 'WindowManager', 'setWindowContainerColor permission denied (error 201): missing ohos.permission.SET_WINDOW_TRANSPARENT');
+            } else {
+              hilog.warn(DOMAIN, 'WindowManager', `Sub-window container color failed: code=%{public}d`, containerErr.code);
+            }
           }
         }
-        hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to transparent`, windowId);
       } else if (backgroundColor !== undefined) {
-        let colorStr = '#' + backgroundColor.toString(16).padStart(8, '0');
+        const colorStr = '#' + backgroundColor.toString(16).padStart(8, '0');
+        hilog.info(DOMAIN, 'WindowManager', `Setting window %{public}d background color to %{public}s`, windowId, colorStr);
         await win.setWindowBackgroundColor(colorStr);
-        if (deviceInfo.sdkApiVersion >= 20) {
-          try {
-            await win.setWindowContainerColor(colorStr, colorStr);
-            hilog.info(DOMAIN, 'WindowManager', `Window %{public}d container color set (API %{public}d)`, windowId, deviceInfo.sdkApiVersion);
-          } catch (containerErr) {
-            // Ignore
-          }
-        }
-        hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to %{public}s`, windowId, colorStr);
       }
-    } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', `Failed to set background for window %{public}d: %{public}s`, windowId, JSON.stringify(e));
-    }
 
-    try {
       hilog.info(DOMAIN, 'WindowManager', `Resizing window %{public}d to %{public}dx%{public}d`, windowId, width, height);
       await win.resize(width, height);
       hilog.info(DOMAIN, 'WindowManager', `Moving window %{public}d to %{public}d,%{public}d`, windowId, x, y);
@@ -245,36 +238,26 @@ export class WindowManager {
   // Phase 3: Update window background color at runtime
   setWindowBackgroundColor(windowId: number, color: number): void {
     const colorStr = '#' + color.toString(16).padStart(8, '0');
-    hilog.info(DOMAIN, 'WindowManager', `setWindowBackgroundColor called: windowId=%{public}d, color=%{public}s, windowStage=%{public}s`, windowId, colorStr, this.windowStage ? 'set' : 'null');
+    hilog.info(DOMAIN, 'WindowManager', `setWindowBackgroundColor: windowId=%{public}d, color=%{public}s`, windowId, colorStr);
     if (windowId === 0 && this.windowStage) {
-      // Main window: use windowStage.getMainWindowSync()
+      // Main window
       try {
         const mainWindow = this.windowStage.getMainWindowSync();
-        hilog.info(DOMAIN, 'WindowManager', `Got main window, setting background to %{public}s`, colorStr);
         mainWindow.setWindowBackgroundColor(colorStr);
         // On 2in1 devices, also set container color for full transparency (requires API 20+)
         if (deviceInfo.sdkApiVersion >= 20) {
           try {
-            // Both active and inactive use the same color.
-            // Note: OHOS docs say inactiveColor alpha is fixed to 'FF' by the system,
-            // but we still pass the transparent color to get the best possible result.
             mainWindow.setWindowContainerColor(colorStr, colorStr);
-            hilog.info(DOMAIN, 'WindowManager', `Main window container color set: %{public}s (API %{public}d)`, colorStr, deviceInfo.sdkApiVersion);
           } catch (containerErr: any) {
             if (containerErr.code === 801) {
-              // Expected on non-2in1 devices that don't support this API
               hilog.debug(DOMAIN, 'WindowManager', 'setWindowContainerColor not supported on this device (error 801)');
             } else if (containerErr.code === 201) {
-              // Missing ohos.permission.SET_WINDOW_TRANSPARENT in module.json5
               hilog.error(DOMAIN, 'WindowManager', 'setWindowContainerColor permission denied (error 201): missing ohos.permission.SET_WINDOW_TRANSPARENT');
             } else {
               hilog.error(DOMAIN, 'WindowManager', `Failed to set container color: code=%{public}d, message=%{public}s`, containerErr.code, containerErr.message);
             }
           }
-        } else {
-          hilog.info(DOMAIN, 'WindowManager', `Skipping setWindowContainerColor: requires API 20+, current API %{public}d`, deviceInfo.sdkApiVersion);
         }
-        hilog.info(DOMAIN, 'WindowManager', `Main window background set to %{public}s`, colorStr);
       } catch (e) {
         hilog.error(DOMAIN, 'WindowManager', `Failed to set main window background: %{public}s`, JSON.stringify(e));
       }
@@ -283,11 +266,9 @@ export class WindowManager {
       if (entry) {
         try {
           entry.window.setWindowBackgroundColor(colorStr);
-          // Also set container color for sub-windows (requires API 20+)
           if (deviceInfo.sdkApiVersion >= 20) {
             try {
               entry.window.setWindowContainerColor(colorStr, colorStr);
-              hilog.info(DOMAIN, 'WindowManager', `Window %{public}d container color set (API %{public}d)`, windowId, deviceInfo.sdkApiVersion);
             } catch (containerErr: any) {
               if (containerErr.code === 801) {
                 hilog.debug(DOMAIN, 'WindowManager', 'setWindowContainerColor not supported on this device (error 801)');
@@ -298,12 +279,9 @@ export class WindowManager {
               }
             }
           }
-          hilog.info(DOMAIN, 'WindowManager', `Window %{public}d background set to %{public}s`, windowId, colorStr);
         } catch (e) {
           hilog.warn(DOMAIN, 'WindowManager', `Failed to set background for window %{public}d: %{public}s`, windowId, JSON.stringify(e));
         }
-      } else {
-        hilog.warn(DOMAIN, 'WindowManager', `Window %{public}d not found in windows map`, windowId);
       }
     }
   }
@@ -317,13 +295,12 @@ export class WindowManager {
       mainWindow.setWindowSystemBarEnable(names).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, 'WindowManager', `Failed to hide system bar: %{public}s`, err.message);
       });
-      hilog.info(DOMAIN, 'WindowManager', 'System bar hide requested for main window');
     } catch (e) {
-      hilog.error(DOMAIN, 'WindowManager', `Failed to get main window: %{public}s`, JSON.stringify(e));
+      hilog.warn(DOMAIN, 'WindowManager', `hideSystemBar failed: %{public}s`, JSON.stringify(e));
     }
   }
 
-  // Phase 2: Restore system status bar for main window (decorations=true)
+  // Phase 2: Show system status bar for main window (decorations=true)
   private showSystemBar(): void {
     if (!this.windowStage) return;
     try {
@@ -332,9 +309,8 @@ export class WindowManager {
       mainWindow.setWindowSystemBarEnable(names).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, 'WindowManager', `Failed to show system bar: %{public}s`, err.message);
       });
-      hilog.info(DOMAIN, 'WindowManager', 'System bar show requested for main window');
     } catch (e) {
-      hilog.error(DOMAIN, 'WindowManager', `Failed to get main window: %{public}s`, JSON.stringify(e));
+      hilog.warn(DOMAIN, 'WindowManager', `showSystemBar failed: %{public}s`, JSON.stringify(e));
     }
   }
 

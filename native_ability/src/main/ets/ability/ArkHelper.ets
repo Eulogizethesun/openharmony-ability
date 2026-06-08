@@ -384,8 +384,8 @@ export function createArkHelper(): ArkHelper {
           config.height,
           config.x,
           config.y,
-          config.decorations ?? true,
-          config.transparent ?? false,
+          config.decorations,
+          config.transparent,
           config.backgroundColor
         );
       } catch (err) {
