@@ -328,4 +328,15 @@ export class WindowManager {
   getUIContext(windowId: number): UIContext | undefined {
     return this.uiContexts.get(windowId);
   }
+
+  // 移除窗口：清理所有 Map，防止内存泄漏
+  removeWindow(windowId: number): void {
+    hilog.info(DOMAIN, 'WindowManager', `Removing window %{public}d from all maps`, windowId);
+    this.windows.delete(windowId);
+    this.controllers.delete(windowId);
+    this.uiContexts.delete(windowId);
+    this.pendingJsHelperProxies.delete(windowId);
+    this.pendingUrls.delete(windowId);
+    this.pendingInits.delete(windowId);
+  }
 }

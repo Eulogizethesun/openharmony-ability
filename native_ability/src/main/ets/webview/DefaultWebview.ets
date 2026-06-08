@@ -131,8 +131,12 @@ function WebBuilder(data: WebviewNodeData) {
             const wm = WindowManager.getInstance();
             const entry = wm.getWindow(data.windowId);
             if (entry) {
-              entry.destroyWindow();
-              hilog.info(DOMAIN, 'DefaultWebview', 'Window %{public}d destroyed via close-window', data.windowId);
+              entry.destroyWindow().then(() => {
+                wm.removeWindow(data.windowId!);
+                hilog.info(DOMAIN, 'DefaultWebview', 'Window %{public}d destroyed and cleaned up via close-window', data.windowId!);
+              }).catch((e: Error) => {
+                hilog.error(DOMAIN, 'DefaultWebview', 'Failed to destroy window: %{public}s', JSON.stringify(e));
+              });
             }
           } catch (e) {
             hilog.error(DOMAIN, 'DefaultWebview', 'Failed to destroy window: %{public}s', JSON.stringify(e));

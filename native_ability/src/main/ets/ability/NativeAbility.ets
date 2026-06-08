@@ -139,7 +139,7 @@ export class NativeAbility extends UIAbility {
       this.context?.terminateSelf();
     });
     const mainWindow = windowStage.getMainWindowSync();
-    executor.setWindow(mainWindow);
+    executor.setWindow(mainWindow, 0); // 0 = main window
     setPredefinedActionExecutor(executor);
     executor.setShowAboutFn((metadata: AboutMetadataData) => {
       const appName = metadata.name ?? '';

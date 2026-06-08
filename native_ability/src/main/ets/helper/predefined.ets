@@ -1,6 +1,7 @@
 import web_webview from '@ohos.web.webview';
 import window from '@ohos.window';
 import common from '@ohos.app.ability.common';
+import { WindowManager } from '../window/WindowManager';
 
 export class ClipboardExecutor {
   private controller: web_webview.WebviewController | null = null;
@@ -45,9 +46,11 @@ export interface WindowOps {
 
 export class WindowOpsExecutor implements WindowOps {
   private win: window.Window | null = null;
+  private windowId: number = 0;
 
-  setWindow(win: window.Window): void {
+  setWindow(win: window.Window, windowId: number = 0): void {
     this.win = win;
+    this.windowId = windowId;
   }
 
   async minimize(): Promise<void> {
@@ -68,6 +71,12 @@ export class WindowOpsExecutor implements WindowOps {
   async destroyWindow(): Promise<void> {
     if (!this.win) throw new Error('Window not set');
     await this.win.destroyWindow();
+    // Clean up WindowManager maps to prevent memory leaks
+    try {
+      WindowManager.getInstance().removeWindow(this.windowId);
+    } catch (e) {
+      // WindowManager may not be initialized in some contexts
+    }
   }
 
   async setFullScreen(fullScreen: boolean): Promise<void> {

@@ -10,6 +10,7 @@ import { KeyCode, pointer } from "@kit.InputKit";
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window as arkWindow, CursorController } from '@kit.ArkUI';
 import { display } from '@kit.ArkUI';
+import { WindowManager } from '../window/WindowManager';
 
 const DOMAIN: number = 0x1999;
 
@@ -127,9 +128,16 @@ struct FloatPage {
               .borderRadius(16)
               .backgroundColor('#f0f0f0')
               .margin({ top: 4, right: 8 })
-              .onClick(() => {
+              .onClick(async () => {
                 hilog.info(DOMAIN, 'FloatPage', 'Close button clicked for window %{public}d', this.windowId);
-                this.windowClass?.destroyWindow();
+                try {
+                  if (this.windowClass) {
+                    await this.windowClass.destroyWindow();
+                    WindowManager.getInstance().removeWindow(this.windowId);
+                  }
+                } catch (e) {
+                  hilog.error(DOMAIN, 'FloatPage', 'Failed to destroy window %{public}d: %{public}s', this.windowId, JSON.stringify(e));
+                }
               });
             }
             .width('100%')
