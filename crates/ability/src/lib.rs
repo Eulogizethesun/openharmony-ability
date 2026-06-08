@@ -1,5 +1,6 @@
 mod app;
 mod area;
+mod autostart;
 mod configuration;
 mod draw;
 mod error;
@@ -42,6 +43,7 @@ pub use clipboard::{clipboard_write_image, init_clipboard_tsfn};
 
 pub use app::*;
 pub use area::*;
+pub use autostart::*;
 pub use configuration::*;
 pub use draw::*;
 pub use error::*;

@@ -17,3 +17,5 @@ export * from "./menu_state";
 export * from "./predefined";
 
 export * from "./ClipboardHelper";
+
+export * from "./autostart";
