@@ -45,6 +45,8 @@ pub unsafe fn get_helper() -> Rc<RefCell<Option<ObjectRef>>> {
         if rc.borrow().is_none() {
             let guard = GLOBAL_HELPER.lock().unwrap();
             if let Some(ref helper) = guard.0 {
+                // SAFETY: GLOBAL_HELPER is static-lifetime, the napi_ref is never freed,
+                // so the bitwise copy is safe — the original is never dropped.
                 *rc.borrow_mut() = Some(std::ptr::read(helper as *const ObjectRef));
             }
         }

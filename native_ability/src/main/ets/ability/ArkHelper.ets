@@ -575,8 +575,12 @@ export function createArkHelper(): ArkHelper {
         // which calls back into Rust. If we're already in a NAPI call from Rust,
         // this creates a deadlock on the main thread.
         setTimeout(() => {
-          context!.getApplicationContext().setColorMode(colorMode);
-          hilog.info(DOMAIN, 'ArkHelper', 'setColorMode: applied mode %{public}d', mode);
+          try {
+            context!.getApplicationContext().setColorMode(colorMode);
+            hilog.info(DOMAIN, 'ArkHelper', 'setColorMode: applied mode %{public}d', mode);
+          } catch (err) {
+            hilog.error(DOMAIN, 'ArkHelper', 'setColorMode deferred callback failed (ability may be destroyed): %{public}s', String(err));
+          }
         }, 0);
       } catch (err) {
         hilog.error(DOMAIN, 'ArkHelper', 'setColorMode failed: %{public}s', JSON.stringify(err));

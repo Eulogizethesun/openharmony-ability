@@ -135,9 +135,10 @@ export class PredefinedActionExecutor {
           const pasteData = await sysPasteboard.getData();
           const text = pasteData.getPrimaryText();
           if (text) {
-            const escaped = text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+            // Use JSON.stringify for safe JS string escaping (prevents JS injection)
+            const safeText = JSON.stringify(text);
             await this.controller?.runJavaScript(
-              `document.execCommand("insertText", false, '${escaped}')`
+              `document.execCommand("insertText", false, ${safeText})`
             );
           }
         } catch (_) {}

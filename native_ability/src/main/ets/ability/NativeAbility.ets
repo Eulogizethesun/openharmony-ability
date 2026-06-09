@@ -37,7 +37,9 @@ export class NativeAbility extends UIAbility {
     for (const lifecycle of this.lifecycles) {
       try {
         handler(lifecycle);
-      } catch (_) {}
+      } catch (e) {
+        hilog.error(0x0000, 'NativeAbility', 'Lifecycle callback error: %{public}s', String(e));
+      }
     }
   }
 
@@ -139,7 +141,7 @@ export class NativeAbility extends UIAbility {
       this.context?.terminateSelf();
     });
     const mainWindow = windowStage.getMainWindowSync();
-    executor.setWindow(mainWindow, 0); // 0 = main window
+    executor.setWindow(mainWindow);
     setPredefinedActionExecutor(executor);
     executor.setShowAboutFn((metadata: AboutMetadataData) => {
       const appName = metadata.name ?? '';
@@ -282,6 +284,8 @@ export class NativeAbility extends UIAbility {
 
   onWindowStageDestroy(): void | Promise<void> {
     this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onWindowStageDestroy());
+    // Clean up all WindowManager resources for the main window (windowId=0)
+    WindowManager.getInstance().removeWindow(0);
   }
 
   onMemoryLevel(level: AbilityConstant.MemoryLevel): void {

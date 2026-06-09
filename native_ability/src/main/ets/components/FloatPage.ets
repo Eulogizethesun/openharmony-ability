@@ -93,6 +93,16 @@ struct FloatPage {
     }
   }
 
+  aboutToDisappear(): void {
+    hilog.info(DOMAIN, 'FloatPage', 'aboutToDisappear for windowId: %{public}d', this.windowId);
+    // Safety net: ensure WindowManager resources are cleaned up even if the close button's destroyWindow path was not triggered
+    try {
+      WindowManager.getInstance().removeWindow(this.windowId);
+    } catch (e) {
+      hilog.warn(DOMAIN, 'FloatPage', 'aboutToDisappear removeWindow failed: %{public}s', String(e));
+    }
+  }
+
   build() {
     Stack() {
       Column() {

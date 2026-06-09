@@ -67,9 +67,24 @@ export struct DefaultXComponent {
     return result;
   }
 
-  @StorageProp("loadMode") loadMode: "async" | "sync" = "async";
+  // loadMode is read once in aboutToAppear; no need for @StorageProp reactive binding
+  private loadMode: "async" | "sync" = "async";
+
+  aboutToDisappear(): void {
+    hilog.info(DOMAIN, 'DefaultXComponent', 'aboutToDisappear for windowId: %{public}d', this.windowId);
+    // Clean up this window's controller and UIContext from WindowManager
+    try {
+      const wm = WindowManager.getInstance();
+      wm.removeControllerAndUIContext(this.windowId);
+    } catch (e) {
+      hilog.warn(DOMAIN, 'DefaultXComponent', 'aboutToDisappear cleanup failed: %{public}s', String(e));
+    }
+    this.webviewController = null;
+  }
 
   async aboutToAppear(): Promise<void> {
+    // Read loadMode once from AppStorage (avoids reactive re-render on AppStorage changes)
+    this.loadMode = (AppStorage.get<string>("loadMode") as "async" | "sync") ?? "async";
     hilog.info(DOMAIN, 'DefaultXComponent', '=== aboutToAppear START ===');
     hilog.info(DOMAIN, 'DefaultXComponent', 'Props -> moduleName: "%{public}s", windowId: %{public}d',
       this.moduleName, this.windowId);
