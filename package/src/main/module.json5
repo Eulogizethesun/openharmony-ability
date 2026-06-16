@@ -1,6 +1,6 @@
 {
   "module": {
-    "name": "@ohos-rs/ability",
+    "name": "@ylong-rs/ohrs-ability",
     "type": "har",
     "deviceTypes": [
       "default",

@@ -1,5 +1,5 @@
 {
-  "name": "@ohos-rs/ability",
+  "name": "@ylong-rs/ohrs-ability",
   "version": "0.0.1",
   "description": "Adaptor for OpenHarmony/HarmonyNext native abilities",
   "main": "index.ets",

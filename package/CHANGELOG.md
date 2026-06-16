@@ -1,3 +1,10 @@
+# 0.4.0-beta.8
+- feat(webview): add webPageSnapshot support for WebView content capture with retry mechanism
+- feat(ohos): add WebViewExtOhos trait and OhosWebviewHandle type for with_webview support
+- fix(webview): add 10s overall timeout for webPageSnapshot Promise
+- fix(webview): remove unused image import from DefaultWebview.ets
+
+---
 # 0.4.0-beta.7
 - Fix onBackPressIntercept ran failed.
 

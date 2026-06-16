@@ -1,11 +1,11 @@
 {
   "license": "MIT",
   "author": "richerfu",
-  "name": "@ohos-rs/ability",
+  "name": "@ylong-rs/ohrs-ability",
   "description": "Adaptor for OpenHarmony/HarmonyNext native abilities",
   "main": "index.ets",
-  "version": "0.4.0-beta.7",
-  "repository": "https://github.com/harmony-contrib/openharmony-ability.git",
+  "version": "0.4.0-beta.8",
+  "repository": "https://github.com/Eulogizethesun/openharmony-ability.git",
   "dependencies": {},
   "keywords": [
     "ohos-rs",
