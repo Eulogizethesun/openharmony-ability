@@ -410,7 +410,10 @@ function setupDownloadDelegate(data: WebviewNodeData) {
     download.onDownloadFinish((e) => {
       const url = e.getUrl();
       const tempPath = e.getFullPath();
-      hilog.info(DOMAIN, 'DefaultWebview', 'onDownloadFinish → onDownloadEnd: %{public}s, success=true', url);
+      const totalBytes = e.getTotalBytes();
+      hilog.info(DOMAIN, 'DefaultWebview',
+        'onDownloadFinish: url=%{public}s, path=%{public}s, totalBytes=%{public}d',
+        url, tempPath, totalBytes);
       data.onDownloadEnd!(url, tempPath, true);
     });
     download.onDownloadFailed((e) => {
