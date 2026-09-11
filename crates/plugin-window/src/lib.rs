@@ -299,6 +299,19 @@ pub struct RealWindowIdResponse {
 
 impl_bridge_napi_type!(RealWindowIdResponse, "ohos.window.RealWindowIdResponse");
 
+/// System geometry snapshot for one window (issue Eulogizethesun/tauri#97):
+/// both rects come from ONE `win.getWindowProperties()` call, so they can never
+/// tear. `window_rect` = WM/outer rect; `drawable_rect` = the drawable
+/// (content) area — position relative to the window top-left, size in px.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct WindowRectsResponse {
+    pub window_rect: RawRect,
+    pub drawable_rect: RawRect,
+}
+
+impl_bridge_napi_type!(WindowRectsResponse, "ohos.window.RectsResponse");
+
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowAcknowledgement {
@@ -344,6 +357,20 @@ fn validate_platform_integer(name: &str, value: i64) -> Result<()> {
             "window {name} must be a JavaScript-safe integer"
         )));
     }
+    Ok(())
+}
+
+/// Shared argument validation for the outer-size (`resize`) and inner-size
+/// (`resize-inner`) bridge calls.
+fn validate_resize_args(window_id: i64, width: i64, height: i64) -> Result<()> {
+    validate_window_id(window_id)?;
+    if width <= 0 || height <= 0 {
+        return Err(Error::from_reason(
+            "window width and height must be positive",
+        ));
+    }
+    validate_platform_integer("width", width)?;
+    validate_platform_integer("height", height)?;
     Ok(())
 }
 
@@ -509,14 +536,7 @@ impl WindowClient {
     }
 
     pub async fn resize_window(&self, window_id: i64, width: i64, height: i64) -> Result<()> {
-        validate_window_id(window_id)?;
-        if width <= 0 || height <= 0 {
-            return Err(Error::from_reason(
-                "window width and height must be positive",
-            ));
-        }
-        validate_platform_integer("width", width)?;
-        validate_platform_integer("height", height)?;
+        validate_resize_args(window_id, width, height)?;
         self.call::<WindowResizeRequest, WindowAcknowledgement>(
             "resize",
             WindowResizeRequest {
@@ -527,6 +547,49 @@ impl WindowClient {
         )
         .await?
         .ensure()
+    }
+
+    /// Resizes the window so its DRAWABLE (content) area becomes exactly
+    /// `width` × `height` px (issue Eulogizethesun/tauri#97).
+    ///
+    /// The inner→outer conversion happens on the ArkTS side at dispatch time,
+    /// from one atomic `getWindowProperties()` snapshot
+    /// (`outer = inner + (windowRect − drawableRect)` per axis). No estimate is
+    /// ever involved — the value is the system's own chrome. If the precise
+    /// chrome cannot be read (window not created/destroyed, content not loaded,
+    /// degenerate drawableRect), the call FAILS explicitly instead of resizing
+    /// to a guessed size: the caller is expected to warn and skip, never to
+    /// fall back to an estimated decor.
+    pub async fn resize_inner_window(&self, window_id: i64, width: i64, height: i64) -> Result<()> {
+        validate_resize_args(window_id, width, height)?;
+        self.call::<WindowResizeRequest, WindowAcknowledgement>(
+            "resize-inner",
+            WindowResizeRequest {
+                window_id,
+                width,
+                height,
+            },
+        )
+        .await?
+        .ensure()
+    }
+
+    /// Queries the system geometry for one window in a single atomic
+    /// `getWindowProperties()` snapshot: the WM (outer) rect and the drawable
+    /// (inner口径) rect, both in physical px (issue Eulogizethesun/tauri#97).
+    ///
+    /// This is the authoritative read-back source for verifying
+    /// [`Self::resize_inner_window`] landed the requested inner size — assert
+    /// against `drawable_rect`, not against any tao-side derived inner size.
+    pub async fn get_window_rects(&self, window_id: i64) -> Result<(Rect, Rect)> {
+        validate_window_id(window_id)?;
+        let response = self
+            .call::<WindowIdRequest, WindowRectsResponse>(
+                "get-window-rects",
+                WindowIdRequest { window_id },
+            )
+            .await?;
+        Ok((response.window_rect.into(), response.drawable_rect.into()))
     }
 
     pub async fn minimize_window(&self, window_id: i64) -> Result<()> {
@@ -664,6 +727,23 @@ impl WindowClient {
         .ensure()
     }
 
+    /// Allows/forbids USER-initiated resizing (issue Eulogizethesun/tauri#104):
+    /// the real "resizable" switch, as opposed to the decoration-flag bit that
+    /// only toggles title-bar button visibility. The ArkTS side routes by
+    /// window kind — main (UIAbility) window → `setResizeByDragEnabled`
+    /// (API 14+, effective in free-window state), Float sub-window →
+    /// `enableDrag` (API 20+). Programmatic resizes are gated separately by
+    /// the FLAG_RESIZABLE decoration bit on the Rust side.
+    pub async fn set_resize_by_drag(&self, window_id: i64, enable: bool) -> Result<()> {
+        validate_window_id(window_id)?;
+        self.call::<WindowDraggableRequest, WindowAcknowledgement>(
+            "set-resize-by-drag",
+            WindowDraggableRequest { window_id, enable },
+        )
+        .await?
+        .ensure()
+    }
+
     /// Sets the pointer cursor style for one window (PointerStyle id, resolved
     /// by the caller from `window::CursorIcon`; ArkTS validates the range).
     pub async fn set_cursor_icon(&self, window_id: i64, style: i32) -> Result<()> {
@@ -748,8 +828,8 @@ impl WindowExt for OpenHarmonyApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_platform_integer, validate_window_id, AvoidAreaRequest, AvoidAreaResponse,
-        RawAvoidArea, RawRect, WindowBridgePlugin, MAX_SAFE_JAVASCRIPT_INTEGER,
+        validate_platform_integer, validate_resize_args, validate_window_id, AvoidAreaRequest,
+        AvoidAreaResponse, RawAvoidArea, RawRect, WindowBridgePlugin, MAX_SAFE_JAVASCRIPT_INTEGER,
     };
     use openharmony_ability::{
         AvoidArea, BridgeContextRequirement, BridgeNapiType, BridgePlugin, Rect,
@@ -854,5 +934,60 @@ mod tests {
         assert!(validate_window_id(MAX_SAFE_JAVASCRIPT_INTEGER + 1).is_err());
         assert!(validate_platform_integer("x", -MAX_SAFE_JAVASCRIPT_INTEGER).is_ok());
         assert!(validate_platform_integer("x", MAX_SAFE_JAVASCRIPT_INTEGER + 1).is_err());
+    }
+
+    #[test]
+    fn rects_response_uses_stable_named_napi_contract() {
+        // Issue Eulogizethesun/tauri#97: the geometry query contract name is
+        // frozen — the ArkTS side dispatches on this string.
+        assert_eq!(
+            <super::WindowRectsResponse as BridgeNapiType>::TYPE_NAME,
+            "ohos.window.RectsResponse"
+        );
+    }
+
+    #[test]
+    fn rects_response_converts_raw_rects_to_framework_rects() {
+        use super::WindowRectsResponse;
+        // Distinct top/left so a top↔left swap in either RawRect → Rect conversion
+        // fails this test (issue #97 review: identical values would hide it).
+        let response = WindowRectsResponse {
+            window_rect: RawRect {
+                top: 76,
+                left: 113,
+                width: 2090,
+                height: 1394,
+            },
+            // Reference-device shape (HAD-W32): 146px title bar on top, content
+            // below; small left inset keeps the width math honest too.
+            drawable_rect: RawRect {
+                top: 146,
+                left: 7,
+                width: 2083,
+                height: 1248,
+            },
+        };
+        let outer: Rect = response.window_rect.into();
+        let drawable: Rect = response.drawable_rect.into();
+        assert_eq!((outer.top, outer.left), (76, 113));
+        assert_eq!((drawable.top, drawable.left), (146, 7));
+        // Vertical chrome = title bar; horizontal chrome = left inset.
+        assert_eq!(outer.height - drawable.height, 146);
+        assert_eq!(outer.width - drawable.width, 7);
+    }
+
+    #[test]
+    fn validate_resize_args_rejects_zero_negative_and_overflow() {
+        // Shared validator of resize (outer-size, lib.rs resize_window) and
+        // resize-inner (lib.rs resize_inner_window) — both call sites must keep
+        // invoking validate_resize_args before self.call; host tests cannot
+        // construct a WindowClient (bridge session required, see
+        // OpenHarmonyApp::bridge), so that linkage is enforced by review only
+        // (issue #97 review finding).
+        assert!(validate_resize_args(0, 800, 600).is_ok());
+        assert!(validate_resize_args(0, 0, 600).is_err());
+        assert!(validate_resize_args(0, 800, -1).is_err());
+        assert!(validate_resize_args(-1, 800, 600).is_err());
+        assert!(validate_resize_args(0, MAX_SAFE_JAVASCRIPT_INTEGER + 1, 600).is_err());
     }
 }

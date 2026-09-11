@@ -33,6 +33,27 @@ pub struct TerminateResponse {
 
 impl_bridge_napi_type!(TerminateResponse, "ohos.app_control.TerminateResponse");
 
+// ── restart ──────────────────────────────────────────────────────────────────────
+
+/// Request to restart the application via `ApplicationContext.restartApp` (API 12+).
+///
+/// The relaunch `Want` is derived ArkTS-side from the current UIAbility
+/// (`abilityInfo.bundleName` + `abilityInfo.name`), so the request carries no
+/// fields.
+#[napi(object)]
+#[derive(Clone, Debug, Default)]
+pub struct RestartRequest {}
+
+impl_bridge_napi_type!(RestartRequest, "ohos.app_control.RestartRequest");
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct RestartResponse {
+    pub accepted: bool,
+}
+
+impl_bridge_napi_type!(RestartResponse, "ohos.app_control.RestartResponse");
+
 // ── hide-ability ────────────────────────────────────────────────────────────────
 
 /// Request to hide the application's UIAbility (fire-and-forget).
@@ -90,6 +111,7 @@ impl_bridge_napi_type!(
 /// A synchronous capability must be invoked in an exported N-API callback that owns `Env`.
 pub trait AppControlExt {
     fn terminate(&self, env: &Env, code: i32) -> Result<()>;
+    fn restart(&self, env: &Env) -> Result<()>;
     fn hide_ability(&self, env: &Env) -> Result<()>;
     fn show_ability(&self, env: &Env) -> Result<()>;
 }
@@ -106,6 +128,20 @@ impl AppControlExt for OpenHarmonyApp {
                 return Err(Error::from_reason(
                     "App-control plugin rejected termination",
                 ));
+            }
+            Ok(())
+        })
+    }
+
+    fn restart(&self, env: &Env) -> Result<()> {
+        self.with_main_thread_bridge(env, |bridge| {
+            let response = bridge
+                .call_sync::<AppControlBridgePlugin, RestartRequest, RestartResponse>(
+                    "restart",
+                    RestartRequest {},
+                )?;
+            if !response.accepted {
+                return Err(Error::from_reason("App-control plugin rejected restart"));
             }
             Ok(())
         })
@@ -176,8 +212,9 @@ impl ColorModeExt for OpenHarmonyApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        HideAbilityRequest, HideAbilityResponse, SetColorModeRequest, SetColorModeResponse,
-        ShowAbilityRequest, ShowAbilityResponse, TerminateRequest, TerminateResponse,
+        HideAbilityRequest, HideAbilityResponse, RestartRequest, RestartResponse,
+        SetColorModeRequest, SetColorModeResponse, ShowAbilityRequest, ShowAbilityResponse,
+        TerminateRequest, TerminateResponse,
     };
     use openharmony_ability::BridgeNapiType;
 
@@ -193,6 +230,19 @@ mod tests {
         );
         assert_eq!(TerminateRequest { code: -1 }.code, -1);
         assert!(TerminateResponse { accepted: true }.accepted);
+    }
+
+    #[test]
+    fn restart_uses_a_stable_named_napi_contract() {
+        assert_eq!(
+            <RestartRequest as BridgeNapiType>::TYPE_NAME,
+            "ohos.app_control.RestartRequest"
+        );
+        assert_eq!(
+            <RestartResponse as BridgeNapiType>::TYPE_NAME,
+            "ohos.app_control.RestartResponse"
+        );
+        assert!(RestartResponse { accepted: true }.accepted);
     }
 
     #[test]
