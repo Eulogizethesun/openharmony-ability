@@ -117,6 +117,35 @@ pub fn ability(attr: TokenStream, item: TokenStream) -> TokenStream {
                 (*APP).get_back_press_interceptor()
             }
 
+            /// ArkTS pre-IME key forward (issue Eulogizethesun/tauri#109):
+            /// MainPage.onKeyPreIme feeds every key the web sees into the
+            /// tao event loop through the same `Event::Input` dispatch the
+            /// (structurally unreachable, see `dispatch_key_event`'s doc)
+            /// NDK XComponent path would have used. `action`: 0 = Down,
+            /// 1 = Up (KeyType only has Down/Up).
+            #[napi_derive_ohos::napi]
+            pub fn notify_key_event(key_code: i32, action: i32, device_id: i64) {
+                use ::openharmony_ability::xcomponent::{Action, EventSource, KeyCode, KeyEventData};
+                // try_from_raw, NOT From: EnumFrom's generated From hits
+                // unreachable!() on key codes absent from the binding's enum,
+                // and the ArkTS InputKit keycode table may be newer — a panic
+                // here would cross the NAPI boundary. The raw type is i32
+                // (OH_NativeXComponent_KeyCode; KEY_UNKNOWN = -1).
+                let code = KeyCode::try_from_raw(key_code).unwrap_or(KeyCode::Unknown);
+                let action = match action {
+                    0 => Action::Down,
+                    1 => Action::Up,
+                    _ => Action::Unknown,
+                };
+                (*APP).dispatch_key_event(KeyEventData {
+                    code,
+                    action,
+                    device_id,
+                    source: EventSource::Keyboard,
+                    timestamp: 0,
+                });
+            }
+
             #[napi_derive_ohos::napi]
             pub fn init<'a>(
                 env: &'a napi_ohos::Env,

@@ -1,9 +1,50 @@
 use std::fmt::{self, Debug, Formatter};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
     AvoidAreaInfo, Configuration, ContentRect, InputEvent, IntervalInfo, SaveLoader, SaveSaver,
     Size,
 };
+
+/// Answer slot for the PC/2in1 prepare-to-terminate probe
+/// ([`Event::PrepareToTerminate`]).
+///
+/// A dedicated type (instead of a bare `AtomicBool`) so it can implement
+/// `PartialEq` — downstream event enums that embed `&TerminateAnswer` (tao's
+/// `Event`) keep deriving `PartialEq`/`Clone`/`Debug` over their variants.
+/// Comparison is by current value (two slots are equal iff they agree on
+/// prevention state).
+#[derive(Debug, Default)]
+pub struct TerminateAnswer(AtomicBool);
+
+impl TerminateAnswer {
+    pub fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
+    /// Marks the termination as prevented — the app wants to keep running.
+    pub fn prevent(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether prevention was requested. Only meaningful after the synchronous
+    /// handler call that received the reference has returned.
+    pub fn is_prevented(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+impl PartialEq for TerminateAnswer {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_prevented() == other.is_prevented()
+    }
+}
+
+impl Clone for TerminateAnswer {
+    fn clone(&self) -> Self {
+        Self(AtomicBool::new(self.is_prevented()))
+    }
+}
 
 #[derive(Clone)]
 pub enum Event<'a> {
@@ -105,6 +146,23 @@ pub enum Event<'a> {
         uri: String,
     },
 
+    /// ability prepare-to-terminate event (PC/2in1 pre-close interception)
+    /// alias UIAbility.onPrepareToTerminateAsync
+    /// https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-app-ability-uiability#onpreparetoterminateasync15
+    ///
+    /// Fired BEFORE any teardown when the user closes the app via the window
+    /// close button / taskbar shortcut / tray exit (requires
+    /// ohos.permission.PREPARE_APP_TERMINATE). Unlike [`Event::Destroy`] the
+    /// termination is still cancellable: the handler records its answer on
+    /// `answer` ([`TerminateAnswer::prevent`] = keep running; tauri's
+    /// `prevent_exit()` lands there) and the ArkTS caller returns `true` from
+    /// `onPrepareToTerminateAsync` to cancel this close. The reference is only
+    /// valid for the duration of the synchronous handler call — read it after
+    /// `h(...)` returns.
+    PrepareToTerminate {
+        answer: &'a TerminateAnswer,
+    },
+
     UserEvent,
 }
 
@@ -134,6 +192,7 @@ impl<'a> Event<'a> {
             Event::UserEvent => "UserEvent",
             Event::KeyboardEvent(_) => "KeyboardEvent",
             Event::NewWant { .. } => "NewWant",
+            Event::PrepareToTerminate { .. } => "PrepareToTerminate",
         }
     }
 }

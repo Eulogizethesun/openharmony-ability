@@ -391,3 +391,113 @@ pub fn set_cursor_grab(
         other => Err(CursorGrabError::OsCode(other)),
     }
 }
+
+// ─── Group G: content protection (OH_WindowManager_SetWindowPrivacyMode, NDK C API 15+) ───
+//
+// A privacy-mode window's content is excluded from screenshots, screen
+// recording, and casting (tao `set_content_protection`, issue #115). Same FFI
+// shape as the cursor-grab group above: libnative_window_manager.so resolved
+// lazily via dlopen+dlsym — compatibleSdkVersion is API 12 and system images
+// below API 15 do not export this symbol, so symbol presence doubles as the
+// version guard.
+//
+// Requires ohos.permission.PRIVACY_WINDOW (normal / system_grant, API 11+).
+// HAR module.json5 declarations do not merge into the final HAP — the
+// permission must be declared in the app's entry module.json5 (tauri-cli
+// open-harmony templates).
+
+type SetWindowPrivacyModeFn = unsafe extern "C" fn(window_id: i32, is_privacy: bool) -> i32;
+
+struct WindowPrivacyApi {
+    set_window_privacy_mode: SetWindowPrivacyModeFn,
+}
+
+static WINDOW_PRIVACY_API: OnceLock<Option<WindowPrivacyApi>> = OnceLock::new();
+
+/// Resolves the window privacy C API once per process; `None` when the system
+/// does not provide it (API < 15). Same lazy-load contract as
+/// [`cursor_lock_api`] — the handle is never closed.
+fn window_privacy_api() -> Option<&'static WindowPrivacyApi> {
+    WINDOW_PRIVACY_API
+        .get_or_init(|| unsafe {
+            // RTLD_NOW | RTLD_LOCAL = 2 on OHOS musl.
+            let handle = dlopen(
+                b"libnative_window_manager.so\0".as_ptr() as *const std::ffi::c_char,
+                2,
+            );
+            if handle.is_null() {
+                crate::warn!("[ohos-window] dlopen libnative_window_manager.so failed (library missing/broken) — content protection unsupported");
+                return None;
+            }
+            let set_privacy = dlsym(
+                handle,
+                b"OH_WindowManager_SetWindowPrivacyMode\0".as_ptr() as *const std::ffi::c_char,
+            );
+            if set_privacy.is_null() {
+                crate::warn!("[ohos-window] OH_WindowManager_SetWindowPrivacyMode not exported — content protection unsupported");
+                return None;
+            }
+            Some(WindowPrivacyApi {
+                set_window_privacy_mode: std::mem::transmute::<
+                    *mut std::ffi::c_void,
+                    SetWindowPrivacyModeFn,
+                >(set_privacy),
+            })
+        })
+        .as_ref()
+}
+
+/// Typed error for `set_window_privacy_mode`. tao only logs these (the public
+/// `set_content_protection` returns `()`), so `Display` carries the detail.
+#[derive(Debug)]
+pub enum WindowPrivacyError {
+    /// System does not support window privacy mode: dlsym failed (API < 15)
+    /// or the FFI call returned 801 (DEVICE_NOT_SUPPORTED).
+    NotSupported,
+    /// FFI error code: 201 (PRIVACY_WINDOW not declared in the entry module),
+    /// 1300002/1300003 (window state/service abnormal), or any other nonzero.
+    OsCode(i32),
+    /// Caller-provided real window id is invalid (≤ 0).
+    Bridge(String),
+}
+
+impl std::fmt::Display for WindowPrivacyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WindowPrivacyError::NotSupported => {
+                write!(f, "window privacy mode not supported on this device")
+            }
+            WindowPrivacyError::OsCode(code) => write!(f, "window manager error code {code}"),
+            WindowPrivacyError::Bridge(reason) => {
+                write!(f, "window privacy mode bridge failure: {reason}")
+            }
+        }
+    }
+}
+
+/// Marks a window as privacy mode (content excluded from screenshot/recording/
+/// casting) or clears the flag.
+///
+/// `real_window_id` is the REAL OHOS window instance id, resolved by tao via
+/// the plugin-window bridge (`get-real-window-id` action) before calling —
+/// same D3.7 contract as [`set_cursor_grab`].
+///
+/// Pure FFI — safe from any thread. Idempotent: setting an already-set (or
+/// already-cleared) window simply returns 0.
+pub fn set_window_privacy_mode(
+    real_window_id: i32,
+    is_privacy: bool,
+) -> std::result::Result<(), WindowPrivacyError> {
+    if real_window_id <= 0 {
+        return Err(WindowPrivacyError::Bridge(format!(
+            "invalid real window id {real_window_id}"
+        )));
+    }
+    let api = window_privacy_api().ok_or(WindowPrivacyError::NotSupported)?;
+    let code = unsafe { (api.set_window_privacy_mode)(real_window_id, is_privacy) };
+    match code {
+        0 => Ok(()),
+        WM_ERRORCODE_DEVICE_NOT_SUPPORTED => Err(WindowPrivacyError::NotSupported),
+        other => Err(WindowPrivacyError::OsCode(other)),
+    }
+}

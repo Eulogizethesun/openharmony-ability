@@ -31,6 +31,10 @@ pub struct WindowStageEventCallback<'a> {
     pub on_avoid_area_change: Function<'a, Object<'a>, ()>,
     pub on_new_want: Function<'a, Object<'a>, ()>,
     pub on_ability_create_with_want: Function<'a, Object<'a>, ()>,
+    /// PC/2in1 pre-close probe (UIAbility.onPrepareToTerminateAsync). Returns
+    /// `true` to CANCEL this termination (the app stays alive), `false` to
+    /// allow it (the system proceeds to the normal destroy chain).
+    pub on_prepare_to_terminate: Function<'a, (), bool>,
 }
 
 #[napi(object)]
@@ -192,11 +196,20 @@ pub fn create_lifecycle_handle<'a>(
 
     // TODO: we may can remove it
     // Phase 2 (design.md D2/D4): the ArkTS side wraps windowRectChange options as
-    // { windowId, reason, rect }. We read windowId here and route the rect into the
-    // per-window HashMap (set_window_rect) instead of the old shared single field.
-    // windowId is read with a fallback to 0 (main window): some registration points may
-    // not yet wrap the options (e.g. a path added later) — degrading to the old main-
-    // window behavior is preferable to erroring out the whole callback.
+    // { windowId, reason, rect, drawable? }. We read windowId here and route the rect
+    // pair into the per-window HashMaps (set_window_rects) instead of the old shared
+    // single field. windowId is read with a fallback to 0 (main window): some
+    // registration points may not yet wrap the options (e.g. a path added later) —
+    // degrading to the old main-window behavior is preferable to erroring out the
+    // whole callback.
+    //
+    // `drawable` (issue Eulogizethesun/tauri#97): the same event's
+    // `getWindowProperties().drawableRect` snapshot (position relative to the
+    // window + drawable-area size, px), read synchronously by the ArkTS handler.
+    // Optional-with-skip: when the ArkTS read threw (window not yet created /
+    // content not loaded) the field is absent — the last snapshot stays until
+    // the next successful one. Both rects are stored under ONE lock so a
+    // concurrent inner_rect_for can never see a torn pair.
     let window_rect_app = app.clone();
     let window_rect_change =
         env.create_function_from_closure("window_rect_change", move |ctx| {
@@ -206,7 +219,11 @@ pub fn create_lifecycle_handle<'a>(
             // windowId is optional-with-fallback: missing or wrong type degrades to 0
             // (main window) rather than failing the callback.
             let window_id = options.get_named_property::<i64>("windowId").unwrap_or(0);
-            window_rect_app.set_window_rect(window_id, rect);
+            let drawable = options
+                .get_named_property::<Object>("drawable")
+                .ok()
+                .and_then(|drawable| parse_rect(drawable).ok());
+            window_rect_app.set_window_rects(window_id, rect, drawable);
 
             if let Some(ref mut h) = *window_rect_app.event_loop.borrow_mut() {
                 h(Event::ContentRectChange(ContentRect {
@@ -289,6 +306,23 @@ pub fn create_lifecycle_handle<'a>(
                 h(Event::Destroy)
             }
             Ok(())
+        })?;
+
+    // PC/2in1 pre-close probe (onPrepareToTerminateAsync, issue
+    // Eulogizethesun/tauri#103). Synchronous by necessity: the answer must be
+    // returned to ArkTS before the callback returns. The tao event handler
+    // runs inline on this (UI) thread — same as onAbilityDestroy — so the
+    // ExitRequested dispatch + prevent decision complete before the
+    // is_prevented() read below. The TerminateAnswer lives on this closure's
+    // stack for the duration of the h(...) call only.
+    let on_prepare_to_terminate_app = app.clone();
+    let on_prepare_to_terminate: Function<'_, (), bool> =
+        env.create_function_from_closure("prepare_to_terminate", move |_ctx| {
+            let answer = crate::TerminateAnswer::new();
+            if let Some(ref mut h) = *on_prepare_to_terminate_app.event_loop.borrow_mut() {
+                h(Event::PrepareToTerminate { answer: &answer })
+            }
+            Ok(answer.is_prevented())
         })?;
 
     let on_ability_restore_state_app = app.clone();
@@ -385,6 +419,7 @@ pub fn create_lifecycle_handle<'a>(
             on_window_stage_event: window_stage_event,
             on_new_want,
             on_ability_create_with_want,
+            on_prepare_to_terminate,
         },
         keyboard_event_callback: KeyboardCallback {
             on_keyboard_height_change: keyboard_event_callback,

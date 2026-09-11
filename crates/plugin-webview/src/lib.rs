@@ -9,15 +9,15 @@ use std::sync::OnceLock;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use napi_derive_ohos::napi;
-use napi_ohos::{bindgen_prelude::Unknown, Error, Result};
+use napi_ohos::{bindgen_prelude::Unknown, Env, Error, Result};
 // Re-export Either so downstream crates (e.g. the webview consumer) can construct
 // `WebviewStyle` fields without directly depending on `napi-ohos`.
 pub use napi_ohos::Either;
 use ohos_web_binding::Web;
 use openharmony_ability::{
-    impl_bridge_napi_type, AsyncBridge, BridgeCallOptions, BridgeContextRequirement,
-    BridgeMainThreadEvent, BridgeNapiType, BridgePlugin, BridgeRuntime, OpenHarmonyApp,
-    PluginLifecycleEvent,
+    get_main_thread_env, impl_bridge_napi_type, AsyncBridge, BridgeCallOptions,
+    BridgeContextRequirement, BridgeMainThreadEvent, BridgeNapiType, BridgePlugin, BridgeRuntime,
+    MainThreadSyncBridge, OpenHarmonyApp, PluginLifecycleEvent,
 };
 
 mod callbacks;
@@ -1072,26 +1072,25 @@ mod arkweb_version_capi {
         is_active_web_engine_evergreen: Option<IsActiveWebEngineEvergreenFn>,
     }
 
-    static ARKWEB_VERSION_API: OnceLock<Option<ArkWebVersionApi>> = OnceLock::new();
+    static ARKWEB_VERSION_API: OnceLock<Result<ArkWebVersionApi, &'static str>> = OnceLock::new();
 
     extern "C" {
         fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
         fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     }
 
-    /// Resolves the ArkWeb version C API once per process; `Err` when the
-    /// system does not provide it (below API 20). The handle is intentionally
-    /// never closed — the library stays loaded for the process lifetime.
-    fn api() -> Option<&'static ArkWebVersionApi> {
+    /// Resolves the ArkWeb version C API once per process; `Err` carries the
+    /// specific reason (dlopen failure vs symbol not exported — the caller
+    /// surfaces it, the log warns once). The handle is intentionally never
+    /// closed — the library stays loaded for the process lifetime.
+    fn api() -> Result<&'static ArkWebVersionApi, &'static str> {
         ARKWEB_VERSION_API
             .get_or_init(|| unsafe {
                 // RTLD_NOW | RTLD_LOCAL = 2 on OHOS musl.
                 let handle = dlopen(b"libohweb.so\0".as_ptr() as *const c_char, 2);
                 if handle.is_null() {
-                    log::warn!(
-                        "[webview] dlopen libohweb.so failed — ArkWeb version unavailable"
-                    );
-                    return None;
+                    log::warn!("[webview] dlopen libohweb.so failed — ArkWeb version unavailable");
+                    return Err("dlopen libohweb.so failed (library missing or broken)");
                 }
                 let get_version = dlsym(
                     handle,
@@ -1102,44 +1101,54 @@ mod arkweb_version_capi {
                         "[webview] OH_NativeArkWeb_GetActiveWebEngineVersion not exported \
                          (API < 20) — ArkWeb version unavailable"
                     );
-                    return None;
+                    return Err(
+                        "libohweb.so does not export OH_NativeArkWeb_GetActiveWebEngineVersion \
+                         (device below API 20)",
+                    );
                 }
                 let is_evergreen = dlsym(
                     handle,
                     b"OH_NativeArkWeb_IsActiveWebEngineEvergreen\0".as_ptr() as *const c_char,
                 );
-                Some(ArkWebVersionApi {
+                Ok(ArkWebVersionApi {
                     get_active_web_engine_version: std::mem::transmute::<
                         *mut c_void,
                         GetActiveWebEngineVersionFn,
                     >(get_version),
                     is_active_web_engine_evergreen: (!is_evergreen.is_null()).then(|| {
-                        std::mem::transmute::<*mut c_void, IsActiveWebEngineEvergreenFn>(is_evergreen)
+                        std::mem::transmute::<*mut c_void, IsActiveWebEngineEvergreenFn>(
+                            is_evergreen,
+                        )
                     }),
                 })
             })
             .as_ref()
+            .map_err(|&reason| reason)
+    }
+
+    /// Maps an `ArkWebEngineVersion` enum value to its kernel-generation label.
+    ///
+    /// Values per `native_interface_arkweb.h` / the API 26 reference:
+    /// 0 = SYSTEM_DEFAULT, 1 = ARKWEB_M114, 2 = ARKWEB_M132, 3 = ARKWEB_M144
+    /// (API 26+), 99999 = ARKWEB_EVERGREEN; anything else is a future
+    /// generation, reported losslessly as the raw enum number.
+    pub(super) fn version_name(version: i32) -> String {
+        match version {
+            ENGINE_VERSION_M114 => "M114".to_string(),
+            ENGINE_VERSION_M132 => "M132".to_string(),
+            ENGINE_VERSION_M144 => "M144".to_string(),
+            ENGINE_VERSION_EVERGREEN => "ARKWEB_EVERGREEN".to_string(),
+            // 0 (SYSTEM_DEFAULT): the app never pinned an engine, so the
+            // system default applies (M132 on 6.0, M144 on 7.0).
+            0 => "SYSTEM_DEFAULT".to_string(),
+            other => format!("ArkWebEngineVersion({other})"),
+        }
     }
 
     pub fn engine_version() -> Result<String, String> {
-        let api = api().ok_or(
-            "libohweb.so does not export OH_NativeArkWeb_GetActiveWebEngineVersion \
-             (device below API 20)"
-                .to_string(),
-        )?;
+        let api = api()?;
         let version = unsafe { (api.get_active_web_engine_version)() };
-        let mut name = match version {
-            ENGINE_VERSION_M114 => "M114",
-            ENGINE_VERSION_M132 => "M132",
-            ENGINE_VERSION_M144 => "M144",
-            ENGINE_VERSION_EVERGREEN => "ARKWEB_EVERGREEN",
-            // 0 (SYSTEM_DEFAULT): the app never pinned an engine, so the
-            // system default applies (M132 on 6.0, M144 on 7.0). Any other
-            // value is a future generation — report the raw enum number.
-            0 => "SYSTEM_DEFAULT",
-            other => return Ok(format!("ArkWebEngineVersion({other})")),
-        }
-        .to_string();
+        let mut name = version_name(version);
         if let Some(is_evergreen) = api.is_active_web_engine_evergreen {
             if unsafe { is_evergreen() } {
                 name.push_str(" (evergreen)");
@@ -1157,6 +1166,122 @@ impl WebviewExt for OpenHarmonyApp {
     fn webview(&self) -> Result<WebviewClient> {
         WebviewClient::new(self)
     }
+}
+
+// ── Synchronous cookie fetch (ohos.webview-cookie) ──────────────────────────────
+
+/// `MainThreadSync` companion plugin for the static ArkWeb cookie manager.
+///
+/// `WebCookieManager.fetchCookieSync` is a UI-thread-only static API. The async
+/// [`WebviewBridgePlugin`] cannot serve it to a main-thread caller: its TSFN
+/// round-trip needs that same main thread to pump, i.e. a deadlock. This sync
+/// plugin carries the fetch instead — invoked through
+/// [`OpenHarmonyApp::with_main_thread_bridge`], the call always executes on the
+/// UI thread, exactly where the official API requires it.
+///
+/// The ArkTS counterpart is `WebviewCookiePlugin` (plugin id
+/// `ohos.webview-cookie`, no context requirements — the cookie manager is
+/// process-global, not per-webview).
+pub struct WebviewCookieBridgePlugin;
+
+impl BridgePlugin for WebviewCookieBridgePlugin {
+    type Mode = MainThreadSyncBridge;
+
+    const ID: &'static str = "ohos.webview-cookie";
+    const REQUIRED_CONTEXTS: &'static [BridgeContextRequirement] = &[];
+}
+
+/// Request for the `fetch-cookies` action: the URL whose cookies to fetch.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct WebviewCookieFetchRequest {
+    pub url: String,
+}
+
+impl_bridge_napi_type!(WebviewCookieFetchRequest, "ohos.webview.CookieFetchRequest");
+
+/// Response for the `fetch-cookies` action: the raw `fetchCookieSync` string
+/// (`"k=v; k2=v2"`), parsed by the caller.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct WebviewCookieFetchResponse {
+    pub cookies: String,
+}
+
+impl_bridge_napi_type!(
+    WebviewCookieFetchResponse,
+    "ohos.webview.CookieFetchResponse"
+);
+
+/// Synchronous cookie fetch scoped to an N-API `Env` on the main thread.
+pub trait WebviewCookieSyncExt {
+    fn fetch_cookies_sync(&self, env: &Env, url: &str) -> Result<String>;
+}
+
+impl WebviewCookieSyncExt for OpenHarmonyApp {
+    fn fetch_cookies_sync(&self, env: &Env, url: &str) -> Result<String> {
+        self.with_main_thread_bridge(env, |bridge| {
+            let response = bridge.call_sync::<
+                WebviewCookieBridgePlugin,
+                WebviewCookieFetchRequest,
+                WebviewCookieFetchResponse,
+            >(
+                "fetch-cookies",
+                WebviewCookieFetchRequest {
+                    url: url.to_string(),
+                },
+            )?;
+            Ok(response.cookies)
+        })
+    }
+}
+
+/// Process-global app handle backing [`cookies_for_url_on_main_thread`].
+///
+/// Synchronous wry-style APIs have no `Env` parameter to carry the bridge
+/// capability, so the app must be registered once during runtime setup
+/// ([`set_cookie_sync_app`]) and recovered here on the main thread.
+static COOKIE_SYNC_APP: OnceLock<OpenHarmonyApp> = OnceLock::new();
+
+/// Registers the `ohos.webview-cookie` sync bridge plugin on the app and caches
+/// the app handle for [`cookies_for_url_on_main_thread`].
+///
+/// Call once during runtime setup. Mirrors `tray_icon::set_ohos_app`, which
+/// registers its own bridge plugins the same way. The ArkTS counterpart
+/// (`WebviewCookiePlugin`) must be present in the host Ability's
+/// `bridgePlugins` list.
+pub fn set_cookie_sync_app(app: &OpenHarmonyApp) -> Result<()> {
+    app.register_plugin(WebviewCookieBridgePlugin)?;
+    if COOKIE_SYNC_APP.set(app.clone()).is_err() {
+        return Err(Error::from_reason(
+            "webview cookie sync app already initialized",
+        ));
+    }
+    Ok(())
+}
+
+/// Synchronously fetches the cookies for `url` (ArkTS `fetchCookieSync`).
+///
+/// **Must be called from the N-API main thread** — the `MainThreadSync` bridge
+/// contract. The main-thread `Env` is recovered from the thread-local set by
+/// the XComponent render entry, the same recovery tao's terminate path uses.
+///
+/// This is the main-thread alternative to the async bridge: a main-thread
+/// caller cannot block on the async round-trip (the TSFN response needs this
+/// very thread to pump), so it goes through the dedicated sync plugin instead.
+pub fn cookies_for_url_on_main_thread(url: &str) -> Result<String> {
+    let app = COOKIE_SYNC_APP.get().ok_or_else(|| {
+        Error::from_reason(
+            "webview cookie sync app not set — the embedding runtime must call \
+             set_cookie_sync_app during setup",
+        )
+    })?;
+    let env_cell = get_main_thread_env();
+    let env_ref = env_cell.borrow();
+    let env = env_ref
+        .as_ref()
+        .ok_or_else(|| Error::from_reason("main-thread N-API Env not available"))?;
+    app.fetch_cookies_sync(env, url)
 }
 
 #[derive(Clone)]
@@ -1713,6 +1838,30 @@ mod tests {
     use openharmony_ability::BridgeNapiType;
 
     #[test]
+    fn cookie_sync_plugin_uses_a_stable_named_napi_contract() {
+        assert_eq!(
+            <WebviewCookieFetchRequest as BridgeNapiType>::TYPE_NAME,
+            "ohos.webview.CookieFetchRequest"
+        );
+        assert_eq!(
+            <WebviewCookieFetchResponse as BridgeNapiType>::TYPE_NAME,
+            "ohos.webview.CookieFetchResponse"
+        );
+        assert_eq!(
+            <WebviewCookieBridgePlugin as BridgePlugin>::ID,
+            "ohos.webview-cookie"
+        );
+        assert!(<WebviewCookieBridgePlugin as BridgePlugin>::REQUIRED_CONTEXTS.is_empty());
+        assert_eq!(
+            WebviewCookieFetchRequest {
+                url: "https://example.test".to_owned()
+            }
+            .url,
+            "https://example.test"
+        );
+    }
+
+    #[test]
     fn create_request_retains_optional_value_semantics() {
         let request = WebviewCreateRequest::new("webview")
             .parent_node(7)
@@ -1761,6 +1910,64 @@ mod tests {
             native_tag: " ".to_owned(),
         })
         .is_err());
+    }
+
+    // ─── arkweb_engine_version (issue Eulogizethesun/tauri#116) ────────────────────
+
+    #[test]
+    fn arkweb_version_name_maps_official_enum_values() {
+        // native_interface_arkweb.h: SYSTEM_DEFAULT=0, ARKWEB_M114=1,
+        // ARKWEB_M132=2, ARKWEB_EVERGREEN=99999; ARKWEB_M144=3 per the API 26
+        // reference (not yet in the local sysroot header — forward-compatible).
+        assert_eq!(arkweb_version_capi::version_name(0), "SYSTEM_DEFAULT");
+        assert_eq!(arkweb_version_capi::version_name(1), "M114");
+        assert_eq!(arkweb_version_capi::version_name(2), "M132");
+        assert_eq!(arkweb_version_capi::version_name(3), "M144");
+        assert_eq!(arkweb_version_capi::version_name(99999), "ARKWEB_EVERGREEN");
+    }
+
+    #[test]
+    fn arkweb_version_name_reports_future_generations_losslessly() {
+        assert_eq!(
+            arkweb_version_capi::version_name(4),
+            "ArkWebEngineVersion(4)"
+        );
+        assert_eq!(
+            arkweb_version_capi::version_name(-1),
+            "ArkWebEngineVersion(-1)"
+        );
+    }
+
+    /// Device-side assertion (issue #116's requested test): the live query
+    /// must return a known kernel-generation label, optionally suffixed with
+    /// " (evergreen)". Deliberately a set-membership check, NOT a literal
+    /// "M132" — the label is firmware-scoped (an unpinned engine reports
+    /// SYSTEM_DEFAULT; API 26 systems report M144/evergreen variants), so a
+    /// literal assert would fail on exactly the devices the issue expects to
+    /// pass. Runs via the ohos-rust-ut device harness (PACKAGE=
+    /// openharmony-ability-plugin-webview); on systems below API 20 the C API
+    /// is absent by design and this returns Err.
+    #[test]
+    fn arkweb_engine_version_returns_a_known_generation_label() {
+        let Ok(version) = arkweb_engine_version() else {
+            // Below API 20: dlopen/dlsym degrades to Err (see api()). The
+            // error reason must still name the actual cause.
+            let err = arkweb_engine_version().unwrap_err();
+            assert!(
+                err.to_string().contains("libohweb.so"),
+                "unexpected error: {err}"
+            );
+            return;
+        };
+        let base = version.strip_suffix(" (evergreen)").unwrap_or(&version);
+        let known = matches!(
+            base,
+            "M114" | "M132" | "M144" | "ARKWEB_EVERGREEN" | "SYSTEM_DEFAULT"
+        ) || base.starts_with("ArkWebEngineVersion(");
+        assert!(
+            known,
+            "arkweb_engine_version returned an unrecognized label: {version}"
+        );
     }
 
     #[test]

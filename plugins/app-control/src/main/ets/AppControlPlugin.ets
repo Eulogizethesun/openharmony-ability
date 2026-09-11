@@ -12,6 +12,8 @@ import {
 
 const TERMINATE_REQUEST_TYPE = "ohos.app_control.TerminateRequest";
 const TERMINATE_RESPONSE_TYPE = "ohos.app_control.TerminateResponse";
+const RESTART_REQUEST_TYPE = "ohos.app_control.RestartRequest";
+const RESTART_RESPONSE_TYPE = "ohos.app_control.RestartResponse";
 const SET_COLOR_MODE_REQUEST_TYPE = "ohos.app_control.SetColorModeRequest";
 const SET_COLOR_MODE_RESPONSE_TYPE = "ohos.app_control.SetColorModeResponse";
 const HIDE_ABILITY_REQUEST_TYPE = "ohos.app_control.HideAbilityRequest";
@@ -28,6 +30,14 @@ interface SetColorModeRequest {
 }
 
 class TerminateResponse {
+  readonly accepted: boolean;
+
+  constructor(accepted: boolean) {
+    this.accepted = accepted;
+  }
+}
+
+class RestartResponse {
   readonly accepted: boolean;
 
   constructor(accepted: boolean) {
@@ -72,7 +82,9 @@ function parseTerminateRequest(payload: BridgeTypedValue): TerminateRequest {
 
 function parseSetColorModeRequest(payload: BridgeTypedValue): SetColorModeRequest {
   if (payload.typeName !== SET_COLOR_MODE_REQUEST_TYPE || typeof payload.value !== "object") {
-    throw new Error(`ohos.app-control.set-color-mode requires bridge type ${SET_COLOR_MODE_REQUEST_TYPE}`);
+    throw new Error(
+      `ohos.app-control.set-color-mode requires bridge type ${SET_COLOR_MODE_REQUEST_TYPE}`,
+    );
   }
   const request = payload.value as SetColorModeRequest;
   if (!Number.isInteger(request?.colorMode)) {
@@ -95,6 +107,23 @@ export class AppControlPlugin extends SyncPluginBase {
       const manager = new process.ProcessManager();
       manager.exit(request.code);
       return { typeName: TERMINATE_RESPONSE_TYPE, value: new TerminateResponse(true) };
+    }
+
+    if (action === "restart") {
+      // Official restart: ApplicationContext.restartApp (API 12+) kills all of
+      // the app's processes and relaunches the specified UIAbility. Main-thread
+      // only (this is a MainThreadSync plugin action) and the app must be
+      // focused; violations throw sync error codes (e.g. 16000053 "not on top
+      // of the UI", 16000064 "restart too frequently, retry after 3s") which
+      // propagate to Rust as bridge errors. onDestroy is NOT triggered.
+      const ctx = context.abilityContext;
+      const want: Want = {
+        bundleName: ctx.abilityInfo.bundleName,
+        abilityName: ctx.abilityInfo.name,
+      };
+      const applicationContext = ctx.getApplicationContext();
+      applicationContext.restartApp(want);
+      return { typeName: RESTART_RESPONSE_TYPE, value: new RestartResponse(true) };
     }
 
     if (action === "set-color-mode") {

@@ -1,7 +1,8 @@
 //! Asynchronous clipboard bridge plugin facade.
 //!
-//! Provides `read-text`, `write-text`, and `write-image` actions through the bridge plugin model.
-//! The ArkTS side uses `pasteboard.getSystemPasteboard()` to interact with the system clipboard.
+//! Provides `read-text`, `write-text`, `write-image`, `read-image`, and
+//! `write-html` actions through the bridge plugin model. The ArkTS side uses
+//! `pasteboard.getSystemPasteboard()` to interact with the system clipboard.
 
 use napi_derive_ohos::napi;
 use napi_ohos::{Error, Result};
@@ -82,6 +83,39 @@ impl_bridge_napi_type!(
     ClipboardWriteImageResponse,
     "ohos.clipboard.WriteImageResponse"
 );
+
+// ── read-image ───────────────────────────────────────────────────────────────────
+
+#[napi(object)]
+#[derive(Clone, Debug, Default)]
+pub struct ClipboardReadImageRequest {}
+
+impl_bridge_napi_type!(ClipboardReadImageRequest, "ohos.clipboard.ReadImageRequest");
+
+/// The ArkTS side packs the clipboard PixelMap as a base64 PNG — a `Vec<u8>`
+/// napi object would cross the bridge as `Array<number>`, inflating a
+/// multi-hundred-KB PNG ~8x in memory (same contract as plugin-webview's
+/// capture response).
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct ClipboardReadImageResponse {
+    pub png_base64: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl_bridge_napi_type!(
+    ClipboardReadImageResponse,
+    "ohos.clipboard.ReadImageResponse"
+);
+
+/// A clipboard image decoded to RGBA8 (row-major, top to bottom).
+#[derive(Clone, Debug)]
+pub struct ClipboardImage {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
 
 // ── write-html ───────────────────────────────────────────────────────────────────
 
@@ -195,6 +229,22 @@ impl ClipboardClient {
         }
     }
 
+    /// Reads the current image from the system clipboard, decoded to RGBA.
+    ///
+    /// Errors when the clipboard holds no image or the PNG round-trip fails.
+    /// A permission-gated read (READ_PASTEBOARD denied) observes an empty
+    /// pasteboard and surfaces as the no-image error — same degradation as
+    /// `read_text` returning `None`.
+    pub async fn read_image(&self) -> Result<ClipboardImage> {
+        let response = self
+            .call::<ClipboardReadImageRequest, ClipboardReadImageResponse>(
+                "read-image",
+                ClipboardReadImageRequest {},
+            )
+            .await?;
+        decode_png_base64(&response.png_base64, response.width, response.height)
+    }
+
     /// Writes HTML content to the system clipboard.
     pub async fn write_html(&self, html: impl Into<String>) -> Result<()> {
         let response = self
@@ -254,6 +304,75 @@ fn validate_image_dimensions(rgba: &[u8], width: u32, height: u32) -> Result<()>
     Ok(())
 }
 
+/// Decodes the bridge's base64 PNG response into RGBA8.
+///
+/// `width`/`height` come from the ArkTS PixelMap info and are cross-checked
+/// against the decoded PNG (the PNG is the source of truth for the payload;
+/// a mismatch means the packer produced different dimensions than it
+/// reported — treated as corruption).
+fn decode_png_base64(png_base64: &str, width: u32, height: u32) -> Result<ClipboardImage> {
+    use base64::Engine as _;
+
+    let reason = |msg: String| Error::from_reason(format!("clipboard read-image: {msg}"));
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png_base64)
+        .map_err(|e| reason(format!("base64 decode failed: {e}")))?;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(&bytes));
+    // Palette → RGB, <8-bit grayscale → 8-bit, tRNS → alpha, 16-bit → 8-bit,
+    // so only the four 8-bit types remain below.
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| reason(format!("PNG decode failed: {e}")))?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| reason(format!("PNG decode failed: {e}")))?;
+    let (w, h) = (info.width, info.height);
+    if (w, h) != (width, height) {
+        return Err(reason(format!(
+            "dimension mismatch: bridge reported {width}x{height}, PNG is {w}x{h}"
+        )));
+    }
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => {
+            let mut out = Vec::with_capacity(buf.len() / 3 * 4);
+            for px in buf.chunks_exact(3) {
+                out.extend_from_slice(&[px[0], px[1], px[2], 255]);
+            }
+            out
+        }
+        png::ColorType::GrayscaleAlpha => {
+            let mut out = Vec::with_capacity(buf.len() / 2 * 4);
+            for px in buf.chunks_exact(2) {
+                out.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
+            }
+            out
+        }
+        png::ColorType::Grayscale => {
+            let mut out = Vec::with_capacity(buf.len() * 4);
+            for px in buf.chunks_exact(1) {
+                out.extend_from_slice(&[px[0], px[0], px[0], 255]);
+            }
+            out
+        }
+        // Unreachable with normalize_to_color8 (EXPAND maps Indexed → Rgb in
+        // the output color type) — kept as a defensive arm.
+        png::ColorType::Indexed => {
+            return Err(reason(
+                "unexpected indexed output after normalize_to_color8".into(),
+            ))
+        }
+    };
+    Ok(ClipboardImage {
+        rgba,
+        width: w,
+        height: h,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +412,14 @@ mod tests {
             <ClipboardWriteImageResponse as BridgeNapiType>::TYPE_NAME,
             "ohos.clipboard.WriteImageResponse"
         );
+        assert_eq!(
+            <ClipboardReadImageRequest as BridgeNapiType>::TYPE_NAME,
+            "ohos.clipboard.ReadImageRequest"
+        );
+        assert_eq!(
+            <ClipboardReadImageResponse as BridgeNapiType>::TYPE_NAME,
+            "ohos.clipboard.ReadImageResponse"
+        );
     }
 
     #[test]
@@ -306,5 +433,45 @@ mod tests {
     #[test]
     fn image_dimension_validation_rejects_overflow() {
         assert!(validate_image_dimensions(&[], u32::MAX, u32::MAX).is_err());
+    }
+
+    /// Encodes a w×h RGBA image to a base64 PNG (the same wire shape the
+    /// ArkTS ImagePacker produces) for the decode tests.
+    fn encode_png_base64(width: u32, height: u32, rgba: &[u8]) -> String {
+        use base64::Engine as _;
+
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("png header");
+            writer.write_image_data(rgba).expect("png image data");
+        }
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    }
+
+    #[test]
+    fn read_image_decodes_base64_png_to_rgba() {
+        // 2×1 RGBA: red, transparent
+        let rgba = [255, 0, 0, 255, 255, 0, 0, 0];
+        let png_base64 = encode_png_base64(2, 1, &rgba);
+        let image = decode_png_base64(&png_base64, 2, 1).expect("decode ok");
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.rgba, rgba);
+    }
+
+    #[test]
+    fn read_image_rejects_dimension_mismatch() {
+        let png_base64 = encode_png_base64(2, 1, &[255, 0, 0, 255, 255, 0, 0, 0]);
+        let err = decode_png_base64(&png_base64, 3, 1).expect_err("mismatch rejected");
+        assert!(err.reason.contains("dimension mismatch"));
+    }
+
+    #[test]
+    fn read_image_rejects_invalid_base64() {
+        let err = decode_png_base64("!!not base64!!", 1, 1).expect_err("bad base64 rejected");
+        assert!(err.reason.contains("base64 decode failed"));
     }
 }
