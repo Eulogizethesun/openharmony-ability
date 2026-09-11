@@ -4,7 +4,12 @@ import { FrameNode } from "@ohos.arkui.node";
 import { UIContext } from "@ohos.arkui.UIContext";
 import resourceManager from "@ohos.resourceManager";
 import window from "@ohos.window";
-import { MenuItemData, MenuCreateOptions, MenuItemCreateOptions, SubmenuCreateOptions } from "../helper/menu_types";
+import {
+  MenuItemData,
+  MenuCreateOptions,
+  MenuItemCreateOptions,
+  SubmenuCreateOptions,
+} from "../helper/menu_types";
 import { image } from "@kit.ImageKit";
 import { emitter } from "@kit.BasicServicesKit";
 
@@ -57,6 +62,9 @@ export interface WindowStageEventCallback {
   onWindowRectChange: (arg: object) => void;
   onAvoidAreaChange: (arg: object) => void;
   onNewWant: (data: NewWantData) => void;
+  // PC/2in1 pre-close probe (onPrepareToTerminateAsync). Return true to CANCEL
+  // this termination, false to allow it (normal destroy chain follows).
+  onPrepareToTerminate: () => boolean;
 }
 
 export interface WebViewComponentEventCallback {
@@ -192,14 +200,18 @@ export interface Module {
   notifyWindowClose?: (windowId: number) => void;
   /** `notify_window_status` — NativeAbility windowStatusChange fan-in. */
   notifyWindowStatus?: (windowId: number, status: number) => void;
+  /** `set_display_layout` — display.getAllDisplays() position overlay push
+   *  (multi-monitor, issue Eulogizethesun/tauri#106). JSON `[[id, x, y], ...]`. */
+  setDisplayLayout?: (layoutJson: string) => void;
   /** `read_continue_snapshot` — onContinue source-side snapshot read. */
   readContinueSnapshot?: () => string;
   /** `update_cursor_position` — MainPage onMouse cursor tracking. */
   updateCursorPosition?: (x: number, y: number) => void;
+  /** `notify_key_event` — MainPage onKeyPreIme Rust key forward (issue #109).
+   *  action: 0 = Down, 1 = Up. */
+  notifyKeyEvent?: (keyCode: number, action: number, deviceId: number) => void;
   /** `register_create_sub_window_tsfn` — legacy create_os_window path hookup. */
-  registerCreateSubWindowTsfn?: (
-    createSubWindow: (config: ESObject) => Promise<number>,
-  ) => void;
+  registerCreateSubWindowTsfn?: (createSubWindow: (config: ESObject) => Promise<number>) => void;
   /**
    * Synchronous ArkTS platform callback -> Rust plugin decision. The value is a named N-API
    * object and must be returned before the platform callback resumes.
@@ -234,9 +246,9 @@ export interface WindowConfig {
   height?: number;
   x?: number;
   y?: number;
-  decorations?: boolean;     // Phase 2: show/hide title bar, default true
-  transparent?: boolean;     // Phase 3: window background transparent, default false
-  backgroundColor?: number;  // Phase 3: window background color in 0xAARRGGBB format
+  decorations?: boolean; // Phase 2: show/hide title bar, default true
+  transparent?: boolean; // Phase 3: window background transparent, default false
+  backgroundColor?: number; // Phase 3: window background color in 0xAARRGGBB format
 }
 
 /**

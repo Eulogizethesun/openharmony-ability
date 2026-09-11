@@ -1,7 +1,11 @@
 import { DefaultXComponent } from "./DefaultXComponent";
 import { Module } from "../ability/type";
 import { Loadable } from "../helper/loadable";
-import { AcceleratorMatcher, isClipboardEnabled, isZoomHotkeysEnabled } from "../helper/accelerator_matcher";
+import {
+  AcceleratorMatcher,
+  isClipboardEnabled,
+  isZoomHotkeysEnabled,
+} from "../helper/accelerator_matcher";
 import {
   MenuBarComponent,
   getMenuClickHandler,
@@ -9,10 +13,10 @@ import {
   isMenubarVisible,
 } from "./MenuBarComponent";
 import { KeyCode } from "@kit.InputKit";
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { DOMAIN, MAIN_WINDOW_ID } from '../helper/constants';
-import { synthesizeDomKeyEvent } from '../helper/key_synthesis';
-import { WindowManager } from '../window/WindowManager';
+import { hilog } from "@kit.PerformanceAnalysisKit";
+import { DOMAIN, MAIN_WINDOW_ID } from "../helper/constants";
+import { synthesizeDomKeyEvent, isWebFocused } from "../helper/key_synthesis";
+import { WindowManager } from "../window/WindowManager";
 import { NativeModuleLoader } from "../runtime/NativeModuleLoader";
 import { invokeNativeBackPressInterceptor } from "../runtime/BackPress";
 
@@ -23,7 +27,7 @@ export const RouteName = "NativeAbility";
 struct MainPage {
   @StorageProp("moduleName") moduleNames: string | string[] = "";
   // Subsequent UIAbility instances receive their windowId via LocalStorage
-  @LocalStorageProp('windowId') windowId: number = MAIN_WINDOW_ID;
+  @LocalStorageProp("windowId") windowId: number = MAIN_WINDOW_ID;
 
   private loadMode: "async" | "sync" = "async";
 
@@ -33,22 +37,22 @@ struct MainPage {
   private acceleratorMatcher: AcceleratorMatcher = new AcceleratorMatcher();
 
   async aboutToAppear(): Promise<void> {
-    hilog.info(DOMAIN, 'MainPage', '=== MainPage aboutToAppear START ===');
+    hilog.info(DOMAIN, "MainPage", "=== MainPage aboutToAppear START ===");
     this.loadMode = (AppStorage.get<string>("loadMode") as "async" | "sync") ?? "async";
-    hilog.info(DOMAIN, 'MainPage', 'Initializing MAIN WINDOW');
+    hilog.info(DOMAIN, "MainPage", "Initializing MAIN WINDOW");
 
     const moduleName = Loadable.resolvePrimaryModuleName(this.moduleNames);
     if (!moduleName) {
-      hilog.error(DOMAIN, 'MainPage', 'moduleName is empty, cannot initialize main window');
+      hilog.error(DOMAIN, "MainPage", "moduleName is empty, cannot initialize main window");
       throw new Error("MainPage.moduleName is required for main window");
     }
 
-    hilog.info(DOMAIN, 'MainPage', 'Resolved moduleName: %{public}s', moduleName);
+    hilog.info(DOMAIN, "MainPage", "Resolved moduleName: %{public}s", moduleName);
     this.resolvedModuleName = moduleName;
 
-    hilog.info(DOMAIN, 'MainPage', 'Loading native module: %{public}s', moduleName);
+    hilog.info(DOMAIN, "MainPage", "Loading native module: %{public}s", moduleName);
     this.nativeModule = await Loadable.load(moduleName, this.loadMode);
-    hilog.info(DOMAIN, 'MainPage', 'Native module loaded successfully');
+    hilog.info(DOMAIN, "MainPage", "Native module loaded successfully");
   }
 
   onBackPress(): boolean {
@@ -60,7 +64,7 @@ struct MainPage {
         return this.nativeModule.on_back_press_intercept();
       }
     } catch (err) {
-      hilog.error(DOMAIN, 'MainPage', 'onBackPress failed: %{public}s', JSON.stringify(err));
+      hilog.error(DOMAIN, "MainPage", "onBackPress failed: %{public}s", JSON.stringify(err));
     }
     return false;
   }
@@ -72,28 +76,36 @@ struct MainPage {
           windowId: this.windowId,
           acceleratorMatcher: this.acceleratorMatcher,
         })
-
         Row() {
           Column() {
             if (this.resolvedModuleName !== "") {
-              DefaultXComponent({ moduleName: this.resolvedModuleName, windowId: this.windowId })
+              DefaultXComponent({ moduleName: this.resolvedModuleName, windowId: this.windowId });
             } else {
-              Text("Loading Main Window...")
-                .fontSize(20)
-                .fontColor(Color.Gray)
+              Text("Loading Main Window...").fontSize(20).fontColor(Color.Gray);
             }
           }.width("100%")
-        }.layoutWeight(1).height("100%")
-
-      }.width("100%").height("100%")
+        }
+        .layoutWeight(1)
+        .height("100%")
+      }
+      .width("100%")
+      .height("100%")
       .backgroundColor(Color.Transparent)
       .onKeyPreIme((event: KeyEvent) => {
         // Block native clipboard shortcuts when with_clipboard(false) (ohos-webview-flag-clipboard)
-        if (event.type === KeyType.Down && this.acceleratorMatcher.matchesClipboardShortcut(event) && !isClipboardEnabled(MAIN_WINDOW_ID)) {
+        if (
+          event.type === KeyType.Down &&
+          this.acceleratorMatcher.matchesClipboardShortcut(event) &&
+          !isClipboardEnabled(MAIN_WINDOW_ID)
+        ) {
           return true;
         }
         // Block native zoom hotkeys when with_zoom_hotkeys(false) (ohos-webview-flag-zoom-hotkeys)
-        if (event.type === KeyType.Down && this.acceleratorMatcher.matchesZoomShortcut(event) && !isZoomHotkeysEnabled(MAIN_WINDOW_ID)) {
+        if (
+          event.type === KeyType.Down &&
+          this.acceleratorMatcher.matchesZoomShortcut(event) &&
+          !isZoomHotkeysEnabled(MAIN_WINDOW_ID)
+        ) {
           return true;
         }
         // Accelerator matching (non-clipboard shortcuts)
@@ -111,7 +123,11 @@ struct MainPage {
         // (window-API set_fullscreen AND predefined menu fullscreen) hide the
         // menubar via WindowManager.setFullscreen (macOS semantics), so the
         // menubar-invisible condition alone covers every case.
-        if (event.type === KeyType.Down && event.keyCode === KeyCode.KEYCODE_ESCAPE && !isMenubarVisible(MAIN_WINDOW_ID)) {
+        if (
+          event.type === KeyType.Down &&
+          event.keyCode === KeyCode.KEYCODE_ESCAPE &&
+          !isMenubarVisible(MAIN_WINDOW_ID)
+        ) {
           const recoverFn = getMenuBarRecoverFn(MAIN_WINDOW_ID);
           if (recoverFn) {
             recoverFn();
@@ -131,13 +147,35 @@ struct MainPage {
         // synthetic + unsuppressed degenerate native). They keep the
         // pre-feature degradation, matching the ohos-platform-limitations spec.
         if (this.windowId === MAIN_WINDOW_ID) {
+          // Rust-side key forward (issue Eulogizethesun/tauri#109): the NDK
+          // XComponent key path never fires in webview apps (the render node
+          // is not in the ArkUI focus chain — no focusable, Web grabs focus
+          // on load and overlays it), so tao's WindowEvent::KeyboardInput was
+          // dead. onKeyPreIme sees every key the web sees — feed them to Rust
+          // through the same Event::Input dispatch the NDK path would have
+          // used. Gated on Web focus: focused ⇒ NDK structurally silent ⇒ no
+          // double dispatch; unfocused (menu bar / GL-style apps) ⇒ gate
+          // closed ⇒ NDK path stays exclusive (and webview-less apps are
+          // unchanged, per the key-synthesis spec). Same fall-through position
+          // as the DOM synthesis — keys consumed by the interceptors above
+          // are NOT forwarded (the shell already acted on them).
+          if (
+            isWebFocused(MAIN_WINDOW_ID) &&
+            typeof this.nativeModule?.notifyKeyEvent === "function"
+          ) {
+            this.nativeModule.notifyKeyEvent(
+              event.keyCode,
+              event.type === KeyType.Down ? 0 : 1,
+              event.deviceId,
+            );
+          }
           synthesizeDomKeyEvent(event, this.windowId);
         }
         return false;
       })
     }
-    .width('100%')
-    .height('100%')
+    .width("100%")
+    .height("100%")
     // Extend content into system safe areas (status bar + navigation bar).
     // Without this, setWindowLayoutFullScreen(true) + white window background
     // causes a white bar at the bottom where the navigation bar area is not
@@ -153,7 +191,7 @@ struct MainPage {
         try {
           WindowManager.getInstance().setUserInteractedWindow(this.windowId);
         } catch (e) {
-          hilog.warn(DOMAIN, 'MainPage', 'onTouch: WindowManager not ready: %{public}s', String(e));
+          hilog.warn(DOMAIN, "MainPage", "onTouch: WindowManager not ready: %{public}s", String(e));
         }
       }
     })
@@ -170,6 +208,6 @@ struct MainPage {
           // Silently ignore — cursor tracking is best-effort
         }
       }
-    })
+    });
   }
 }

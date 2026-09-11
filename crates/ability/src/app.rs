@@ -16,12 +16,12 @@ use ohos_display_binding::{
     default_display_width,
 };
 use ohos_ime_binding::IME;
-use ohos_xcomponent_binding::RawWindow;
+use ohos_xcomponent_binding::{KeyEventData, RawWindow};
 
 use crate::{
     bridge::MainThreadBridgeEndpoint, AvoidArea, AvoidAreaType, BridgeMainThread,
     BridgeMainThreadEvent, BridgePlugin, BridgePluginDeclaration, BridgePluginRegistry,
-    BridgeRuntime, Configuration, Event, MainThreadScheduler, OpenHarmonyWaker,
+    BridgeRuntime, Configuration, Event, InputEvent, MainThreadScheduler, OpenHarmonyWaker,
     PluginLifecycleEvent, Rect,
 };
 
@@ -77,29 +77,17 @@ pub struct OpenHarmonyAppInner {
     /// `window_rect_for(window_id)`. See design.md D1/D4 (openspec change
     /// p1-window-state-per-window-rect).
     pub(crate) window_rects: HashMap<i64, Rect>,
-    /// Cached main-window decoration (title bar) height, physical px, ≥0.
-    /// Latched ONLY on surface events (`latch_decor_height`) where the
-    /// XComponent rect is fresh and the WM rect has already been delivered.
-    /// Consumers (tao inner_size/set_inner_size/inner_position) must use
-    /// `decor_height()` instead of live-diffing window_rect − content_rect:
-    /// the WM rect (windowRectChange) and the surface rect (XComponent
-    /// onSurfaceChanged) update ASYNCHRONOUSLY — a read in the gap between
-    /// them computes a garbage decor (observed 824/770/292 instead of the
-    /// real 146), which corrupted inner_size reads and compounded through
-    /// save/restore cycles into the shrinking-window bug.
-    pub(crate) decor_height: i32,
-    /// Listeners fired by `latch_decor_height` whenever the latched decor value
-    /// actually changes. Each listener returns `false` to have itself removed
-    /// after the call. tao uses this for event-driven set_inner_size
-    /// self-correction (startup decor convergence) instead of polling.
-    ///
-    /// INVARIANT: listeners run while the app RwLock is HELD (write) — they
-    /// must not re-enter any OpenHarmonyApp API (deadlock). Keep them lock-free:
-    /// channel sends / atomics only. Expected to stay LOW-COUNT (one per tao
-    /// window); every listener runs on every decor change under the lock.
-    pub(crate) decor_change_callbacks:
-        Vec<(u64, std::sync::Arc<dyn Fn(i32) -> bool + Send + Sync>)>,
-    next_decor_cb_id: u64,
+    /// Per-window drawable (content-area) rect, physical px, pushed by the ArkTS
+    /// `windowRectChange` handlers alongside the WM rect (issue Eulogizethesun/
+    /// tauri#97). Source: `win.getWindowProperties().drawableRect` — the system's
+    /// own inner-口径 snapshot (left/top relative to the window, size = drawable
+    /// area), read synchronously inside the event handler so the two rects in one
+    /// wrap can never tear. This replaced the former `decor_height` latched
+    /// window-rect − content-rect diff, whose async-update races produced garbage
+    /// decor (observed 824/770/292 instead of the real 146) and compounded
+    /// through save/restore cycles into the shrinking-window bug. Consumers read
+    /// it through `inner_rect_for(window_id)` — never hand-roll the conversion.
+    pub(crate) inner_rects: HashMap<i64, Rect>,
     pub(crate) avoid_areas: HashMap<AvoidAreaType, AvoidArea>,
     pub(crate) init_context: AbilityInitContext,
     // ─── Session state (migrated from module-level statics, issue #87 major-9) ───
@@ -170,9 +158,7 @@ impl OpenHarmonyAppInner {
             configuration: Default::default(),
             rect: Default::default(),
             window_rects: HashMap::new(),
-            decor_height: 0,
-            decor_change_callbacks: Vec::new(),
-            next_decor_cb_id: 0,
+            inner_rects: HashMap::new(),
             avoid_areas: HashMap::new(),
             init_context: AbilityInitContext::default(),
             want_parameters: String::new(),
@@ -220,7 +206,10 @@ impl OpenHarmonyAppInner {
         if let Some(xcomponent) = self.xcomponent.as_ref() {
             // Callable from embedding apps; a failure here must not abort the
             // process (issue #87 minor-2 — this used to .expect).
-            if let Err(e) = xcomponent.native_xcomponent().set_frame_rate(min, max, expected) {
+            if let Err(e) = xcomponent
+                .native_xcomponent()
+                .set_frame_rate(min, max, expected)
+            {
                 crate::warn!("set_frame_rate({min}, {max}, {expected}) failed: {e:?}");
             }
         }
@@ -241,44 +230,6 @@ impl OpenHarmonyAppInner {
         self.render_owner.as_deref() == Some(owner)
     }
 
-    /// Latch the main-window decoration (title bar) height estimate.
-    ///
-    /// Called only from surface events (activate/update), the one point where
-    /// the XComponent rect is guaranteed fresh. The WM rect (windowRectChange)
-    /// is delivered before the surface relayout completes (observed ordering on
-    /// every resize in the DBG-D2 probe logs), so window_rects[0] is also
-    /// current here — the diff is the real title-bar inset. Out-of-range diffs
-    /// (surface mid-relayout, or window_rect not yet delivered) are rejected so
-    /// the cache keeps the last plausible value instead of transient garbage.
-    fn latch_decor_height(&mut self) {
-        // Physically impossible title-bar ceiling: real decor is ~146 px on the
-        // 2in1 reference device. Anything larger is a stale-rect diff.
-        const DECOR_HEIGHT_MAX: i32 = 320;
-        let Some(window) = self.window_rects.get(&0) else {
-            return;
-        };
-        let diff = window.height - self.rect.height;
-        let new_decor = if diff == 0 {
-            // Decorations hidden (fullscreen / setDecorations(false)): the
-            // surface fills the window exactly.
-            0
-        } else if diff > 0 && diff <= DECOR_HEIGHT_MAX {
-            diff
-        } else {
-            // diff < 0 or diff > MAX: transient — keep the previous estimate
-            // (and don't notify listeners).
-            return;
-        };
-        if new_decor == self.decor_height {
-            return;
-        }
-        self.decor_height = new_decor;
-        // Notify listeners (lock-free by contract — see field docs). Returning
-        // false removes the listener after this call.
-        self.decor_change_callbacks
-            .retain_mut(|(_, cb)| cb(new_decor));
-    }
-
     fn activate_surface(&mut self, owner: &str, raw_window: Option<RawWindow>, rect: Rect) -> bool {
         if !self.owns_render(owner) || self.surface_active {
             return false;
@@ -286,7 +237,6 @@ impl OpenHarmonyAppInner {
         self.raw_window = raw_window;
         self.rect = rect;
         self.surface_active = true;
-        self.latch_decor_height();
         true
     }
 
@@ -295,7 +245,6 @@ impl OpenHarmonyAppInner {
             return false;
         }
         self.rect = rect;
-        self.latch_decor_height();
         true
     }
 
@@ -319,12 +268,13 @@ impl OpenHarmonyAppInner {
         self.raw_window = None;
         self.xcomponent = None;
         self.rect = Rect::default();
-        // Clear only the main-window (key 0) rect: release_render_owner tears down the
+        // Clear only the main-window (key 0) rects: release_render_owner tears down the
         // main window's DefaultXComponent render surface. Sub-window rects (key >0) are
         // owned by their own Float sub-window lifetimes and cleared via separate paths.
         // NOTE: deactivate_surface intentionally does NOT reset window_rects — that
         // preserves the asymmetric semantics (only full release clears the rect cache).
         self.window_rects.remove(&0);
+        self.inner_rects.remove(&0);
         self.avoid_areas.clear();
         Some(surface_was_active)
     }
@@ -347,6 +297,45 @@ impl OpenHarmonyAppInner {
     /// (lifecycle.rs) with the windowId parsed from the ArkTS-wrapped options.
     pub fn set_window_rect(&mut self, window_id: i64, rect: Rect) {
         self.window_rects.insert(window_id, rect);
+    }
+
+    /// Per-window drawable-rect setter (issue Eulogizethesun/tauri#97). Called by
+    /// the same `window_rect_change` lifecycle closure with the `drawable` field
+    /// of the ArkTS wrap (`getWindowProperties().drawableRect`, pushed whenever
+    /// the system reports a rect change). Missing/failed reads simply don't call
+    /// this — the last snapshot stays until the next successful one.
+    pub fn set_inner_rect(&mut self, window_id: i64, rect: Rect) {
+        self.inner_rects.insert(window_id, rect);
+    }
+
+    /// Store one rect-change event's outer AND drawable rects under the single
+    /// `&mut self` borrow the caller already holds (issue Eulogizethesun/tauri#97
+    /// review: two separate lock acquisitions could let a concurrent
+    /// `inner_rect_for` read compose a NEW outer with a STALE/absent drawable).
+    /// `drawable = None` keeps the previous drawable snapshot (the wrap's
+    /// drawableRect read failed — see `set_inner_rect`).
+    pub fn set_window_rects(&mut self, window_id: i64, outer: Rect, drawable: Option<Rect>) {
+        self.set_window_rect(window_id, outer);
+        if let Some(rect) = drawable {
+            self.set_inner_rect(window_id, rect);
+        }
+    }
+
+    /// Inner (content-area) rect for the given window, physical px. Composes the
+    /// WM rect with the pushed drawable snapshot — see
+    /// [`OpenHarmonyApp::inner_rect_for`] (the public wrapper) for the full
+    /// semantics/fallback contract.
+    pub fn inner_rect_for(&self, window_id: i64) -> Rect {
+        let window = self.window_rect_for(window_id);
+        match self.inner_rects.get(&window_id) {
+            Some(drawable) => Rect {
+                left: window.left + drawable.left,
+                top: window.top + drawable.top,
+                width: drawable.width,
+                height: drawable.height,
+            },
+            None => window,
+        }
     }
 
     pub fn avoid_area(&self, area_type: AvoidAreaType) -> Option<AvoidArea> {
@@ -872,46 +861,6 @@ impl OpenHarmonyApp {
         self.inner.read().unwrap().content_rect()
     }
 
-    /// Cached main-window decoration (title bar) height in physical px.
-    /// Latched on surface events only — see `OpenHarmonyAppInner::decor_height`.
-    /// tao's inner_size/set_inner_size/inner_position must read this instead of
-    /// live-diffing window_rect − content_rect (async update race).
-    pub fn decor_height(&self) -> i32 {
-        self.inner
-            .read()
-            .map(|inner| inner.decor_height)
-            .unwrap_or(0)
-    }
-
-    /// Register a listener fired whenever the latched main-window decor height
-    /// changes (see `OpenHarmonyAppInner::decor_change_callbacks`). Returns an
-    /// id for `remove_decor_change_callback`. The listener runs on the thread
-    /// that latched the decor, with the app RwLock held — it must not call back
-    /// into OpenHarmonyApp APIs (deadlock); channel sends / atomics only.
-    pub fn register_decor_change_callback(
-        &self,
-        listener: std::sync::Arc<dyn Fn(i32) -> bool + Send + Sync>,
-    ) -> u64 {
-        self.inner
-            .write()
-            .map(|mut inner| {
-                let id = inner.next_decor_cb_id;
-                inner.next_decor_cb_id += 1;
-                inner.decor_change_callbacks.push((id, listener));
-                id
-            })
-            .unwrap_or(u64::MAX)
-    }
-
-    /// Remove a previously registered decor-change listener by id.
-    pub fn remove_decor_change_callback(&self, id: u64) {
-        if let Ok(mut inner) = self.inner.write() {
-            inner
-                .decor_change_callbacks
-                .retain(|(cb_id, _)| *cb_id != id);
-        }
-    }
-
     /// Per-window rect lookup (key = windowId; 0 = main window). See
     /// OpenHarmonyAppInner::window_rect_for. Used by tao's inner_size/outer_position/etc
     /// so each window reads its own rect instead of sharing a single field.
@@ -919,10 +868,17 @@ impl OpenHarmonyApp {
         self.inner.read().unwrap().window_rect_for(window_id)
     }
 
-    /// Per-window rect setter. Called from the lifecycle closure with the windowId
-    /// parsed from the ArkTS-wrapped windowRectChange options.
-    pub fn set_window_rect(&self, window_id: i64, rect: Rect) {
-        self.inner.write().unwrap().set_window_rect(window_id, rect);
+    /// Store one rect-change event's outer rect AND drawable-rect snapshot for a
+    /// window under ONE RwLock write acquisition (issue Eulogizethesun/tauri#97)
+    /// — the pair from a single event can never be observed torn by a concurrent
+    /// `inner_rect_for`. `drawable = None` (the wrap's drawableRect read failed)
+    /// keeps the previous drawable snapshot. Called from the `window_rect_change`
+    /// lifecycle closure with the windowId parsed from the ArkTS-wrapped options.
+    pub fn set_window_rects(&self, window_id: i64, outer: Rect, drawable: Option<Rect>) {
+        self.inner
+            .write()
+            .unwrap()
+            .set_window_rects(window_id, outer, drawable);
     }
 
     /// Last known cursor position in physical px (vp stored by the ArkTS
@@ -938,50 +894,30 @@ impl OpenHarmonyApp {
         )
     }
 
-    /// Decor (title-bar) height to compensate for the given window, in physical px.
-    ///
-    /// Invariant: window 0 is the one UIAbility main window; every id > 0 is a
-    /// Float sub-window (created via `create_os_window`, ids handed out from 1).
-    /// Float sub-windows ship their own title bar (FloatPage) and have no system
-    /// title bar, so their compensation is 0; the main window gets the cached
-    /// latched decor (see [`Self::decor_height`]).
-    pub fn decor_height_for(&self, window_id: i64) -> i32 {
-        if window_id == 0 {
-            self.decor_height().max(0)
-        } else {
-            0
-        }
-    }
-
-    /// Inner (content-area) rect for the given window, in physical px, with the
-    /// decor compensation applied internally (issue #87 major-10 — consumers no
-    /// longer hand-roll it). The window rect comes from the WM
-    /// (`windowRectChange`), the content offset from the XComponent surface,
-    /// and the title-bar inset from the cached decor — all read under ONE lock
-    /// so the three can't tear.
+    /// Inner (content-area) rect for the given window, in physical px (issue
+    /// Eulogizethesun/tauri#97). Composed from two system snapshots pushed by the
+    /// same `windowRectChange` event — the WM rect (outer) and the drawable rect
+    /// (inner口径, position relative to the window) — read under ONE lock so
+    /// they can't tear. The former hand-rolled `window_rect − latched decor`
+    /// conversion (and its estimate) is gone: the size/offset comes from the
+    /// system's own drawableRect.
     ///
     /// Semantics:
-    /// - `left/top` = window position + content offset (+ decor on the main window)
-    /// - `width` = window width (the title bar only affects height)
-    /// - `height` = window height − decor, saturating (≥ 0)
+    /// - `left/top` = window position + drawable offset (below the title bar on
+    ///   decorated windows; (0,0) for Float sub-windows)
+    /// - `width`/`height` = drawable (content) area size
+    ///
+    /// Fallback: before the first event carrying a readable drawableRect (e.g.
+    /// `getWindowProperties()` threw before content load), the OUTER rect is
+    /// returned as-is (decor assumed 0) — the same pre-observation transient the
+    /// old pre-latch path had. A runtime decor change that fires no
+    /// windowRectChange leaves the snapshot stale until the next rect change;
+    /// re-reading/re-setting inner size after such changes is the caller's
+    /// responsibility (per issue #97, compensation duty belongs to the app).
     pub fn inner_rect_for(&self, window_id: i64) -> Rect {
         self.inner
             .read()
-            .map(|inner| {
-                let window = inner.window_rect_for(window_id);
-                let content = inner.content_rect();
-                let decor = if window_id == 0 {
-                    inner.decor_height
-                } else {
-                    0
-                };
-                Rect {
-                    left: window.left + content.left,
-                    top: window.top + content.top + decor,
-                    width: window.width,
-                    height: (window.height as u32).saturating_sub(decor.max(0) as u32) as i32,
-                }
-            })
+            .map(|inner| inner.inner_rect_for(window_id))
             .unwrap_or_default()
     }
 
@@ -1114,6 +1050,24 @@ impl OpenHarmonyApp {
         HAS_EVENT.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Dispatch a key event into the tao event loop from the ArkTS pre-IME
+    /// handler (issue Eulogizethesun/tauri#109).
+    ///
+    /// The NDK XComponent key callback is structurally unreachable in webview
+    /// apps: the render node created by `render()` is never in the ArkUI focus
+    /// chain (no `focusable(true)` — official NAPI XComponent samples require
+    /// it — and the Web component grabs focus on load while overlaying the
+    /// render surface), so `WindowEvent::KeyboardInput` never fired. ArkTS
+    /// `onKeyPreIme` sees every key the web sees; this entry feeds them to
+    /// the exact same `Event::Input` dispatch the NDK path uses
+    /// (xcomponent.rs `on_key_event`), so tao's repeat detection, modifier
+    /// tracking and keycode mapping all apply unchanged.
+    pub fn dispatch_key_event(&self, data: KeyEventData) {
+        if let Some(ref mut h) = *self.event_loop.borrow_mut() {
+            h(Event::Input(InputEvent::KeyEvent(data)));
+        }
+    }
+
     /// Register back press interceptor. Return `true` to intercept back action, `false` to pass through.
     pub fn on_back_press_intercept<F: FnMut() -> bool + 'static>(&self, interceptor: F) {
         self.back_press_interceptor
@@ -1239,11 +1193,13 @@ pub fn drain_pending_window_closes() -> Vec<i32> {
 
 /// Last known cursor X position, in vp relative to the MainPage component
 /// (f64 stored as u64 bits). Read through [`OpenHarmonyApp::cursor_position`].
-pub(crate) static CURSOR_POSITION_X: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static CURSOR_POSITION_X: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// Last known cursor Y position, in vp relative to the MainPage component
 /// (f64 stored as u64 bits). Read through [`OpenHarmonyApp::cursor_position`].
-pub(crate) static CURSOR_POSITION_Y: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static CURSOR_POSITION_Y: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// NAPI function called from the ArkTS `onMouse` handler (Move/Press) to
 /// update the tracked cursor position. Coordinates are MainPage-relative vp.
@@ -1497,7 +1453,10 @@ mod want_parameters_tests {
 #[cfg(test)]
 mod tests {
     use super::OpenHarmonyAppInner;
-    use crate::{update_cursor_position, AvoidArea, AvoidAreaType, CURSOR_POSITION_X, CURSOR_POSITION_Y, Rect};
+    use crate::{
+        update_cursor_position, AvoidArea, AvoidAreaType, Rect, CURSOR_POSITION_X,
+        CURSOR_POSITION_Y,
+    };
 
     #[test]
     fn render_owner_rejects_overlap_and_ignores_stale_surface_callbacks() {
@@ -1569,80 +1528,132 @@ mod tests {
     }
 
     #[test]
-    fn decor_height_latches_only_plausible_surface_diffs() {
+    fn inner_rect_for_composes_outer_position_with_drawable_offset() {
+        // Issue Eulogizethesun/tauri#97: inner reads come from the system's
+        // drawableRect snapshot (pushed alongside the WM rect by the same
+        // windowRectChange event), NOT from a window_rect − decor estimate.
         let mut inner = OpenHarmonyAppInner::new();
-        inner.claim_render_owner("owner").unwrap();
         inner.window_rects.insert(
             0,
             Rect {
-                top: 0,
-                left: 0,
+                top: 76,
+                left: 76,
                 width: 2090,
                 height: 1394,
             },
         );
-        // Surface event: content 146px shorter than the window → latch 146.
-        assert!(inner.activate_surface(
-            "owner",
-            None,
+        // Real reference-device shape: title bar 146px, content below it.
+        inner.inner_rects.insert(
+            0,
             Rect {
-                top: 0,
+                top: 146,
                 left: 0,
                 width: 2090,
                 height: 1248,
-            }
-        ));
-        assert_eq!(inner.decor_height, 146);
-
-        // Garbage diffs (surface mid-relayout while the WM rect already moved, or
-        // vice versa) are rejected — the cache keeps the last plausible value.
-        assert!(inner.update_surface_rect(
-            "owner",
+            },
+        );
+        assert_eq!(
+            inner.inner_rect_for(0),
             Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 570,
-            }
-        ));
-        assert_eq!(inner.decor_height, 146, "824px diff must be rejected");
-        assert!(inner.update_surface_rect(
-            "owner",
-            Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 1468,
-            }
-        ));
-        assert_eq!(inner.decor_height, 146, "negative diff must be rejected");
-
-        // Decorations hidden (fullscreen / setDecorations(false)): surface fills
-        // the window exactly → latch 0.
-        assert!(inner.update_surface_rect(
-            "owner",
-            Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 1394,
-            }
-        ));
-        assert_eq!(inner.decor_height, 0);
-
-        // No main-window rect yet (before the first windowRectChange): the latch
-        // is a no-op and keeps the previous value.
-        inner.window_rects.remove(&0);
-        assert!(inner.update_surface_rect(
-            "owner",
-            Rect {
-                top: 0,
-                left: 0,
+                top: 76 + 146,
+                left: 76,
                 width: 2090,
                 height: 1248,
             }
-        ));
-        assert_eq!(inner.decor_height, 0);
+        );
+    }
+
+    #[test]
+    fn inner_rect_for_falls_back_to_outer_rect_before_first_drawable() {
+        // Transient before the first windowRectChange carrying a readable
+        // drawableRect: return the outer rect as-is (decor 0) — identical to
+        // the old pre-latch behavior. Never a guessed decor value.
+        let mut inner = OpenHarmonyAppInner::new();
+        inner.window_rects.insert(
+            3,
+            Rect {
+                top: 10,
+                left: 20,
+                width: 800,
+                height: 600,
+            },
+        );
+        assert_eq!(
+            inner.inner_rect_for(3),
+            Rect {
+                top: 10,
+                left: 20,
+                width: 800,
+                height: 600,
+            }
+        );
+        // And (0,0,0,0) for an entirely unobserved window, like the old default.
+        assert_eq!(inner.inner_rect_for(7), Rect::default());
+    }
+
+    #[test]
+    fn inner_rects_are_per_window_and_survive_main_surface_release_for_subwindows() {
+        let mut inner = OpenHarmonyAppInner::new();
+        inner.claim_render_owner("owner").unwrap();
+        inner.set_inner_rect(
+            0,
+            Rect {
+                top: 146,
+                left: 0,
+                width: 2090,
+                height: 1248,
+            },
+        );
+        inner.set_inner_rect(
+            2,
+            Rect {
+                top: 0,
+                left: 0,
+                width: 760,
+                height: 1100,
+            },
+        );
+        assert_eq!(inner.inner_rect_for(2).width, 760);
+        assert_eq!(inner.inner_rect_for(2).height, 1100);
+        // release_render_owner tears down the MAIN window surface: key 0's
+        // cached rects go with it; sub-window snapshots are unaffected.
+        assert_eq!(inner.release_render_owner("owner"), Some(false));
+        assert!(!inner.inner_rects.contains_key(&0));
+        assert_eq!(inner.inner_rect_for(2).height, 1100);
+    }
+
+    #[test]
+    fn inner_rect_read_is_exactly_the_pushed_snapshot_no_estimate_arithmetic() {
+        // Zero-drift guarantee for save/restore (issue #97 test requirement 3):
+        // inner reads must reproduce the pushed system snapshot exactly — there
+        // is no estimate arithmetic between the snapshot and the read that
+        // could accumulate error across cycles.
+        let mut inner = OpenHarmonyAppInner::new();
+        for cycle in 0..8 {
+            let (w, h) = (1000 + cycle, 700 - cycle);
+            inner.window_rects.insert(
+                0,
+                Rect {
+                    top: 76,
+                    left: 76,
+                    width: w,
+                    height: h,
+                },
+            );
+            inner.set_inner_rect(
+                0,
+                Rect {
+                    top: 146,
+                    left: 0,
+                    width: w,
+                    height: h - 146,
+                },
+            );
+            let read = inner.inner_rect_for(0);
+            assert_eq!((read.width, read.height), (w, h - 146));
+            // save→restore would push the same drawable back next cycle; the
+            // read never feeds arithmetic that could shift it.
+        }
     }
 
     #[test]
@@ -1656,111 +1667,6 @@ mod tests {
         assert_eq!(
             f64::from_bits(CURSOR_POSITION_Y.load(Ordering::Relaxed)),
             20.25
-        );
-    }
-
-    #[test]
-    fn decor_change_callbacks_fire_only_on_real_changes() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::{Arc, Mutex};
-        let mut inner = OpenHarmonyAppInner::new();
-        inner.claim_render_owner("owner").unwrap();
-        inner.window_rects.insert(
-            0,
-            Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 1394,
-            },
-        );
-
-        let seen: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(vec![]));
-        // Listener A: stays registered, records every value.
-        let calls_a = Arc::new(AtomicUsize::new(0));
-        let seen_a = seen.clone();
-        let a = {
-            let calls_a = calls_a.clone();
-            Arc::new(move |decor: i32| -> bool {
-                calls_a.fetch_add(1, Ordering::SeqCst);
-                seen_a.lock().unwrap().push(decor);
-                true
-            })
-        };
-        // Listener B: one-shot — removes itself after the first fire.
-        let calls_b = Arc::new(AtomicUsize::new(0));
-        let seen_b = seen.clone();
-        let b = {
-            let calls_b = calls_b.clone();
-            Arc::new(move |decor: i32| -> bool {
-                calls_b.fetch_add(1, Ordering::SeqCst);
-                seen_b.lock().unwrap().push(decor);
-                false
-            })
-        };
-        inner.decor_change_callbacks.push((0, a));
-        inner.decor_change_callbacks.push((1, b));
-        inner.next_decor_cb_id = 2;
-
-        // Latch 146 → both listeners fire once with the new value.
-        assert!(inner.activate_surface(
-            "owner",
-            None,
-            Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 1248
-            },
-        ));
-        assert_eq!(inner.decor_height, 146);
-        assert_eq!(calls_a.load(Ordering::SeqCst), 1);
-        assert_eq!(calls_b.load(Ordering::SeqCst), 1);
-
-        // Same value again (surface rect re-delivered with the same diff): no
-        // listener fires, one-shot B is already gone.
-        assert!(inner.update_surface_rect(
-            "owner",
-            Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 1248
-            },
-        ));
-        assert_eq!(calls_a.load(Ordering::SeqCst), 1);
-        assert_eq!(calls_b.load(Ordering::SeqCst), 1);
-
-        // Transient garbage (824px diff): rejected, no notification.
-        assert!(inner.update_surface_rect(
-            "owner",
-            Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 570
-            },
-        ));
-        assert_eq!(calls_a.load(Ordering::SeqCst), 1);
-
-        // Real change (decorations hidden → 0): only A remains and fires.
-        assert!(inner.update_surface_rect(
-            "owner",
-            Rect {
-                top: 0,
-                left: 0,
-                width: 2090,
-                height: 1394
-            },
-        ));
-        assert_eq!(inner.decor_height, 0);
-        assert_eq!(calls_a.load(Ordering::SeqCst), 2);
-        assert_eq!(calls_b.load(Ordering::SeqCst), 1);
-        assert_eq!(*seen.lock().unwrap(), vec![146, 146, 0]);
-        assert_eq!(
-            inner.decor_change_callbacks.len(),
-            1,
-            "one-shot listener must be removed"
         );
     }
 }

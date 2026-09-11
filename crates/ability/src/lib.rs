@@ -2,6 +2,7 @@ mod app;
 mod area;
 mod bridge;
 mod configuration;
+mod display;
 mod draw;
 mod error;
 mod event;
@@ -32,7 +33,6 @@ pub mod version;
 
 #[cfg(feature = "window")]
 pub mod window;
-
 
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
@@ -94,6 +94,7 @@ pub use app::*;
 pub use area::*;
 pub use bridge::*;
 pub use configuration::*;
+pub use display::*;
 pub use draw::*;
 pub use error::*;
 pub use event::*;
