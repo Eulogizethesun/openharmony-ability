@@ -306,3 +306,11 @@ export function notifyKeySynthesisController(
 ): void {
   controllers.set(windowId, controller);
 }
+
+/** Controller registry teardown (design.md D13). Called from WindowManager's
+ * window-lifetime sinks — unregisterUIAbilityStage (spawned UIAbility close,
+ * skipping the primary's id 0) and removeWindow (Float sub-window close).
+ * Without this the map grew one WebviewController entry per destroyed window. */
+export function unregisterKeySynthesisController(windowId: number): void {
+  controllers.delete(windowId);
+}
