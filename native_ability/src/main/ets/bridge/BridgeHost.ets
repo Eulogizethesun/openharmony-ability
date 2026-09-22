@@ -629,7 +629,7 @@ class BridgeHost {
         // Deep-copy rect fields (not system object ref) per design.md D5.
         // Issue Eulogizethesun/tauri#97: attach the same moment's drawableRect
         // (sync getWindowProperties snapshot) so the Rust inner-rect cache
-        // tracks the system's own inner口径 value — omitted when unreadable.
+        // tracks the system-defined inner value — omitted when unreadable.
         const wrapped: WindowRectEventWrap = {
           windowId: 0,
           reason: options.reason,
@@ -688,6 +688,37 @@ class BridgeHost {
     } catch {}
     try {
       componentWindow.on("keyboardHeightChange", onKeyboardHeightChange);
+    } catch {}
+
+    // Review R13: seed the rect caches at attach time — attachComponentWindow
+    // resolves the window through a UIContext, so content is loaded here and
+    // drawableRect is readable (unlike the NativeAbility registration point,
+    // which runs pre-load). Dispatches as windowId=0 through the same throttle
+    // as the real handler; an extra seed is idempotent (pair write + no rect
+    // diff → no duplicate events).
+    try {
+      if (this.component === state && !this.closing && !this.disposed) {
+        const snapshot = WindowManager.readWindowRectSnapshot(componentWindow);
+        if (snapshot) {
+          const wrapped: WindowRectEventWrap = {
+            windowId: 0,
+            reason: window.RectChangeReason.UNDEFINED,
+            rect: snapshot.rect,
+            drawable: snapshot.drawable,
+          };
+          WindowManager.getInstance().throttledRectDispatch(
+            0,
+            wrapped,
+            (w: object) => {
+              if (this.component !== state || this.closing || this.disposed) {
+                return;
+              }
+              this.applicationLifecycle?.windowStageEventCallback.onWindowRectChange(w);
+            },
+            "rect",
+          );
+        }
+      }
     } catch {}
   }
 

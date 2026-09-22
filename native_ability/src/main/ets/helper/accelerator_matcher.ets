@@ -43,6 +43,15 @@ MODIFIER_KEYCODE_TO_NAME.set(2047, "shift");
 MODIFIER_KEYCODE_TO_NAME.set(2048, "shift");
 MODIFIER_KEYCODE_TO_NAME.set(2045, "alt");
 MODIFIER_KEYCODE_TO_NAME.set(2046, "alt");
+MODIFIER_KEYCODE_TO_NAME.set(2076, "super");
+MODIFIER_KEYCODE_TO_NAME.set(2077, "super");
+
+// Modifiers the ArkUI `getModifierKeyState` fallback may be queried with —
+// per ArkUI docs only 'Ctrl' | 'Alt' | 'Shift' are legal. "Super" is NOT:
+// passing it throws 401 "indicate the keys are illegal", which (uncaught in
+// onKeyPreIme) crashed the app on EVERY keystroke (HAD-W32 PC jscrash ×5,
+// 2026-09-20). "Super" stays detectable via keydown/keyup tracking only.
+const API_QUERYABLE_MODIFIERS: Set<string> = new Set(["Ctrl", "Alt", "Shift"]);
 
 /**
  * Modifier keys tracked from their own down/up events (issue #111 device
@@ -62,7 +71,7 @@ MODIFIER_KEYCODE_TO_NAME.set(2046, "alt");
  */
 const trackedModifiers: Set<string> = new Set();
 
-/** Flush every matcher's tracked modifiers (window focus loss / menu open). */
+/** Flush the shared module-level tracked-modifier set (window focus loss / menu open). */
 export function clearAllTrackedModifiers(): void {
   trackedModifiers.clear();
 }
@@ -116,11 +125,6 @@ export class AcceleratorMatcher {
     }
   }
 
-  /** Drop this matcher's tracked modifiers (see module doc for when). */
-  clearTrackedModifiers(): void {
-    trackedModifiers.clear();
-  }
-
   /**
    * Build the combo string ("ctrl+shift+…+key") for a key event, or null
    * when the event cannot start a combo (not a Down, modifier-only, or no
@@ -147,10 +151,16 @@ export class AcceleratorMatcher {
     if (this.isModifierPressed(event, "Ctrl")) combo += "ctrl+";
     if (this.isModifierPressed(event, "Shift")) combo += "shift+";
     if (this.isModifierPressed(event, "Alt")) combo += "alt+";
+    // Super must come after Alt: muda's KeyAccelerator::Display order is
+    // Ctrl+Shift+Alt+Super, and both sides lowercase before exact-match.
+    if (this.isModifierPressed(event, "Super")) combo += "super+";
     return combo + keyText.toLowerCase();
   }
 
   matches(event: KeyEvent): boolean {
+    // Clear the last hit up front: getMatchedItem() must never observe a
+    // stale item after a miss (all the early returns below).
+    this.matchedItem = null;
     const combo = this.buildComboForEvent(event);
     if (combo === null) {
       return false;
@@ -165,28 +175,56 @@ export class AcceleratorMatcher {
     console.info(
       `[Accelerator] combo="${combo}", available=[${Array.from(this.accelerators.keys()).join(",")}]`,
     );
-    if (this.accelerators.has(combo)) {
-      this.matchedItem = this.accelerators.get(combo)!;
-      return true;
+    const candidate = this.accelerators.get(combo);
+    if (candidate === undefined) {
+      return false;
     }
-    return false;
+    // Desktop semantics: a disabled item's accelerator never fires —
+    // Windows "About Keyboard Accelerators": an accelerator whose identifier
+    // matches a grayed/disabled menu item "is disabled and does not generate
+    // a WM_COMMAND or WM_SYSCOMMAND message"; macOS NSMenuItem.isEnabled:
+    // "If a menu item is disabled, its keyboard equivalent is also disabled";
+    // GTK3 gtkwidget.c closure_accel_activate is gated on
+    // gtk_widget_is_sensitive. Treat the hit as a miss and do NOT consume the
+    // key, so it falls through to the webview / DOM-synthesis path — same as
+    // TranslateAccelerator returning 0 for a grayed item on Windows.
+    if (candidate.enabled === false) {
+      console.info(
+        `[Accelerator] combo="${combo}" matches disabled item id=${candidate.id} — ignored`,
+      );
+      return false;
+    }
+    this.matchedItem = candidate;
+    return true;
   }
 
   private isModifierPressed(event: KeyEvent, modifier: string): boolean {
     // Primary: tracking from modifier keydown/keyup events —
     // getModifierKeyState is unreliable on device (see module doc).
-    if (trackedModifiers.has(modifier)) {
+    // The set stores lowercase names ("ctrl"/"shift"/"alt"/"super", see
+    // MODIFIER_KEYCODE_TO_NAME) while callers pass "Ctrl"/"Shift"/"Alt"/"Super"
+    // (the capitalized forms the getModifierKeyState fallback needs below).
+    if (trackedModifiers.has(modifier.toLowerCase())) {
       return true;
     }
     // Fallback: the API, for events that bypassed tracking (e.g. a key
     // arriving mid-combo from a window that never saw the modifier down).
-    if (event.getModifierKeyState) {
-      const result = event.getModifierKeyState([modifier]);
-      if (typeof result === "boolean") {
-        return result;
-      }
-      if (result && typeof result === "object") {
-        return !!result[modifier];
+    // Only queryable modifiers are asked (API_QUERYABLE_MODIFIERS — "Super"
+    // throws) and the call is guarded: a best-effort fallback must never
+    // take down the onKeyPreIme key pipeline with an uncaught throw.
+    if (event.getModifierKeyState && API_QUERYABLE_MODIFIERS.has(modifier)) {
+      try {
+        const result = event.getModifierKeyState([modifier]);
+        if (typeof result === "boolean") {
+          return result;
+        }
+        if (result && typeof result === "object") {
+          return !!result[modifier];
+        }
+      } catch (e) {
+        // Parameter rejection / API variance across builds: treat as
+        // "cannot ask" — the tracked set above stays authoritative.
+        console.info(`[Accelerator] getModifierKeyState(${modifier}) rejected: ${e}`);
       }
     }
     return false;

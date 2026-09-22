@@ -92,6 +92,16 @@ struct MainPage {
       .height("100%")
       .backgroundColor(Color.Transparent)
       .onKeyPreIme((event: KeyEvent) => {
+        // Track modifier down/up for EVERY event (issue #111 residue root
+        // cause, 2026-09-22 device finding): every matcher branch below is
+        // KeyType.Down-gated, so modifier KEYUP events never reached
+        // AcceleratorMatcher.trackModifiers — a released Ctrl left the
+        // module-level bit stuck indefinitely (device: bare J still assembled
+        // "ctrl+j" 2min15s after the only Ctrl press; menu-close handoff lost
+        // the keyup 3/3 with real keyboard). The menu sub-window's
+        // Menu.onKeyEvent tracks both Down and Up, which is why the residue
+        // only manifested once the keyup landed on a page handler.
+        this.acceleratorMatcher.trackModifiers(event);
         // Block native clipboard shortcuts when with_clipboard(false) (ohos-webview-flag-clipboard)
         if (
           event.type === KeyType.Down &&

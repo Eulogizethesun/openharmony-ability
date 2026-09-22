@@ -1247,7 +1247,9 @@ static COOKIE_SYNC_APP: OnceLock<OpenHarmonyApp> = OnceLock::new();
 /// the app handle for [`cookies_for_url_on_main_thread`].
 ///
 /// Call once during runtime setup. Mirrors `tray_icon::set_ohos_app`, which
-/// registers its own bridge plugins the same way. The ArkTS counterpart
+/// registers its own bridge plugins the same way. wry embedders don't call
+/// this directly — `wry::set_ohos_app` forwards here, and tauri calls that
+/// automatically during app initialization. The ArkTS counterpart
 /// (`WebviewCookiePlugin`) must be present in the host Ability's
 /// `bridgePlugins` list.
 pub fn set_cookie_sync_app(app: &OpenHarmonyApp) -> Result<()> {
@@ -1273,7 +1275,7 @@ pub fn cookies_for_url_on_main_thread(url: &str) -> Result<String> {
     let app = COOKIE_SYNC_APP.get().ok_or_else(|| {
         Error::from_reason(
             "webview cookie sync app not set — the embedding runtime must call \
-             set_cookie_sync_app during setup",
+             wry::set_ohos_app during setup",
         )
     })?;
     let env_cell = get_main_thread_env();

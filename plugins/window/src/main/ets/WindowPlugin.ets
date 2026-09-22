@@ -690,6 +690,19 @@ export class WindowPlugin extends AsyncPluginBase {
               sourceRealId = resolved;
             }
           }
+          // Review R15 (issue #131): source==target means single-window /
+          // no tracked source (untracked, main-window, or the last-interacted
+          // sub-window was destroyed) — shiftAppWindowFocus(src, src) has no
+          // defined behavior in the official docs and the transfer is a
+          // semantic no-op; skip it and report success.
+          if (sourceRealId === targetRealId) {
+            hilog.info(
+              DOMAIN,
+              TAG,
+              "focus: source==target (last-interacted window untracked, main, or destroyed), skipping shiftAppWindowFocus",
+            );
+            return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
+          }
           const windowModule: ESObject = window;
           if (typeof windowModule.shiftAppWindowFocus !== "function") {
             throw new Error("shiftAppWindowFocus is unavailable on this API level");
@@ -894,14 +907,91 @@ export class WindowPlugin extends AsyncPluginBase {
 
     if (action === "set-limits") {
       // Delegates to WindowManager.setWindowLimits (API11+, px, 0 = no limit).
+      // Review R12: OHOS setWindowLimits constrains the OUTER windowRect while
+      // the caller's min/max are INNER sizes — compensate with the precise
+      // system chrome (the same one-snapshot algorithm as resize-inner above:
+      // chrome = windowRect − drawableRect per axis) so an inner min/max
+      // lands as an inner min/max. Only non-zero slots are compensated: 0
+      // means "no limit / system default" and must stay 0 (compensating it
+      // would pin the window at ~chrome px). A decor change after dispatch is
+      // the caller's business — same accepted limitation as resize-inner.
       const request = parseLimitsRequest(payload);
-      WindowManager.getInstance().setWindowLimits(
+      const win = this.requireWindow(request.windowId, context);
+      let chromeWidth = 0;
+      let chromeHeight = 0;
+      try {
+        const props = win.getWindowProperties();
+        const outer = props.windowRect;
+        const drawable = props.drawableRect;
+        if (drawable.width > 0 && drawable.height > 0) {
+          // Precise snapshot: both rects from one getWindowProperties() call.
+          if (outer.width <= 0 || outer.height <= 0) {
+            throw new Error(
+              `degenerate window rect (${outer.width}x${outer.height} — window state abnormal)`,
+            );
+          }
+          chromeWidth = outer.width - drawable.width;
+          chromeHeight = outer.height - drawable.height;
+          if (chromeWidth < 0 || chromeHeight < 0) {
+            throw new Error(
+              `drawable rect (${drawable.width}x${drawable.height}) exceeds window rect (${outer.width}x${outer.height})`,
+            );
+          }
+        } else if (request.windowId > 0) {
+          // Float sub-window (tao windowId > 0) with an unreadable/degenerate
+          // drawableRect — sub-windows are created with decorEnabled:false,
+          // so chrome 0 is exact BY CONSTRUCTION (same reasoning as the
+          // resize-inner branch above; keyed on windowId, not
+          // WindowProperties.type, per the issue #97 review finding).
+        } else {
+          // Main window with an unreadable drawableRect (content not loaded /
+          // abnormal state — e.g. the builder-time limits dispatch races
+          // content load). Degrade rather than fail: limits are boundaries,
+          // not targets — inner-sized limits still bound the window (off by
+          // the chrome, exactly the pre-R12 behavior), while failing would
+          // leave it completely unconstrained.
+          hilog.warn(
+            DOMAIN,
+            TAG,
+            "set-limits %{public}d: no precise decor (outer=%{public}dx%{public}d drawable=%{public}dx%{public}d) — chrome compensation skipped, limits remain inner-sized",
+            request.windowId,
+            outer.width,
+            outer.height,
+            drawable.width,
+            drawable.height,
+          );
+        }
+      } catch (error) {
+        // Snapshot threw / was abnormal — same degradation as above.
+        hilog.warn(
+          DOMAIN,
+          TAG,
+          "set-limits %{public}d: chrome compensation skipped (%{public}s) — limits remain inner-sized",
+          request.windowId,
+          String(error),
+        );
+      }
+      const minW = request.minWidth > 0 ? request.minWidth + chromeWidth : 0;
+      const minH = request.minHeight > 0 ? request.minHeight + chromeHeight : 0;
+      const maxW = request.maxWidth > 0 ? request.maxWidth + chromeWidth : 0;
+      const maxH = request.maxHeight > 0 ? request.maxHeight + chromeHeight : 0;
+      hilog.info(
+        DOMAIN,
+        TAG,
+        "set-limits %{public}d: inner min=%{public}dx%{public}d max=%{public}dx%{public}d chrome=%{public}dx%{public}d -> outer min=%{public}dx%{public}d max=%{public}dx%{public}d",
         request.windowId,
         request.minWidth,
         request.minHeight,
         request.maxWidth,
         request.maxHeight,
+        chromeWidth,
+        chromeHeight,
+        minW,
+        minH,
+        maxW,
+        maxH,
       );
+      WindowManager.getInstance().setWindowLimits(request.windowId, minW, minH, maxW, maxH);
       return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
@@ -913,6 +1003,7 @@ export class WindowPlugin extends AsyncPluginBase {
       // context, so hilog is safe everywhere here.
       const request = parseWindowIdRequest(payload);
       const notifId = ++attentionNotifId;
+      let retriedOnce = false; // 1600004 → authorize → retry fires at most once
       const doPublish = (): void => {
         notificationManager
           .publish({
@@ -941,10 +1032,19 @@ export class WindowPlugin extends AsyncPluginBase {
               String(code),
             );
             // 1600004 = notification not enabled → pop the system authorization
-            // dialog (requestEnableNotification) and retry once.
-            if (code === 1600004) {
+            // dialog and retry once. The no-arg requestEnableNotification() is
+            // deprecated since API 12; the UIAbilityContext overload (API 10+,
+            // the official replacement) pops the same dialog and REJECTS with
+            // 1600004 when the user refuses, so the retry only runs after a
+            // real grant. (The official FAQ — overload-agnostic in its wording —
+            // documents that non-first calls resolve success regardless of the
+            // user's choice; on the old no-arg form that looped
+            // publish↔request forever after a denial. The retriedOnce guard
+            // below holds under either reading.)
+            if (code === 1600004 && !retriedOnce) {
+              retriedOnce = true;
               notificationManager
-                .requestEnableNotification()
+                .requestEnableNotification(context.abilityContext)
                 .then(() => {
                   hilog.info(
                     DOMAIN,

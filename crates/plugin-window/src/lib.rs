@@ -576,7 +576,7 @@ impl WindowClient {
 
     /// Queries the system geometry for one window in a single atomic
     /// `getWindowProperties()` snapshot: the WM (outer) rect and the drawable
-    /// (inner口径) rect, both in physical px (issue Eulogizethesun/tauri#97).
+    /// (system-defined inner) rect, both in physical px (issue Eulogizethesun/tauri#97).
     ///
     /// This is the authoritative read-back source for verifying
     /// [`Self::resize_inner_window`] landed the requested inner size — assert

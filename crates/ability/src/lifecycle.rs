@@ -207,9 +207,11 @@ pub fn create_lifecycle_handle<'a>(
     // `getWindowProperties().drawableRect` snapshot (position relative to the
     // window + drawable-area size, px), read synchronously by the ArkTS handler.
     // Optional-with-skip: when the ArkTS read threw (window not yet created /
-    // content not loaded) the field is absent — the last snapshot stays until
-    // the next successful one. Both rects are stored under ONE lock so a
-    // concurrent inner_rect_for can never see a torn pair.
+    // content not loaded) the field is absent — the last snapshot pair stays
+    // (BOTH rects, review R14: set_window_rects skips the update entirely so a
+    // new outer can never be composed with a stale drawable) until the next
+    // successful one. Both rects are stored under ONE lock so a concurrent
+    // inner_rect_for can never see a torn pair.
     let window_rect_app = app.clone();
     let window_rect_change =
         env.create_function_from_closure("window_rect_change", move |ctx| {

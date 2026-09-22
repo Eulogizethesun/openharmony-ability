@@ -142,6 +142,13 @@ pub fn ability(attr: TokenStream, item: TokenStream) -> TokenStream {
                     action,
                     device_id,
                     source: EventSource::Keyboard,
+                    // `timestamp: 0` is a placeholder, harmless today: tao's
+                    // OHOS backend never reads this field — repeat detection
+                    // is keycode-based (pressed-keys set), and the winit-level
+                    // KeyEvent it dispatches carries no time. (The ArkTS
+                    // KeyEvent does expose `timestamp` — ns since boot, same
+                    // unit as the NDK field — so forward it here if a
+                    // consumer ever appears.)
                     timestamp: 0,
                 });
             }

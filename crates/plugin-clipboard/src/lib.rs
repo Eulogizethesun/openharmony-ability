@@ -304,6 +304,20 @@ fn validate_image_dimensions(rgba: &[u8], width: u32, height: u32) -> Result<()>
     Ok(())
 }
 
+/// Upper bound on the total pixel count `decode_png_base64` will decode.
+///
+/// The output buffer is sized straight from the PNG header
+/// (`reader.output_buffer_size()`), so a lying IHDR can request an arbitrary
+/// allocation before any pixel data is validated — a ~45-byte CRC-valid
+/// file claiming 65535x65535 RGBA asks for a ~16 GiB zeroed buffer. Capping
+/// at 1<<26 px bounds that allocation to 256 MiB (RGBA8) while leaving
+/// headroom for every realistic clipboard image: the pasteboard itself is
+/// capped at 128 MB by default (≈33 Mpx RGBA), a 4K screenshot is 8.3 Mpx,
+/// and an extreme 1080x50000 long screenshot is 54 Mpx.
+/// Mirrored by MAX_DECODE_PIXELS in ClipboardPlugin.ets.
+/// (Eulogizethesun/tauri#142)
+const MAX_DECODE_PIXELS: u64 = 1 << 26;
+
 /// Decodes the bridge's base64 PNG response into RGBA8.
 ///
 /// `width`/`height` come from the ArkTS PixelMap info and are cross-checked
@@ -325,6 +339,15 @@ fn decode_png_base64(png_base64: &str, width: u32, height: u32) -> Result<Clipbo
     let mut reader = decoder
         .read_info()
         .map_err(|e| reason(format!("PNG decode failed: {e}")))?;
+    // The IHDR is untrusted until the pixel data decodes — enforce the size
+    // cap before it drives the output-buffer allocation.
+    let (header_w, header_h) = (reader.info().width, reader.info().height);
+    let pixels = header_w as u64 * header_h as u64;
+    if pixels > MAX_DECODE_PIXELS {
+        return Err(reason(format!(
+            "image too large: {header_w}x{header_h} ({pixels} px) exceeds the {MAX_DECODE_PIXELS} px limit"
+        )));
+    }
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader
         .next_frame(&mut buf)
@@ -473,5 +496,78 @@ mod tests {
     fn read_image_rejects_invalid_base64() {
         let err = decode_png_base64("!!not base64!!", 1, 1).expect_err("bad base64 rejected");
         assert!(err.reason.contains("base64 decode failed"));
+    }
+
+    /// Minimal CRC-32 (IEEE 802.3, as the PNG spec requires) for the
+    /// hand-built PNG headers below — the png crate checks chunk CRCs during
+    /// `read_info`, so the forged IHDR/IDAT must be self-consistent.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in bytes {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    fn push_png_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+        let mut crc_input = Vec::new();
+        crc_input.extend_from_slice(chunk_type);
+        crc_input.extend_from_slice(data);
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(chunk_type);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
+    }
+
+    /// Builds a base64 PNG whose IHDR claims `width`x`height` 8-bit RGBA but
+    /// carries no pixel data (empty IDAT). `read_info` succeeds on this — it
+    /// only needs to reach the first IDAT chunk — so the decode path runs
+    /// the pre-allocation pixel check against a lying header.
+    fn lying_header_png_base64(width: u32, height: u32) -> String {
+        use base64::Engine as _;
+
+        let mut png = Vec::new();
+        png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        // 8-bit RGBA, deflate, adaptive filtering, no interlace.
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        push_png_chunk(&mut png, b"IHDR", &ihdr);
+        push_png_chunk(&mut png, b"IDAT", &[]);
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    }
+
+    #[test]
+    fn read_image_rejects_oversized_png_header_before_allocating() {
+        // 65535x65535 RGBA would demand a ~16 GiB output buffer from a
+        // ~45-byte file; the cap must fire before that allocation.
+        let png_base64 = lying_header_png_base64(65535, 65535);
+        let err =
+            decode_png_base64(&png_base64, 65535, 65535).expect_err("oversized IHDR rejected");
+        assert!(err.reason.contains("image too large"));
+    }
+
+    #[test]
+    fn read_image_pixel_cap_boundary() {
+        // One row over the cap (8192x8193) is rejected...
+        let over = lying_header_png_base64(8192, 8193);
+        assert!(decode_png_base64(&over, 8192, 8193)
+            .expect_err("one row over the cap is rejected")
+            .reason
+            .contains("image too large"));
+        // ...while a small lying header passes the cap and only fails later
+        // at decode (empty IDAT) — proving the check gates the allocation,
+        // not decoding itself.
+        let small = lying_header_png_base64(2, 1);
+        let err = decode_png_base64(&small, 2, 1).expect_err("empty IDAT fails decode");
+        assert!(err.reason.contains("PNG decode failed"));
     }
 }

@@ -146,8 +146,8 @@ pub enum Event<'a> {
         uri: String,
     },
 
-    /// ability prepare-to-terminate event (PC/2in1 pre-close interception)
-    /// alias UIAbility.onPrepareToTerminateAsync
+    /// ability prepare-to-terminate event (PC/2in1 pre-close interception,
+    /// API 15+) alias UIAbility.onPrepareToTerminateAsync
     /// https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-app-ability-uiability#onpreparetoterminateasync15
     ///
     /// Fired BEFORE any teardown when the user closes the app via the window

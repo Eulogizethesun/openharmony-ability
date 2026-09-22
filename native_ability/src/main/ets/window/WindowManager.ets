@@ -15,12 +15,17 @@ import {
   setZoomHotkeysEnabled,
 } from "../helper/accelerator_matcher";
 import web_webview from "@ohos.web.webview";
-import { RectThrottle, WindowRectEventWrap, WindowSizeEventWrap } from "./RectThrottle";
+import {
+  RectThrottle,
+  WindowRectEventWrap,
+  WindowRectSnapshot,
+  WindowSizeEventWrap,
+} from "./RectThrottle";
 import { WindowAttachmentRegistry } from "./WindowAttachmentRegistry";
 
 // Event payload types moved to RectThrottle (issue #87 major-5); re-exported here so
 // existing importers (`import {...} from "../window/WindowManager"`) keep working.
-export { WindowRectEventWrap, WindowSizeEventWrap } from "./RectThrottle";
+export { WindowRectEventWrap, WindowRectSnapshot, WindowSizeEventWrap } from "./RectThrottle";
 
 interface WindowEntry {
   window: window.Window;
@@ -671,10 +676,20 @@ export class WindowManager {
     // win.setWindowLimits() is API11+. Params are px (0 = no limit / system default).
     // WindowLimits fields: minWidth/minHeight/maxWidth/maxHeight (NOT minWindowWidth etc.)
     // ⚠️ Triggers OnSizeChange — caller must not invoke frequently on main window (appfreeze risk).
+    //
+    // Min slots 0→1 translation: the system treats minWidth/minHeight = 0 as "keep
+    // the current limits", NOT as "lift them" (verified on HAD-W32 PC / API 23:
+    // setWindowLimits({minWidth: 0, ...}) returns the previous min unchanged, so
+    // tao's set_min_inner_size(None) — which dispatches 0 — could never lift a
+    // previously-set minimum). 1px is clamped by the system to its product-level
+    // absolute minimum (608×136 outer on the reference PC), which IS the semantic
+    // "no app-level minimum" under the intersection-of-limits model. Max slots keep
+    // 0 — the system maps maxWidth/maxHeight = 0 to its own default ceiling
+    // (7296×7296 on the reference PC), so no translation is needed there.
     this.withWindow(windowId, "setWindowLimits", (win: window.Window) => {
       const limits: window.WindowLimits = {
-        minWidth: minW,
-        minHeight: minH,
+        minWidth: Math.max(minW, 1),
+        minHeight: Math.max(minH, 1),
         maxWidth: maxW,
         maxHeight: maxH,
       };
@@ -1450,7 +1465,7 @@ export class WindowManager {
         // Phase 3 (design.md D3): route through per-window throttle (leading+trailing 16ms).
         // Issue Eulogizethesun/tauri#97: attach the same moment's drawableRect
         // (sync getWindowProperties snapshot) so the Rust inner-rect cache
-        // tracks the system's own inner口径 value — omitted when unreadable.
+        // tracks the system-defined inner value — omitted when unreadable.
         const wrapped: WindowRectEventWrap = {
           windowId,
           reason: options.reason,
@@ -1516,6 +1531,42 @@ export class WindowManager {
         `UI content loaded successfully for window: %{public}d`,
         windowId,
       );
+
+      // Review R13: seed this sub-window's rect caches right after its content
+      // loads. The windowRectChange registration above deliberately runs
+      // pre-load to catch early rect changes, but those events carry no
+      // drawableRect (unreadable before loadContent) and the Rust side updates
+      // the outer/drawable pair atomically — so they seed nothing at all. This
+      // snapshot restores the initial-size signal (the first dispatchable
+      // Resized for Float sub-windows) and fills inner_rects (chrome is 0 for
+      // decorEnabled:false sub-windows; the pair keeps semantics uniform).
+      try {
+        const snapshot = WindowManager.readWindowRectSnapshot(win);
+        if (snapshot) {
+          const wrapped: WindowRectEventWrap = {
+            windowId,
+            reason: window.RectChangeReason.UNDEFINED,
+            rect: snapshot.rect,
+            drawable: snapshot.drawable,
+          };
+          this.throttledRectDispatch(
+            windowId,
+            wrapped,
+            (w: object) => {
+              this.rectChangeCallback?.(w as WindowRectEventWrap);
+            },
+            "rect",
+          );
+        }
+      } catch (e) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Rect cache seed failed for window %{public}d: %{public}s`,
+          windowId,
+          String(e),
+        );
+      }
 
       // Register sub-window's UIContext
       try {
@@ -1871,7 +1922,7 @@ export class WindowManager {
   /**
    * Issue Eulogizethesun/tauri#97: synchronous drawableRect read for
    * rect-change wraps. One getWindowProperties() snapshot — the system's own
-   * inner口径 rect (position relative to the window, size = drawable area, px),
+   * inner rect (position relative to the window, size = drawable area, px),
    * replacing the removed window-rect − content-rect decor estimate (whose
    * async races produced garbage values and the shrinking-window bug).
    * Returns undefined when the call throws (window not created / content not
@@ -1897,6 +1948,48 @@ export class WindowManager {
         DOMAIN,
         "WindowManager",
         "readDrawableRect: getWindowProperties unavailable: %{public}s",
+        String(e),
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * Review R13: post-load seed snapshot — the WM (outer) rect AND the drawable
+   * (inner) rect from one getWindowProperties() call, both field-copied (not
+   * system object refs, per design.md D5). Returns undefined when the call
+   * throws or EITHER rect is degenerate: a seed must never plant half a pair
+   * (that is exactly the torn state the Rust side's pair-in/pair-out contract
+   * rejects — see set_window_rects), so callers skip the seed entirely and the
+   * pre-event fallback stays. Never returns an estimated value.
+   */
+  static readWindowRectSnapshot(win: window.Window): WindowRectSnapshot | undefined {
+    try {
+      const props = win.getWindowProperties();
+      const outer = props.windowRect;
+      const drawable = props.drawableRect;
+      if (outer.width > 0 && outer.height > 0 && drawable.width > 0 && drawable.height > 0) {
+        const snapshot: WindowRectSnapshot = {
+          rect: {
+            left: outer.left,
+            top: outer.top,
+            width: outer.width,
+            height: outer.height,
+          },
+          drawable: {
+            left: drawable.left,
+            top: drawable.top,
+            width: drawable.width,
+            height: drawable.height,
+          },
+        };
+        return snapshot;
+      }
+    } catch (e) {
+      hilog.debug(
+        DOMAIN,
+        "WindowManager",
+        "readWindowRectSnapshot: getWindowProperties unavailable: %{public}s",
         String(e),
       );
     }

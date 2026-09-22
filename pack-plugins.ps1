@@ -1,4 +1,4 @@
-# Aggregates the 18 bridge plugins into the single `@ohos-rs/ability` HAR.
+# Aggregates the 17 bridge plugins into the single `@ohos-rs/ability` HAR.
 #
 # Run by pack.bat AFTER the base native_ability metadata + ets tree have been
 # copied into package/. Produces a self-contained HAR (Strategy A):
@@ -7,7 +7,7 @@
 #   - an internal barrel `ability_exports.ets` is generated from the base index.ets
 #     (paths rewritten to be relative to package/src/main/ets/) so plugins resolve
 #     base symbols without importing their own module by name (no cycle)
-#   - the 18 plugin classes are appended as re-exports to package/index.ets so
+#   - the 17 plugin classes are appended as re-exports to package/index.ets so
 #     consumers import them from `@ohos-rs/ability` directly
 #
 # Plugins stay standalone-buildable: their source still uses
@@ -24,7 +24,7 @@ if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
 # path, failing Test-Path with ItemExistsArgumentError).
 $ScriptDir = $ScriptDir.Trim('"\')
 
-# (plugin-dir, exported-class) — the 18 core bridge plugins.
+# (plugin-dir, exported-class) — the 17 core bridge plugins.
 $plugins = @(
   @{ name = 'accessibility';   cls = 'AccessibilityPlugin' },
   @{ name = 'app-control';     cls = 'AppControlPlugin' },
@@ -36,7 +36,6 @@ $plugins = @(
   @{ name = 'global-shortcut'; cls = 'GlobalShortcutPlugin' },
   @{ name = 'menu';            cls = 'MenuPlugin' },
   @{ name = 'permission';      cls = 'PermissionPlugin' },
-  @{ name = 'process';         cls = 'ProcessPlugin' },
   @{ name = 'resource';        cls = 'ResourcePlugin' },
   @{ name = 'statusbar';       cls = 'StatusbarPlugin' },
   @{ name = 'updater';         cls = 'UpdaterPlugin' },

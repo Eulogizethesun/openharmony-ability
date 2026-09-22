@@ -1338,8 +1338,32 @@ function BuildWebview(data: ManagedWebview) {
         // MainPage.onKeyPreIme → Rust key forward. Web focused ⇒ NDK
         // XComponent key path structurally silent ⇒ forward is exclusive;
         // unfocused ⇒ gate closed ⇒ NDK path (if ever alive) stays exclusive.
-        .onFocus(() => setWebFocused(data.windowId ?? 0, true))
-        .onBlur(() => setWebFocused(data.windowId ?? 0, false))
+        // Mouse path: handled by this branch's outer Stack onMouse (the Web's
+        // own onMouse never fires); below, focusOnTouch/onFocus/onBlur cover
+        // the touch-screen and Tab-navigation paths (device-verified V10
+        // 2026-09-21: mouse clicks focus ArkWeb's INTERNAL secure_field node,
+        // so the component-level onFocus never fires for them).
+        .focusOnTouch(true)
+        .onFocus(() => {
+          hilog.info(
+            0x1999,
+            "WebviewSurface",
+            "web focus gained: id=%{public}s windowId=%{public}d",
+            data.id,
+            data.windowId ?? 0,
+          );
+          setWebFocused(data.windowId ?? 0, true);
+        })
+        .onBlur(() => {
+          hilog.info(
+            0x1999,
+            "WebviewSurface",
+            "web focus lost: id=%{public}s windowId=%{public}d",
+            data.id,
+            data.windowId ?? 0,
+          );
+          setWebFocused(data.windowId ?? 0, false);
+        })
         .onLoadIntercept((event) => handleLoadIntercept(data, event.data.getRequestUrl()))
         .onInterceptRequest((event) => {
           return handleWebviewInterceptRequest(data, event as WebInterceptRequestEvent, "");
@@ -1373,75 +1397,141 @@ function BuildWebview(data: ManagedWebview) {
         })
     }
     .width("100%")
-    .height("100%");
+    .height("100%")
+    // Mouse-driven focus gate (issue Eulogizethesun/tauri#109): the Web's own
+    // onMouse never fires (ArkWeb consumes mouse events at the component level),
+    // but they bubble to ancestors — this Stack wraps only the web area, so its
+    // onMouse sees exactly the presses that should open the Rust key-forward
+    // gate (menubar presses hit-test outside).
+    .onMouse((event: MouseEvent) => {
+      if (event.action === MouseAction.Press && event.button === MouseButton.Left) {
+        hilog.info(
+          0x1999,
+          "WebviewSurface",
+          "web focus gate open (mouse): id=%{public}s windowId=%{public}d",
+          data.id,
+          data.windowId ?? 0,
+        );
+        setWebFocused(data.windowId ?? 0, true);
+      }
+    });
   } else {
     // Direct mode: drag events bound directly on the Web component.
-    Web({
-      src: "",
-      controller: data.controller as webview.WebviewController,
-      renderMode: data.transparent === true ? RenderMode.SYNC_RENDER : RenderMode.ASYNC_RENDER,
-    })
-      // Always "100%": natural ArkUI layout so the Web follows its parent container on
-      // window resize. set_bounds (BuilderNode.update) re-runs this builder but only
-      // .position() below consumes style.{x,y} — sizing via fixed px here would pin the
-      // Web component and break ArkWeb viewport tracking on resize (bottom cutoff).
-      .width("100%")
-      .height("100%")
-      .position({ x: data.style.x ?? 0, y: data.style.y ?? 0 })
-      // Transparent windows: force Web background to transparent so vibrancy/blur
-      // effects are visible through the Web component. Without this, the Web renders
-      // with its default opaque background, hiding any blur effect.
-      .backgroundColor(
-        data.transparent === true ? Color.Transparent : (data.style.backgroundColor ?? undefined),
-      )
-      .visibility(data.style.visible === false ? Visibility.Hidden : Visibility.Visible)
-      // Vibrancy/frosted glass: backdropBlur blurs in-surface pixels of the Web component.
-      // Works on opaque containers (Float sub-windows where setWindowContainerColor returns 1300004).
-      // The blur radius is read from WindowManager.getPendingBlur() at webview creation time.
-      .backdropBlur(data.style.blurRadius ?? 0)
-      // Debounce resize JS dispatch (handleWebviewAreaChange — shared with the
-      // overlay branch, issue #87 major-6).
-      .onAreaChange((oldArea: Area, newArea: Area) => {
-        handleWebviewAreaChange(data, oldArea, newArea);
+    // The Stack wrapper is layout-neutral (100%×100% of the mount slot, Web
+    // keeps its own width/height/position inside it) and exists for the
+    // mouse-driven focus gate (issue Eulogizethesun/tauri#109): the Web's own
+    // onMouse never fires (ArkWeb's pattern consumes mouse events at the
+    // component level), but they DO bubble to ancestors (MainPage.onMouse
+    // relies on the same behavior), so the wrapper sees presses over the web
+    // area — and only those: menubar presses hit-test outside this Stack.
+    Stack() {
+      Web({
+        src: "",
+        controller: data.controller as webview.WebviewController,
+        renderMode: data.transparent === true ? RenderMode.SYNC_RENDER : RenderMode.ASYNC_RENDER,
       })
-      .javaScriptAccess(data.javascriptEnabled ?? true)
-      .domStorageAccess(true)
-      .mediaPlayGestureAccess(data.autoplay === true ? false : true)
-      .javaScriptOnDocumentStart(keySynthesisScripts(data))
-      .multiWindowAccess(data.eventOptions.newWindow === true)
-      .allowWindowOpenMethod(data.eventOptions.newWindow === true)
-      .onControllerAttached(() => {
-        handleControllerAttached(data);
-      })
-      // Web focus tracking (issue Eulogizethesun/tauri#109) — see overlay branch comment.
-      .onFocus(() => setWebFocused(data.windowId ?? 0, true))
-      .onBlur(() => setWebFocused(data.windowId ?? 0, false))
-      .onLoadIntercept((event) => handleLoadIntercept(data, event.data.getRequestUrl()))
-      .onInterceptRequest((event) => {
-        return handleWebviewInterceptRequest(data, event as WebInterceptRequestEvent, "(embedded)");
-      })
-      .onTitleReceive((event) => data.onTitleChange(event.title))
-      .onPageBegin((e) => {
-        handleWebviewPageBegin(data, e.url);
-      })
-      .onPageEnd((e) => {
-        handleWebviewPageEnd(data, e.url);
-      })
-      .onDragEnter((dragEvent: DragEvent) => {
-        dispatchWebviewDragEnter(data, dragEvent);
-      })
-      .onDragMove((dragEvent: DragEvent) => {
-        dispatchWebviewDragMove(data, dragEvent);
-      })
-      .onDrop((dragEvent: DragEvent) => {
-        dispatchWebviewDragDrop(data, dragEvent);
-      })
-      .onDragLeave((dragEvent: DragEvent) => {
-        dispatchWebviewDragLeave(data, dragEvent);
-      })
-      .onWindowNew((e) => {
-        handleWebviewWindowNew(data, e);
-      });
+        // Always "100%": natural ArkUI layout so the Web follows its parent container on
+        // window resize. set_bounds (BuilderNode.update) re-runs this builder but only
+        // .position() below consumes style.{x,y} — sizing via fixed px here would pin the
+        // Web component and break ArkWeb viewport tracking on resize (bottom cutoff).
+        .width("100%")
+        .height("100%")
+        .position({ x: data.style.x ?? 0, y: data.style.y ?? 0 })
+        // Transparent windows: force Web background to transparent so vibrancy/blur
+        // effects are visible through the Web component. Without this, the Web renders
+        // with its default opaque background, hiding any blur effect.
+        .backgroundColor(
+          data.transparent === true ? Color.Transparent : (data.style.backgroundColor ?? undefined),
+        )
+        .visibility(data.style.visible === false ? Visibility.Hidden : Visibility.Visible)
+        // Vibrancy/frosted glass: backdropBlur blurs in-surface pixels of the Web component.
+        // Works on opaque containers (Float sub-windows where setWindowContainerColor returns 1300004).
+        // The blur radius is read from WindowManager.getPendingBlur() at webview creation time.
+        .backdropBlur(data.style.blurRadius ?? 0)
+        // Debounce resize JS dispatch (handleWebviewAreaChange — shared with the
+        // overlay branch, issue #87 major-6).
+        .onAreaChange((oldArea: Area, newArea: Area) => {
+          handleWebviewAreaChange(data, oldArea, newArea);
+        })
+        .javaScriptAccess(data.javascriptEnabled ?? true)
+        .domStorageAccess(true)
+        .mediaPlayGestureAccess(data.autoplay === true ? false : true)
+        .javaScriptOnDocumentStart(keySynthesisScripts(data))
+        .multiWindowAccess(data.eventOptions.newWindow === true)
+        .allowWindowOpenMethod(data.eventOptions.newWindow === true)
+        .onControllerAttached(() => {
+          handleControllerAttached(data);
+        })
+        // Web focus tracking (issue Eulogizethesun/tauri#109) — see the Stack
+        // wrapper comment above for the mouse path; focusOnTouch/onFocus/onBlur
+        // below cover the touch-screen and Tab-navigation paths (component focus
+        // works there — only mouse clicks land on ArkWeb's internal node).
+        .focusOnTouch(true)
+        .onFocus(() => {
+          hilog.info(
+            0x1999,
+            "WebviewSurface",
+            "web focus gained: id=%{public}s windowId=%{public}d",
+            data.id,
+            data.windowId ?? 0,
+          );
+          setWebFocused(data.windowId ?? 0, true);
+        })
+        .onBlur(() => {
+          hilog.info(
+            0x1999,
+            "WebviewSurface",
+            "web focus lost: id=%{public}s windowId=%{public}d",
+            data.id,
+            data.windowId ?? 0,
+          );
+          setWebFocused(data.windowId ?? 0, false);
+        })
+        .onLoadIntercept((event) => handleLoadIntercept(data, event.data.getRequestUrl()))
+        .onInterceptRequest((event) => {
+          return handleWebviewInterceptRequest(
+            data,
+            event as WebInterceptRequestEvent,
+            "(embedded)",
+          );
+        })
+        .onTitleReceive((event) => data.onTitleChange(event.title))
+        .onPageBegin((e) => {
+          handleWebviewPageBegin(data, e.url);
+        })
+        .onPageEnd((e) => {
+          handleWebviewPageEnd(data, e.url);
+        })
+        .onDragEnter((dragEvent: DragEvent) => {
+          dispatchWebviewDragEnter(data, dragEvent);
+        })
+        .onDragMove((dragEvent: DragEvent) => {
+          dispatchWebviewDragMove(data, dragEvent);
+        })
+        .onDrop((dragEvent: DragEvent) => {
+          dispatchWebviewDragDrop(data, dragEvent);
+        })
+        .onDragLeave((dragEvent: DragEvent) => {
+          dispatchWebviewDragLeave(data, dragEvent);
+        })
+        .onWindowNew((e) => {
+          handleWebviewWindowNew(data, e);
+        })
+    }
+    .width("100%")
+    .height("100%")
+    .onMouse((event: MouseEvent) => {
+      if (event.action === MouseAction.Press && event.button === MouseButton.Left) {
+        hilog.info(
+          0x1999,
+          "WebviewSurface",
+          "web focus gate open (mouse): id=%{public}s windowId=%{public}d",
+          data.id,
+          data.windowId ?? 0,
+        );
+        setWebFocused(data.windowId ?? 0, true);
+      }
+    });
   }
 }
 

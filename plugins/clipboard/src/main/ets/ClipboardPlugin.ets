@@ -24,6 +24,12 @@ const WRITE_HTML_RESPONSE_TYPE = "ohos.clipboard.WriteHtmlResponse";
 const CLEAR_REQUEST_TYPE = "ohos.clipboard.ClearRequest";
 const CLEAR_RESPONSE_TYPE = "ohos.clipboard.ClearResponse";
 
+// Upper bound on the pixel count read-image will pack and decode, mirrored
+// from MAX_DECODE_PIXELS in crates/plugin-clipboard/src/lib.rs. Rejecting
+// here avoids PNG-packing, base64-encoding (~4/3x), and bridging a huge
+// PixelMap that the Rust side would refuse after the fact.
+const MAX_DECODE_PIXELS = 1 << 26;
+
 interface WriteTextRequest {
   text: string;
 }
@@ -285,6 +291,10 @@ export class ClipboardPlugin extends AsyncPluginBase {
    * bridge as Array<number>, inflating a multi-hundred-KB PNG ~8x in memory
    * (same contract as WebviewPlugin's capture-webview).
    *
+   * Images above MAX_DECODE_PIXELS total pixels are rejected before packing;
+   * the Rust decoder enforces the same cap, so rejecting here skips the
+   * pack/base64/bridge round-trip for oversized inputs.
+   *
    * Throws when the clipboard holds no PixelMap record (the caller surfaces
    * the error — matches arboard's behavior on the desktop path).
    */
@@ -305,6 +315,12 @@ export class ClipboardPlugin extends AsyncPluginBase {
         throw new Error("clipboard does not contain an image");
       }
       const info = pm.getImageInfoSync();
+      const pixels = info.size.width * info.size.height;
+      if (pixels > MAX_DECODE_PIXELS) {
+        throw new Error(
+          `clipboard image too large: ${info.size.width}x${info.size.height} (${pixels} px) exceeds the ${MAX_DECODE_PIXELS} px limit`,
+        );
+      }
       packer = image.createImagePacker();
       // quality is REQUIRED by PackingOption in the API 12 typings even for PNG.
       const packOptions: image.PackingOption = { format: "image/png", quality: 100 };
@@ -352,6 +368,15 @@ export class ClipboardPlugin extends AsyncPluginBase {
       const opts: image.InitializationOptions = {
         editable: true,
         pixelFormat: image.PixelMapFormat.RGBA_8888,
+        // The rgba buffer is straight (unpremultiplied) alpha. Without this
+        // the PixelMap label defaults to PREMUL (pixel_map.cpp), and any PNG
+        // re-encode — readImageFromClipboard's ImagePacker, or a paste
+        // target — unpremultiplies the straight bytes: alpha=0 pixels lose
+        // their rgb entirely and partial-alpha rgb clamps up (200@128→255).
+        // Source-attributed via OHOS system source + run-1 hexdump (issue
+        // #113 V5, 2026-09-20); evidence in
+        // faultlogs/v5-readimage-run1-20260920-report.md.
+        alphaType: image.AlphaType.UNPREMUL,
         size: { width: width, height: height },
       };
       pm = image.createPixelMapSync(opts);

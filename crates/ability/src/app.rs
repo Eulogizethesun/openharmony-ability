@@ -80,7 +80,7 @@ pub struct OpenHarmonyAppInner {
     /// Per-window drawable (content-area) rect, physical px, pushed by the ArkTS
     /// `windowRectChange` handlers alongside the WM rect (issue Eulogizethesun/
     /// tauri#97). Source: `win.getWindowProperties().drawableRect` — the system's
-    /// own inner-口径 snapshot (left/top relative to the window, size = drawable
+    /// own inner-rect snapshot (left/top relative to the window, size = drawable
     /// area), read synchronously inside the event handler so the two rects in one
     /// wrap can never tear. This replaced the former `decor_height` latched
     /// window-rect − content-rect diff, whose async-update races produced garbage
@@ -293,8 +293,9 @@ impl OpenHarmonyAppInner {
             .unwrap_or_default()
     }
 
-    /// Per-window rect setter. Called by the `window_rect_change` lifecycle closure
-    /// (lifecycle.rs) with the windowId parsed from the ArkTS-wrapped options.
+    /// Per-window outer-rect setter. Reached through `set_window_rects`
+    /// (pair-in/pair-out with the drawable snapshot, review R14); kept public
+    /// for direct snapshot manipulation in tests.
     pub fn set_window_rect(&mut self, window_id: i64, rect: Rect) {
         self.window_rects.insert(window_id, rect);
     }
@@ -302,8 +303,8 @@ impl OpenHarmonyAppInner {
     /// Per-window drawable-rect setter (issue Eulogizethesun/tauri#97). Called by
     /// the same `window_rect_change` lifecycle closure with the `drawable` field
     /// of the ArkTS wrap (`getWindowProperties().drawableRect`, pushed whenever
-    /// the system reports a rect change). Missing/failed reads simply don't call
-    /// this — the last snapshot stays until the next successful one.
+    /// the system reports a rect change). A missing/failed read never reaches
+    /// this setter — see `set_window_rects` for the pair-in/pair-out contract.
     pub fn set_inner_rect(&mut self, window_id: i64, rect: Rect) {
         self.inner_rects.insert(window_id, rect);
     }
@@ -312,11 +313,17 @@ impl OpenHarmonyAppInner {
     /// `&mut self` borrow the caller already holds (issue Eulogizethesun/tauri#97
     /// review: two separate lock acquisitions could let a concurrent
     /// `inner_rect_for` read compose a NEW outer with a STALE/absent drawable).
-    /// `drawable = None` keeps the previous drawable snapshot (the wrap's
-    /// drawableRect read failed — see `set_inner_rect`).
+    ///
+    /// `drawable = None` (the wrap's drawableRect read failed — see
+    /// `set_inner_rect`) skips the update entirely: the previous outer AND
+    /// drawable snapshots BOTH stay (pair-in/pair-out, review R14). Storing the
+    /// new outer alone would let `inner_rect_for` compose a new origin with a
+    /// stale offset/size (torn inner rect: wrong position after a decor change,
+    /// stale size after a resize) until the next readable event. Skipping both
+    /// keeps the pair consistently at the last readable event instead.
     pub fn set_window_rects(&mut self, window_id: i64, outer: Rect, drawable: Option<Rect>) {
-        self.set_window_rect(window_id, outer);
         if let Some(rect) = drawable {
+            self.set_window_rect(window_id, outer);
             self.set_inner_rect(window_id, rect);
         }
     }
@@ -872,7 +879,8 @@ impl OpenHarmonyApp {
     /// window under ONE RwLock write acquisition (issue Eulogizethesun/tauri#97)
     /// — the pair from a single event can never be observed torn by a concurrent
     /// `inner_rect_for`. `drawable = None` (the wrap's drawableRect read failed)
-    /// keeps the previous drawable snapshot. Called from the `window_rect_change`
+    /// skips both writes: the previous outer AND drawable snapshots stay
+    /// (pair-in/pair-out, review R14). Called from the `window_rect_change`
     /// lifecycle closure with the windowId parsed from the ArkTS-wrapped options.
     pub fn set_window_rects(&self, window_id: i64, outer: Rect, drawable: Option<Rect>) {
         self.inner
@@ -897,7 +905,7 @@ impl OpenHarmonyApp {
     /// Inner (content-area) rect for the given window, in physical px (issue
     /// Eulogizethesun/tauri#97). Composed from two system snapshots pushed by the
     /// same `windowRectChange` event — the WM rect (outer) and the drawable rect
-    /// (inner口径, position relative to the window) — read under ONE lock so
+    /// (system-defined inner, position relative to the window) — read under ONE lock so
     /// they can't tear. The former hand-rolled `window_rect − latched decor`
     /// conversion (and its estimate) is gone: the size/offset comes from the
     /// system's own drawableRect.
@@ -907,13 +915,17 @@ impl OpenHarmonyApp {
     ///   decorated windows; (0,0) for Float sub-windows)
     /// - `width`/`height` = drawable (content) area size
     ///
-    /// Fallback: before the first event carrying a readable drawableRect (e.g.
-    /// `getWindowProperties()` threw before content load), the OUTER rect is
-    /// returned as-is (decor assumed 0) — the same pre-observation transient the
-    /// old pre-latch path had. A runtime decor change that fires no
-    /// windowRectChange leaves the snapshot stale until the next rect change;
-    /// re-reading/re-setting inner size after such changes is the caller's
-    /// responsibility (per issue #97, compensation duty belongs to the app).
+    /// Fallback: the two snapshot tables are only written in pairs
+    /// (`set_window_rects`, review R14) and the ArkTS side seeds them right
+    /// after content load (review R13), so "outer present, drawable absent" is
+    /// unreachable through the public API in production — the `None` arm below
+    /// stays as a defensive fallback for a future writer that seeds
+    /// `window_rects` directly, returning the outer rect as-is (decor assumed
+    /// 0). Before the first readable event both lookups return `(0,0,0,0)`. A
+    /// runtime decor change that fires no windowRectChange leaves the snapshot
+    /// stale until the next rect change; re-reading/re-setting inner size after
+    /// such changes is the caller's responsibility (per issue #97, compensation
+    /// duty belongs to the app).
     pub fn inner_rect_for(&self, window_id: i64) -> Rect {
         self.inner
             .read()
@@ -978,26 +990,6 @@ impl OpenHarmonyApp {
     #[cfg(feature = "updater")]
     pub fn updater(&self) -> Result<super::updater::Updater> {
         super::updater::Updater::new(self)
-    }
-
-    /// Get a process handle for app-level process control via the bridge.
-    ///
-    /// Core-privileged OHOS capability (not Tauri-shaped).
-    ///
-    /// First-class OHOS ability exposed on par with `RuntimeInitArgs.app`.
-    /// Intentionally NOT facade-ized: the API has no Tauri shape (pure OHOS
-    /// platform capability). Precedent: `OpenHarmonyApp::updater()`.
-    ///
-    /// `Process::restart` dispatches `appRecovery.restartApp()` and returns
-    /// `Ok(0)` on success. The process is then hard-killed by the system
-    /// (`onDestroy` is NOT triggered) — callers should block afterwards and
-    /// let the runtime terminate them, same pattern as the non-OHOS restart
-    /// path. Requires the app's Ability to be recoverable (`recoverable: true`
-    /// in module.json5); recovery is enabled right before the restart call on
-    /// the ArkTS side.
-    #[cfg(feature = "process")]
-    pub fn process(&self) -> Result<super::process::Process> {
-        super::process::Process::new(self)
     }
 
     // ── Fault injection facade (coverage testing only) ─────────────────────────
@@ -1565,9 +1557,12 @@ mod tests {
 
     #[test]
     fn inner_rect_for_falls_back_to_outer_rect_before_first_drawable() {
-        // Transient before the first windowRectChange carrying a readable
-        // drawableRect: return the outer rect as-is (decor 0) — identical to
-        // the old pre-latch behavior. Never a guessed decor value.
+        // Pins the DEFENSIVE fallback arm of inner_rect_for (None => outer).
+        // Since review R14 the snapshot tables are only written in pairs via
+        // set_window_rects, so "outer present, drawable absent" is unreachable
+        // through production paths — this seeds window_rects directly to pin
+        // the arm for any future writer that does the same. Never a guessed
+        // decor value.
         let mut inner = OpenHarmonyAppInner::new();
         inner.window_rects.insert(
             3,
@@ -1589,6 +1584,63 @@ mod tests {
         );
         // And (0,0,0,0) for an entirely unobserved window, like the old default.
         assert_eq!(inner.inner_rect_for(7), Rect::default());
+    }
+
+    #[test]
+    fn set_window_rects_with_missing_drawable_skips_outer_too() {
+        // Review R14: a rect-change event whose drawableRect read failed
+        // (drawable = None — getWindowProperties threw, or the rect was
+        // degenerate: minimized / content not loaded / abnormal state) must not
+        // update the outer snapshot either. Storing the new outer alone would
+        // let inner_rect_for compose a NEW origin with the STALE offset/size
+        // (torn inner rect) until the next readable event.
+        let mut inner = OpenHarmonyAppInner::new();
+        // Reference-device shape (title bar 146px): a good pair first.
+        inner.set_window_rects(
+            2,
+            Rect {
+                top: 76,
+                left: 76,
+                width: 2090,
+                height: 1394,
+            },
+            Some(Rect {
+                top: 146,
+                left: 0,
+                width: 2090,
+                height: 1248,
+            }),
+        );
+        // Next event reports a moved+resized outer, but its drawableRect read
+        // failed. Pair-in/pair-out: neither table moves.
+        inner.set_window_rects(
+            2,
+            Rect {
+                top: 100,
+                left: 200,
+                width: 640,
+                height: 480,
+            },
+            None,
+        );
+        assert_eq!(
+            inner.window_rect_for(2),
+            Rect {
+                top: 76,
+                left: 76,
+                width: 2090,
+                height: 1394,
+            }
+        );
+        assert_eq!(
+            inner.inner_rect_for(2),
+            Rect {
+                top: 76 + 146,
+                left: 76,
+                width: 2090,
+                height: 1248,
+            }
+        );
     }
 
     #[test]

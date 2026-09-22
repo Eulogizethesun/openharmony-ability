@@ -590,9 +590,11 @@ export class NativeAbility extends UIAbility {
 
     try {
       windowStage.on("windowStageEvent", (event: window.WindowStageEventType) => {
-        // 失焦清修饰键跟踪位(issue #111):窗口 INACTIVE(最小化/子窗/菜单抢
-        // 焦点)或 HIDDEN 期间发生的修饰键释放事件不会被 onKeyPreIme 看到,
-        // 脏位会让之后首个裸键被误拼成 ctrl+ 组合(真机实测复现过)。
+        // Clear tracked modifiers on focus loss (issue #111): modifier key
+        // releases that happen while the window is INACTIVE (minimized, or
+        // focus taken by a subwindow/menu) or HIDDEN are never seen by
+        // onKeyPreIme; the stale dirty bits would mis-assemble the first
+        // subsequent bare key into a ctrl+ combo (reproduced on a real device).
         if (
           event === window.WindowStageEventType.INACTIVE ||
           event === window.WindowStageEventType.HIDDEN
@@ -653,7 +655,7 @@ export class NativeAbility extends UIAbility {
           // Deep-copy rect fields (not system object ref) per design.md D5.
           // Issue Eulogizethesun/tauri#97: attach the same moment's drawableRect
           // (sync getWindowProperties snapshot) so the Rust inner-rect cache
-          // tracks the system's own inner口径 value — omitted when unreadable.
+          // tracks the system-defined inner value — omitted when unreadable.
           const wrapped: WindowRectEventWrap = {
             windowId: 0,
             reason: options.reason,
@@ -716,20 +718,30 @@ export class NativeAbility extends UIAbility {
           );
         }
 
-        // 多显示器布局回灌(issue Eulogizethesun/tauri#106):Rust 侧 C API
-        // OH_NativeDisplayManager_CreateAllDisplays 枚举显示器列表,但其
-        // DisplayInfo 结构无 x/y 坐标——位置只能来自 ArkTS Display.x/y
-        // (API 19+,低版本 undefined → 0,与修复前一致)。这里推送全量布局,
-        // 并监听 add/remove/change 热插拔刷新。getAllDisplays 为 API 12+。
+        // Multi-display layout backfill (issue Eulogizethesun/tauri#106): the
+        // Rust-side C API OH_NativeDisplayManager_CreateAllDisplays enumerates
+        // the display list, but its DisplayInfo struct has no x/y — positions
+        // can only come from ArkTS Display.x/y (API 19+; on lower versions
+        // undefined → 0, same as before the fix). Push the full layout here
+        // and listen for add/remove/change to refresh on hot-plug: hot-plugging
+        // an external monitor fires add/remove; change fires on attribute
+        // changes (resolution/orientation/fold). getAllDisplays is API 12+.
         this.pushDisplayLayout();
         try {
-          this.displayChangeListener = (): void => this.pushDisplayLayout();
+          this.displayAddListener = (displayId: number): void =>
+            this.onDisplayLayoutEvent("add", displayId);
+          this.displayRemoveListener = (displayId: number): void =>
+            this.onDisplayLayoutEvent("remove", displayId);
+          this.displayChangeListener = (displayId: number): void =>
+            this.onDisplayLayoutEvent("change", displayId);
+          display.on("add", this.displayAddListener);
+          display.on("remove", this.displayRemoveListener);
           display.on("change", this.displayChangeListener);
         } catch (e) {
           hilog.warn(
             DOMAIN,
             "NativeAbility",
-            "display.on(change) registration failed: %{public}s",
+            "display.on(add/remove/change) registration failed: %{public}s",
             String(e),
           );
         }
@@ -754,6 +766,43 @@ export class NativeAbility extends UIAbility {
           String(e),
         );
       }
+    }
+
+    // Review R13 (issue Eulogizethesun/tauri#97 follow-up): seed the Rust rect
+    // caches right after content load. The windowRectChange registrations above
+    // run BEFORE loadContent, where drawableRect is officially unreadable
+    // (在 Stage 模型下需在 loadContent()/setUIContent() 之后获取) — so between
+    // stage create and the first system rect event, inner_size()/
+    // inner_position() would return the fallback. One synthetic wrap through
+    // the SAME throttled dispatch path populates window_rects+inner_rects as a
+    // pair (pair-in/pair-out) and also seeds tao's LAST_DISPATCHED_RECTS;
+    // reason is UNDEFINED (nothing consumes ContentRect.reason on this path)
+    // and readWindowRectSnapshot refuses half pairs, so a failed read simply
+    // keeps the existing fallback.
+    try {
+      const seedWindow = await windowStage.getMainWindow();
+      const snapshot = WindowManager.readWindowRectSnapshot(seedWindow);
+      if (snapshot) {
+        const wrapped: WindowRectEventWrap = {
+          windowId: 0,
+          reason: window.RectChangeReason.UNDEFINED,
+          rect: snapshot.rect,
+          drawable: snapshot.drawable,
+        };
+        WindowManager.getInstance().throttledRectDispatch(
+          0,
+          wrapped,
+          (w: object) => {
+            this.forEachLifecycle((lifecycle) =>
+              lifecycle.windowStageEventCallback.onWindowRectChange(w),
+            );
+          },
+          "rect",
+        );
+        hilog.info(DOMAIN, "NativeAbility", "rect cache seeded post-load (windowId=0)");
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, "NativeAbility", "rect cache seed failed: %{public}s", String(e));
     }
 
     // Transparent window background/container color is applied in
@@ -799,15 +848,35 @@ export class NativeAbility extends UIAbility {
     void this.onWindowStageCreate(windowStage);
   }
 
-  // issue Eulogizethesun/tauri#106:display 是进程级模块,监听器强捕获本实例;
-  // 必须保存引用并在 onWindowStageDestroy 注销,否则多次 stage 生命周期会累积
-  // 泄漏的监听器(与随 stage 消亡的 windowStage/window 事件源不同)。
-  private displayChangeListener?: () => void;
+  // issue Eulogizethesun/tauri#106: display is a process-level module and
+  // the listeners strongly capture this instance; keep the references and
+  // unregister them in onWindowStageDestroy, otherwise repeated stage
+  // lifecycles accumulate leaked listeners (unlike the windowStage/window
+  // event sources, which die with the stage). add/remove fire on external
+  // monitor hot-plug, change on attribute changes.
+  private displayAddListener?: (displayId: number) => void;
+  private displayRemoveListener?: (displayId: number) => void;
+  private displayChangeListener?: (displayId: number) => void;
 
-  // 多显示器布局推送(issue Eulogizethesun/tauri#106):把 getAllDisplays 的
-  // id/位置全量推给 Rust(set_display_layout NAPI)。位置来自 Display.x/y
-  // (API 19+;低版本 undefined → 0,不比修复前差)。Rust 侧把它叠加到 C API
-  // CreateAllDisplays 的显示器列表上(C 结构体无 x/y 字段)。
+  // Shared display-event handler: log the event (with the display id the
+  // callback reports) and re-push the layout — the positions of every display
+  // can change when one is added/removed/resized, so always push the full list.
+  private onDisplayLayoutEvent(type: string, displayId: number): void {
+    hilog.info(
+      DOMAIN,
+      "NativeAbility",
+      "display on(%s) id=%{public}d — refresh layout",
+      type,
+      displayId,
+    );
+    this.pushDisplayLayout();
+  }
+
+  // Multi-display layout push (issue Eulogizethesun/tauri#106): push the full
+  // id/position list from getAllDisplays to Rust (set_display_layout NAPI).
+  // Positions come from Display.x/y (API 19+; on lower versions undefined → 0,
+  // no worse than before the fix). The Rust side overlays it onto the C API
+  // CreateAllDisplays display list (the C struct has no x/y fields).
   private pushDisplayLayout(): void {
     try {
       display
@@ -834,6 +903,22 @@ export class NativeAbility extends UIAbility {
 
   onWindowStageDestroy(): void | Promise<void> {
     this.forEachLifecycle((lifecycle) => lifecycle.windowStageEventCallback.onWindowStageDestroy());
+    if (this.displayAddListener) {
+      try {
+        display.off("add", this.displayAddListener);
+      } catch (e) {
+        hilog.warn(DOMAIN, "NativeAbility", "display.off(add) failed: %{public}s", String(e));
+      }
+      this.displayAddListener = undefined;
+    }
+    if (this.displayRemoveListener) {
+      try {
+        display.off("remove", this.displayRemoveListener);
+      } catch (e) {
+        hilog.warn(DOMAIN, "NativeAbility", "display.off(remove) failed: %{public}s", String(e));
+      }
+      this.displayRemoveListener = undefined;
+    }
     if (this.displayChangeListener) {
       try {
         display.off("change", this.displayChangeListener);
@@ -884,7 +969,11 @@ export class NativeAbility extends UIAbility {
    * point where a close is still cancellable (onDestroy returns void and the
    * process dies ~12ms later, so prevent_exit() there is cosmetic by design).
    * Requires ohos.permission.PREPARE_APP_TERMINATE (normal, system_grant)
-   * declared in the app's module.json5; not called on Phone form factors.
+   * declared in the app's module.json5. API 15+ (HarmonyOS 5.0.3+)
+   * interface: on older systems the framework never invokes this callback
+   * (silent no-op — the default destroy chain runs un-intercepted). On
+   * API 15-18 it only executes on PC/2-in-1 devices (Tablet also from
+   * API 19), never on Phone.
    *
    * Asks every Rust lifecycle SYNCHRONOUSLY (same inline dispatch pattern as
    * the onAbilityDestroy call in onDestroy): the tao event loop forwards the

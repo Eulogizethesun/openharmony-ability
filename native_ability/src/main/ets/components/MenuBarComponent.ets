@@ -1,5 +1,5 @@
 import { MenuItemData } from "../helper/menu_types";
-import { AcceleratorMatcher } from "../helper/accelerator_matcher";
+import { AcceleratorMatcher, clearAllTrackedModifiers } from "../helper/accelerator_matcher";
 import { image } from "@kit.ImageKit";
 import { buffer } from "@kit.ArkTS";
 import { SymbolGlyphModifier } from "@kit.ArkUI";
@@ -99,6 +99,19 @@ const menubarVisibilityTracker: Map<number, boolean> = new Map();
 export function isMenubarVisible(windowId: number): boolean {
   return menubarVisibilityTracker.get(windowId) ?? true;
 }
+
+// --- Status icon tint (macOS green/clear/yellow/red semantics) ---
+// circle_fill = StatusAvailable (green), circle_lefthalf_inset_filled =
+// StatusPartiallyAvailable (yellow), xmark_circle = StatusUnavailable (red);
+// the hollow circle (clear semantic) stays untinted.
+// Note: the `circle_fill` entry is currently a dead key — StatusAvailable's case
+// was dropped from nativeIconResource (issue tauri#120, symbol absent from min
+// SDK 5.0.0(12)); re-add the case AND this tint once compatibleSdkVersion reaches API 20.
+const NATIVE_ICON_FONT_COLOR: Map<string, string> = new Map([
+  ["sys.symbol.circle_fill", "#34C759"],
+  ["sys.symbol.circle_lefthalf_inset_filled", "#FFCC00"],
+  ["sys.symbol.xmark_circle", "#FF3B30"],
+]);
 @Component
 export struct MenuBarComponent {
   @Prop windowId: number = 0;
@@ -364,10 +377,19 @@ export struct MenuBarComponent {
 
   /**
    * Maps a nativeIcon string to a SymbolGlyphModifier (for MenuItem symbolStartIcon).
+   * Status symbols get their macOS-semantic tint (see NATIVE_ICON_FONT_COLOR).
    */
   private nativeIconSymbol(nativeIcon: string): SymbolGlyphModifier | null {
     const resource = this.nativeIconResource(nativeIcon);
-    return resource ? new SymbolGlyphModifier(resource) : null;
+    if (!resource) {
+      return null;
+    }
+    const modifier = new SymbolGlyphModifier(resource);
+    const tint = NATIVE_ICON_FONT_COLOR.get(nativeIcon);
+    if (tint !== undefined) {
+      modifier.fontColor([tint]);
+    }
+    return modifier;
   }
 
   // --- Menu builders ---
@@ -490,14 +512,26 @@ export struct MenuBarComponent {
     return true;
   }
 
-  /** First item (popup tree first, then menubar tree incl. submenus) whose
-   *  accelerator string equals the combo ("ctrl+m" vs "Ctrl+M"). */
+  /** First enabled item (popup tree first, then menubar tree incl. submenus)
+   *  whose accelerator string equals the combo ("ctrl+m" vs "Ctrl+M").
+   *  Disabled items are skipped and the BFS continues — desktop semantics:
+   *  Windows grayed items generate no WM_COMMAND (About Keyboard
+   *  Accelerators), macOS disables a disabled item's key equivalent
+   *  (NSMenuItem.isEnabled), GTK3 gates accel activation on widget
+   *  sensitivity (gtkwidget.c). Mouse clicks are already blocked by
+   *  .enabled() on the rendered MenuItems — this closes the keyboard gap. */
   private findItemByCombo(combo: string): MenuItemData | null {
     const queue: MenuItemData[] = [...this.menuItems, ...this.menubarItems];
     while (queue.length > 0) {
       const item = queue.shift()!;
       if (item.accelerator && item.accelerator.toLowerCase() === combo) {
-        return item;
+        // Disabled: skip the match but keep scanning — a later item (or one
+        // inside this item's own submenu; children keep their own enabled
+        // flag, and the closed-menu Map indexes them too) may share the
+        // combo and be enabled.
+        if (item.enabled !== false) {
+          return item;
+        }
       }
       if (item.submenuItems) {
         queue.push(...item.submenuItems);
@@ -553,9 +587,17 @@ export struct MenuBarComponent {
             } else if (item.nativeIcon && this.nativeIconResource(item.nativeIcon)) {
               // Top-level nativeIcon: render as a system symbol, mirroring the
               // Image branch above (submenu icon and nativeIcon are mutually exclusive)
-              SymbolGlyph(this.nativeIconResource(item.nativeIcon) as Resource)
-                .fontSize(16)
-                .margin({ right: 4 });
+              if (NATIVE_ICON_FONT_COLOR.has(item.nativeIcon)) {
+                // Status symbol: apply the macOS-semantic tint (see NATIVE_ICON_FONT_COLOR)
+                SymbolGlyph(this.nativeIconResource(item.nativeIcon) as Resource)
+                  .fontSize(16)
+                  .fontColor([NATIVE_ICON_FONT_COLOR.get(item.nativeIcon)!])
+                  .margin({ right: 4 });
+              } else {
+                SymbolGlyph(this.nativeIconResource(item.nativeIcon) as Resource)
+                  .fontSize(16)
+                  .margin({ right: 4 });
+              }
             }
             Text(item.text ?? "")
               .fontSize(14)
@@ -572,9 +614,11 @@ export struct MenuBarComponent {
                 : "#F5F5F5",
           )
           .onClick(() => {
-            // 诊断埋点#1：menubar Row 点击。判读：
-            //  - 若点击后立即看到 onWillDisappear 且无第二次 onClick → 根因A（bindMenu 竞争/子窗口失焦）
-            //  - 若 onWillDisappear 在无 onClick 的情况下触发 → 根因C（子窗口 attach/focus 时序）
+            // Diagnostic probe #1: menubar Row click. Interpretation:
+            //  - onWillDisappear immediately after the click with no second
+            //    onClick → root cause A (bindMenu race / subwindow focus loss)
+            //  - onWillDisappear without any onClick → root cause C
+            //    (subwindow attach/focus timing)
             hilog.info(
               0x1999,
               "MenuBar",
@@ -583,9 +627,11 @@ export struct MenuBarComponent {
               this.activeDropdownShown,
               this.activeDropdownId,
             );
-            // 菜单子窗口接管键盘后主窗收不到修饰键释放——展开时清空跟踪位，
-            // 防止关菜单后第一个裸键被拼成假组合（issue #111 修饰键跟踪）。
-            this.acceleratorMatcher.clearTrackedModifiers();
+            // Once the menu subwindow takes over the keyboard, the main window
+            // no longer sees modifier key releases — clear the tracked bits on
+            // expand, so the first bare key after the menu closes is not
+            // assembled into a fake combo (issue #111 modifier tracking).
+            clearAllTrackedModifiers();
             this.activeDropdownId = item.id;
             this.activeDropdownShown = true;
           })
@@ -598,7 +644,8 @@ export struct MenuBarComponent {
             {
               showInSubWindow: true,
               onWillDisappear: () => {
-                // 诊断埋点#2：dropdown 消失。判读：配合埋点#1 的时序判断根因 A/B/C
+                // Diagnostic probe #2: dropdown disappeared. Interpretation:
+                // combine with probe #1 timing to decide root cause A/B/C.
                 hilog.info(
                   0x1999,
                   "MenuBar",
@@ -607,6 +654,14 @@ export struct MenuBarComponent {
                 );
                 this.activeDropdownShown = false;
                 this.activeDropdownId = "";
+                // Flush tracked modifiers on dropdown close (issue #111): a
+                // modifier keyup swallowed by the dying menu sub-window (race
+                // between Menu.onKeyEvent teardown and page focus return)
+                // would leave the module-level bit stuck. The page handlers
+                // now also track ups (MainPage/FloatPage onKeyPreIme); this
+                // clear only covers that sub-window-death gap. Consistent
+                // with the existing clear-on-expand trade-off above.
+                clearAllTrackedModifiers();
               },
             },
           );
@@ -661,8 +716,9 @@ export struct MenuBarComponent {
           y,
           json.length,
         );
-        // 弹出菜单子窗口接管键盘——同 dropdown，展开时清空修饰键跟踪位。
-        this.acceleratorMatcher.clearTrackedModifiers();
+        // The popup menu subwindow takes over the keyboard — same as dropdown:
+        // clear the tracked modifier bits on expand.
+        clearAllTrackedModifiers();
         this.menuJson = json;
         this.menuX = x;
         this.menuY = y;
@@ -718,6 +774,10 @@ export struct MenuBarComponent {
           offset: { x: this.menuX, y: this.menuY },
           aboutToDisappear: () => {
             this.menuShown = false;
+            // Same flush as the dropdown's onWillDisappear (issue #111): the
+            // popup sub-window's death can swallow a modifier keyup in the
+            // handoff to page focus.
+            clearAllTrackedModifiers();
           },
         })
     };
