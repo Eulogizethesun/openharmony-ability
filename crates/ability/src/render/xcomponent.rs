@@ -58,7 +58,10 @@ pub fn render(
         // a subsequent on_surface_changed carries the real geometry.
         let size = xc_raw.size(win).unwrap_or_else(|e| {
             crate::warn!("on_surface_created: size() failed: {e:?}, degrading to 0x0");
-            XComponentSize { width: 0, height: 0 }
+            XComponentSize {
+                width: 0,
+                height: 0,
+            }
         });
         let offset = xc_raw.offset(win).unwrap_or_else(|e| {
             crate::warn!("on_surface_created: offset() failed: {e:?}, degrading to 0,0");

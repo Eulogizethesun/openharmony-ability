@@ -36,12 +36,12 @@ $plugins = @(
   @{ name = 'global-shortcut'; cls = 'GlobalShortcutPlugin' },
   @{ name = 'menu';            cls = 'MenuPlugin' },
   @{ name = 'permission';      cls = 'PermissionPlugin' },
-  @{ name = 'process';         cls = 'ProcessPlugin' },
   @{ name = 'resource';        cls = 'ResourcePlugin' },
   @{ name = 'statusbar';       cls = 'StatusbarPlugin' },
   @{ name = 'updater';         cls = 'UpdaterPlugin' },
   @{ name = 'url';             cls = 'UrlPlugin' },
   @{ name = 'webview';         cls = 'WebviewPlugin' },
+  @{ name = 'webview-cookie';  cls = 'WebviewCookiePlugin' },
   @{ name = 'window';          cls = 'WindowPlugin' }
 )
 
