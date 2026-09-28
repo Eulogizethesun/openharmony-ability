@@ -6,6 +6,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import display from '@ohos.display';
 import * as FloatPage from '../components/FloatPage';
+import { getMenuDataCallback, windowKeyForId } from '../components/MenuBarComponent';
 import { DOMAIN, NATIVE_MODULE_STORAGE_KEY } from '../helper/constants';
 import { clearClipboardEnabled, clearZoomHotkeysEnabled, setClipboardEnabled, setZoomHotkeysEnabled } from '../helper/accelerator_matcher';
 import { unregisterKeySynthesisController } from '../helper/key_synthesis';

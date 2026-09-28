@@ -81,14 +81,6 @@ class ShowAbilityResponse {
   }
 }
 
-class RestartResponse {
-  readonly accepted: boolean;
-
-  constructor(accepted: boolean) {
-    this.accepted = accepted;
-  }
-}
-
 class StartUiAbilityResponse {
   readonly accepted: boolean;
 
