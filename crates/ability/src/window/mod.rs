@@ -12,7 +12,7 @@ use napi_ohos::threadsafe_function::{
 };
 use napi_ohos::Env;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// Global window ID generator to ensure unique IDs across Rust and ArkTS.
@@ -98,6 +98,20 @@ pub fn create_os_window(params: WindowCreateParams) -> napi_ohos::Result<i64> {
         }
     };
 
+    // Float creation race fix (doc/OHOS窗口遗留问题.md 问题七附注): open the
+    // pending entry BEFORE dispatching, so window ops the embedding runtime
+    // dispatches between now and the ArkTS creation chain settling (tauri's
+    // post-build set_visible/set_focus, or user setters right after build)
+    // queue instead of racing the ArkTS-side registration. Registered AFTER
+    // the tsfn lookup so the "TSFN not initialized" early return leaks
+    // nothing, and gated on the capability handshake: a stale HAR without
+    // the notify wiring would leave the entry pending forever — the
+    // handshake keeps that configuration on today's fire-and-forget
+    // semantics (review V1).
+    if FLOAT_PENDING_TRACKING.load(Ordering::Acquire) {
+        register_pending_float(id);
+    }
+
     let status = tsfn.call(
         (
             params.name,
@@ -114,6 +128,9 @@ pub fn create_os_window(params: WindowCreateParams) -> napi_ohos::Result<i64> {
     );
 
     if status != Status::Ok {
+        // The dispatch failed — no ArkTS creation chain will ever settle this
+        // id, so the pending entry (if opened) must go.
+        unregister_pending_float(id);
         crate::error!("create_os_window: TSFN dispatch failed: {:?}", status);
         return Err(Error::from_reason(format!(
             "TSFN call failed: {:?}",
@@ -358,6 +375,238 @@ pub fn unregister_pending_ui_ability(id: i64) -> usize {
             map.len()
         }
         None => 0,
+    }
+}
+
+// ─── Float creation pending registry (Float creation-time race fix,
+// doc/OHOS窗口遗留问题.md 问题七附注) ─────────────────────────────────────────
+//
+// create_os_window pre-allocates an id and fires the createSubWindow TSFN
+// fire-and-forget; the ArkTS creation chain registers the window in
+// WindowManager.windows only after the createSubWindowWithOptions system
+// call resolves (tens to hundreds of ms later). Window ops dispatched by the
+// embedding runtime inside that window (tauri's post-build
+// set_visible/set_focus, or user setters immediately after build) raced the
+// registration and failed with "Unknown OS sub-window" — silently, 100% of
+// the time (22 warns per examples/api suite run).
+//
+// Mirrors the UIAbility pending registry above: create_os_window opens a
+// pending entry (when the capability handshake is on), the ArkTS
+// ProcessInitializer TSFN wrapper reports settlement via
+// notify_float_window_registered (success OR failure — both remove the entry
+// and wake), and the embedding runtime gates window-op dispatch on
+// is_window_ready. Ids that never passed through create_os_window read as
+// ready — the same "unknown means ready" contract as
+// is_ui_ability_stage_ready, so the main window (id 0), UIAbility ids and
+// zombie ids all keep today's fast path.
+//
+// Capability handshake (review V1): enable_float_pending_tracking is called
+// by ProcessInitializer before registering the createSubWindow TSFN. A stale
+// HAR (fresh .so, cached ArkTS) never sets the flag, so create_os_window
+// never gates — behavior degrades to exactly today's fire-and-forget
+// semantics instead of queueing every Float op against an entry no ArkTS
+// code would ever settle. Reverse skew (fresh HAR, old .so) is covered on
+// the ArkTS side with `typeof` guards.
+
+/// Waker attached to a pending Float creation; consumed (and woken) when the
+/// ArkTS creation chain settles so the embedding runtime's queued ops replay
+/// on the next event-loop pass. Existence of the entry IS the pending state —
+/// settlement removes it (unlike PendingAbility, which lingers with a flag).
+struct PendingFloat {
+    waker: Option<crate::OpenHarmonyWaker>,
+}
+
+static PENDING_FLOAT_WINDOWS: Mutex<Option<HashMap<i64, PendingFloat>>> = Mutex::new(None);
+
+/// Set by the ArkTS ProcessInitializer via `enable_float_pending_tracking`
+/// before any Float window can be created (capability handshake, review V1).
+static FLOAT_PENDING_TRACKING: AtomicBool = AtomicBool::new(false);
+
+fn pending_float_windows() -> std::sync::MutexGuard<'static, Option<HashMap<i64, PendingFloat>>> {
+    PENDING_FLOAT_WINDOWS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Opens the pending entry for a Float window id pre-allocated inside
+/// `create_os_window`. Only called when the capability handshake is on.
+pub fn register_pending_float(id: i64) {
+    pending_float_windows()
+        .get_or_insert_with(HashMap::new)
+        .insert(id, PendingFloat { waker: None });
+    crate::info!(
+        "register_pending_float: id={} (createSubWindow TSFN dispatched, awaiting ArkTS registration)",
+        id
+    );
+}
+
+/// Whether the ArkTS creation chain for Float window `id` has settled.
+/// Unknown ids read as `true`: only creations opened by
+/// `register_pending_float` (capability handshake on) are tracked.
+pub fn is_float_window_ready(id: i64) -> bool {
+    pending_float_windows()
+        .as_ref()
+        .map(|m| !m.contains_key(&id))
+        .unwrap_or(true)
+}
+
+/// Combined readiness for window-op gating: ready unless the id is a pending
+/// Float creation OR a pending UIAbility handshake. Unknown ids read as
+/// ready on both halves.
+pub fn is_window_ready(id: i64) -> bool {
+    is_ui_ability_stage_ready(id) && is_float_window_ready(id)
+}
+
+/// Attaches an event-loop waker to a pending Float creation.
+///
+/// Deviates from `set_ui_ability_waker` on unknown ids: it STILL wakes. The
+/// ArkTS creation chain can settle before the embedding runtime attaches
+/// this waker (WindowManager.createSubWindow has synchronous pre-throws that
+/// reject the promise immediately), and unlike the UIAbility registry the
+/// tao-side PENDING_WINDOW_OPS queue is a real consumer of the wake —
+/// without it, ops queued before the waker was attached would only drain on
+/// the next unrelated MainEvent, and an idle parked event loop would never
+/// replay them (review V2). A spurious wake is harmless: the drain pass
+/// simply finds nothing to do.
+pub fn set_float_window_waker(id: i64, waker: crate::OpenHarmonyWaker) {
+    // The waker is consumed inside the match (attached to the pending entry,
+    // or woken immediately for an unknown id); the deferred wake runs outside
+    // the registry lock (uniform lock discipline: never call out to ArkTS
+    // under a lock; the wake itself is TSFN non-blocking anyway).
+    let mut waker = Some(waker);
+    let wake_now = {
+        let mut map = pending_float_windows();
+        match map.as_mut().and_then(|m| m.get_mut(&id)) {
+            Some(pending) => {
+                pending.waker = waker.take();
+                false
+            }
+            None => true,
+        }
+    };
+    if let (true, Some(waker)) = (wake_now, waker) {
+        waker.wake();
+    }
+}
+
+/// NAPI: called by the ProcessInitializer TSFN wrapper when the ArkTS
+/// creation chain for window `id` settles — success or failure. Removes the
+/// pending entry (unknown-ids-ready semantics make removal equivalent to
+/// "settled") and wakes the attached event-loop waker so queued window ops
+/// replay. On failure the replayed ops hit the ArkTS registry and fail with
+/// today's "Unknown OS sub-window" warn — loud, never a silent hold.
+#[napi]
+pub fn notify_float_window_registered(window_id: i64, registered: bool) {
+    let waker = {
+        let mut map = pending_float_windows();
+        match map.as_mut().and_then(|m| m.remove(&window_id)) {
+            Some(pending) => {
+                crate::info!(
+                    "notify_float_window_registered: id={} registered={} (draining queued window ops)",
+                    window_id,
+                    registered
+                );
+                pending.waker
+            }
+            // Never pending (handshake off, or the window handle was dropped
+            // and already unregistered) — nothing to drain, silent no-op
+            // (mirrors the register_ui_ability_stage None branch).
+            None => {
+                crate::debug!(
+                    "notify_float_window_registered: id={} registered={} but no pending entry (unregistered or tracking off)",
+                    window_id,
+                    registered
+                );
+                None
+            }
+        }
+    };
+    if let Some(waker) = waker {
+        waker.wake();
+    }
+}
+
+/// NAPI: capability handshake (review V1). Called by ProcessInitializer
+/// before registering the createSubWindow TSFN — only after this does
+/// create_os_window gate Float ops on ArkTS registration. A stale HAR never
+/// calls it, keeping the pre-fix fire-and-forget semantics (and never
+/// wedging ops against entries no ArkTS code would settle).
+#[napi]
+pub fn enable_float_pending_tracking() {
+    let was = FLOAT_PENDING_TRACKING.swap(true, Ordering::AcqRel);
+    if !was {
+        crate::info!(
+            "enable_float_pending_tracking: Float creation pending tracking armed (ProcessInitializer handshake)"
+        );
+    }
+}
+
+/// Removes the pending entry for a destroyed Float window (tao `Window::drop`).
+/// Idempotent; window ids are never reused (NEXT_WINDOW_ID is monotonic), so a
+/// removed entry can never collide with a future Float.
+pub fn unregister_pending_float(id: i64) {
+    if let Some(map) = pending_float_windows().as_mut() {
+        map.remove(&id);
+    }
+}
+
+#[cfg(test)]
+mod float_pending_tests {
+    use super::*;
+
+    // Statics are process-global across tests — use distinct far-away ids
+    // (real ids start at 1 and increment slowly) so tests can't collide.
+    const A: i64 = 9_000_001;
+    const B: i64 = 9_000_002;
+    const C: i64 = 9_000_003;
+
+    #[test]
+    fn register_gates_and_notify_settles() {
+        register_pending_float(A);
+        assert!(!is_float_window_ready(A));
+        assert!(!is_window_ready(A));
+        notify_float_window_registered(A, true);
+        assert!(is_float_window_ready(A));
+        assert!(is_window_ready(A));
+    }
+
+    #[test]
+    fn notify_failure_also_settles() {
+        register_pending_float(B);
+        assert!(!is_window_ready(B));
+        // Failure settles identically (remove + wake) — replayed ops then
+        // fail loudly at ArkTS instead of being held forever.
+        notify_float_window_registered(B, false);
+        assert!(is_window_ready(B));
+    }
+
+    #[test]
+    fn unknown_ids_read_ready() {
+        // Main window (0), UIAbility ids, zombie ids — never gated.
+        assert!(is_window_ready(0));
+        assert!(is_window_ready(9_000_004));
+    }
+
+    #[test]
+    fn unregister_is_idempotent_and_settles() {
+        register_pending_float(C);
+        assert!(!is_window_ready(C));
+        unregister_pending_float(C);
+        unregister_pending_float(C); // second call must not panic
+        assert!(is_window_ready(C));
+        // A late notify after drop is a silent no-op (drop-then-settle race).
+        notify_float_window_registered(C, true);
+        assert!(is_window_ready(C));
+    }
+
+    #[test]
+    fn ui_ability_pending_also_blocks_combined_check() {
+        // The combined check is an AND: a pending UIAbility handshake gates
+        // is_window_ready through the other half.
+        register_pending_ui_ability(9_000_005);
+        assert!(!is_window_ready(9_000_005));
+        unregister_pending_ui_ability(9_000_005);
+        assert!(is_window_ready(9_000_005));
     }
 }
 

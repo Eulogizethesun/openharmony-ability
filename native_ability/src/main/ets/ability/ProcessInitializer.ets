@@ -3,7 +3,7 @@ import common from "@ohos.app.ability.common";
 import webview from "@ohos.web.webview";
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { Module, AbilityInitContext, ApplicationLifecycle } from "./type";
+import { Module, AbilityInitContext, ApplicationLifecycle, WindowConfig } from "./type";
 import { Loadable } from "../helper/loadable";
 import { WindowManager } from "../window/WindowManager";
 import { DOMAIN, NATIVE_MODULE_STORAGE_KEY } from '../helper/constants';
@@ -126,8 +126,43 @@ export class ProcessInitializer {
     const wm = WindowManager.getInstance();
     for (const module of this.nativeModules) {
       if (typeof module.registerCreateSubWindowTsfn === "function") {
+        // Float creation-race fix (doc/OHOS窗口遗留问题.md 问题七附注).
+        // Capability handshake (review V1) — arm the Rust-side pending registry
+        // BEFORE any create_os_window can run. A stale HAR lacks these members
+        // entirely, so the Rust side never gates Float ops and behavior stays
+        // exactly the pre-fix fire-and-forget semantics; a fresh HAR on an old
+        // .so is covered by the typeof probes in notifySettled below.
+        if (typeof module.enableFloatPendingTracking === "function") {
+          module.enableFloatPendingTracking();
+        }
+        const notifySettled = (windowId: number, registered: boolean): void => {
+          if (typeof module.notifyFloatWindowRegistered === "function") {
+            module.notifyFloatWindowRegistered(windowId, registered);
+          }
+        };
         module.registerCreateSubWindowTsfn(
-          (config: ESObject): Promise<number> => wm.createSubWindow(config)
+          (config: ESObject): Promise<number> => {
+            const windowId: number = (config as WindowConfig).windowId;
+            return wm.createSubWindow(config)
+              .then((id: number): number => {
+                // Settle signal: the creation chain finished (window registered
+                // in WindowManager.windows, FloatPage UI loaded). Rust drains
+                // the ops queued against the pre-registration window. Attached
+                // at promise END on purpose — an earlier notify would let
+                // replayed ops race the chain's trailing
+                // resize/moveWindowTo/showWindow (review V10).
+                notifySettled(windowId, true);
+                return id;
+              })
+              .catch((err: ESObject) => {
+                // Failure settles identically: Rust drains the queue; the
+                // replayed ops then fail loudly at the ArkTS registry
+                // (today's "Unknown OS sub-window" warn) instead of being
+                // held forever.
+                notifySettled(windowId, false);
+                throw err;
+              });
+          }
         );
         hilog.info(DOMAIN, 'ProcessInitializer', 'Registered createSubWindow TSFN');
         break;

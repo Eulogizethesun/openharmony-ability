@@ -217,7 +217,17 @@ export interface Module {
    *  action: 0 = Down, 1 = Up. */
   notifyKeyEvent?: (keyCode: number, action: number, deviceId: number) => void;
   /** `register_create_sub_window_tsfn` — legacy create_os_window path hookup. */
-  registerCreateSubWindowTsfn?: (createSubWindow: (config: ESObject) => Promise<number>) => void;
+  registerCreateSubWindowTsfn?: (
+    createSubWindow: (config: ESObject) => Promise<number>,
+  ) => void;
+  /** `notify_float_window_registered` — Float creation-chain settle signal (success or
+   *  failure); drains the Rust-side ops queued against the pre-registration race window
+   *  (doc/OHOS窗口遗留问题.md 问题七附注). */
+  notifyFloatWindowRegistered?: (windowId: number, registered: boolean) => void;
+  /** `enable_float_pending_tracking` — Float pending-registry capability handshake
+   *  (review V1); arms the Rust-side gate only when present, so a stale HAR keeps the
+   *  pre-fix fire-and-forget semantics. */
+  enableFloatPendingTracking?: () => void;
   /**
    * Synchronous ArkTS platform callback -> Rust plugin decision. The value is a named N-API
    * object and must be returned before the platform callback resumes.
