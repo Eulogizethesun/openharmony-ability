@@ -1104,7 +1104,14 @@ impl OpenHarmonyApp {
     /// tracking and keycode mapping all apply unchanged.
     pub fn dispatch_key_event(&self, data: KeyEventData) {
         if let Some(ref mut h) = *self.event_loop.borrow_mut() {
-            h(Event::Input(InputEvent::KeyEvent(data)));
+            // window_id = 0 (primary): MainPage.onKeyPreIme forwards pre-IME
+            // keys only for the main window — sub-UIAbility instances are
+            // gated out upstream (no suppression shim → double dispatch), so
+            // this dispatch is always the primary's render surface.
+            h(Event::Input {
+                window_id: 0,
+                input: InputEvent::KeyEvent(data),
+            });
         }
     }
 
