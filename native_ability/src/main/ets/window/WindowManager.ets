@@ -1,3 +1,11 @@
+import { window, UIContext } from '@kit.ArkUI';
+import { FrameNode } from '@ohos.arkui.node';
+import { common } from '@kit.AbilityKit';
+import pointer from '@ohos.multimodalInput.pointer';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { deviceInfo } from '@kit.BasicServicesKit';
+import display from '@ohos.display';
+import * as FloatPage from '../components/FloatPage';
 import { DOMAIN, NATIVE_MODULE_STORAGE_KEY } from '../helper/constants';
 import { clearClipboardEnabled, clearZoomHotkeysEnabled, setClipboardEnabled, setZoomHotkeysEnabled } from '../helper/accelerator_matcher';
 import { unregisterKeySynthesisController } from '../helper/key_synthesis';

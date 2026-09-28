@@ -19,8 +19,6 @@ const HIDE_ABILITY_REQUEST_TYPE = "ohos.app_control.HideAbilityRequest";
 const HIDE_ABILITY_RESPONSE_TYPE = "ohos.app_control.HideAbilityResponse";
 const SHOW_ABILITY_REQUEST_TYPE = "ohos.app_control.ShowAbilityRequest";
 const SHOW_ABILITY_RESPONSE_TYPE = "ohos.app_control.ShowAbilityResponse";
-const RESTART_REQUEST_TYPE = "ohos.app_control.RestartRequest";
-const RESTART_RESPONSE_TYPE = "ohos.app_control.RestartResponse";
 const START_UI_ABILITY_REQUEST_TYPE = "ohos.app_control.StartUiAbilityRequest";
 const START_UI_ABILITY_RESPONSE_TYPE = "ohos.app_control.StartUiAbilityResponse";
 

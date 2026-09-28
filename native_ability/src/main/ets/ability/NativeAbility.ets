@@ -335,12 +335,11 @@ export class NativeAbility extends UIAbility {
         "after module.init mod=%{public}s bridgePlugins=%{public}d",
         moduleName,
         lifecycle.bridgePlugins?.length ?? -1,
+      );
       // Publish the lifecycle bundle to the process-level store (D12) so a
       // later joined instance can fire the shared callbacks with its own
       // windowId once this module is owned by the live session.
       ProcessInitializer.rememberLifecycle(moduleName, lifecycle);
-
-      );
 
       try {
         BridgeHostRegistry.configurePlugins(sessionId, moduleName, lifecycle.bridgePlugins);
