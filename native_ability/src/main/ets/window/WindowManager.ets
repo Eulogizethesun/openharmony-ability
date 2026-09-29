@@ -9,7 +9,7 @@ import * as FloatPage from '../components/FloatPage';
 import { getMenuDataCallback, windowKeyForId } from '../components/MenuBarComponent';
 import { DOMAIN, NATIVE_MODULE_STORAGE_KEY } from '../helper/constants';
 import { clearClipboardEnabled, clearZoomHotkeysEnabled, setClipboardEnabled, setZoomHotkeysEnabled } from '../helper/accelerator_matcher';
-import { unregisterKeySynthesisController } from '../helper/key_synthesis';
+import { unregisterKeySynthesisController, unregisterWebFocus } from '../helper/key_synthesis';
 import web_webview from '@ohos.web.webview';
 import { RectThrottle, WindowRectEventWrap, WindowRectSnapshot, WindowSizeEventWrap } from './RectThrottle';
 import { WindowAttachmentRegistry } from './WindowAttachmentRegistry';
@@ -155,8 +155,6 @@ export class WindowManager {
   // or id>0 subsequent instances — equal, no primary/subordinate distinction).
   // Stores stage in uiAbilityStages, sets windowKinds, notifies the Rust handshake registry (D7),
   // and registers focus tracking.
-  // Stores stage in uiAbilityStages, sets windowKinds, notifies the Rust handshake registry (D7),
-  // and registers focus tracking.
   // D4b: whether a UIAbility instance has already registered its stage for
   // windowId. STATIC and throw-free by design: the NativeAbility onCreate
   // plain-relaunch guard runs BEFORE ProcessInitializer calls WindowManager.init
@@ -282,6 +280,7 @@ export class WindowManager {
     // outlives its stage teardown (continuation-restore reuses it).
     if (wid !== 0) {
       unregisterKeySynthesisController(wid);
+      unregisterWebFocus(wid);
     }
     // Per-window accelerator flags — same clearing removeWindow does for Float.
     clearClipboardEnabled(wid);

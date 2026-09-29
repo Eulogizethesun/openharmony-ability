@@ -29,8 +29,12 @@ pub fn ability(attr: TokenStream, item: TokenStream) -> TokenStream {
             env: &'a napi_ohos::Env,
             #[napi(ts_arg_type = "NodeContent")] slot: ::openharmony_ability::arkui::ArkUIHandle,
             render_owner: String,
-            window_id: i64,
+            // Option<i64>: an outdated HAR calling the pre-window_id signature
+            // degrades to the primary instance (id 0) instead of failing NAPI
+            // arg marshalling (mirrors lifecycle.rs's window_id_arg pattern).
+            window_id: Option<i64>,
         ) -> napi_ohos::Result<()> {
+            let window_id = window_id.unwrap_or(0);
             if render_owner.is_empty() {
                 return Err(napi_ohos::Error::from_reason("renderOwner must not be empty"));
             }
@@ -225,7 +229,12 @@ pub fn ability(attr: TokenStream, item: TokenStream) -> TokenStream {
             /// openspec multi-uiability-windows): 0 = primary, or a spawned
             /// instance's tauri window id.
             #[napi_derive_ohos::napi]
-            pub fn on_bridge_lifecycle(kind: String, window_id: i64) -> napi_ohos::Result<()> {
+            pub fn on_bridge_lifecycle(kind: String, window_id: Option<i64>) -> napi_ohos::Result<()> {
+                // Option<i64>: an outdated HAR calling the pre-window_id
+                // signature degrades to the primary instance (id 0) instead of
+                // failing NAPI arg marshalling (mirrors lifecycle.rs's
+                // window_id_arg pattern).
+                let window_id = window_id.unwrap_or(0);
                 let event = ::openharmony_ability::PluginLifecycleEvent::from_arkts(&kind, window_id)?;
                 (*APP).dispatch_plugin_lifecycle(event)
             }

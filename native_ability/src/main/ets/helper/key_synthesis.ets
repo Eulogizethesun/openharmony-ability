@@ -67,6 +67,13 @@ export function isWebFocused(windowId: number): boolean {
   return webFocused.get(windowId) ?? false;
 }
 
+/** Web focus state teardown (design.md D13) — mirrors
+ * unregisterKeySynthesisController's window-lifetime sinks so the map does
+ * not grow one entry per destroyed window. */
+export function unregisterWebFocus(windowId: number): void {
+  webFocused.delete(windowId);
+}
+
 /** Keys currently held — repeat = Down for an already-held key (mirrors tao's PRESSED_KEYS). */
 const pressedKeys: Set<number> = new Set();
 

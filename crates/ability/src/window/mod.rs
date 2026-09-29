@@ -365,9 +365,12 @@ pub fn register_ui_ability_stage(window_id: i64) {
 /// Returns the registry's remaining size for the E4 ten-round leak check.
 ///
 /// Known bounded edge: a startAbility that fails after
-/// `register_pending_ui_ability` never fires an ability-destroy callback, so
-/// its `{false, None}` entry stays — it has no consumer (only the waker reads
-/// the registry) and is therefore harmless.
+/// `register_pending_ui_ability` never fires an ability-destroy callback.
+/// The tao caller rolls the entry back on failure (unregister +
+/// drop_pending_window_ops), and `is_window_ready` — the combined gate
+/// behind tao's dispatch_or_queue/spawn_or_queue — is a direct consumer of
+/// this registry: a stale entry would silently hold that window's queued
+/// ops forever (G15).
 pub fn unregister_pending_ui_ability(id: i64) -> usize {
     match pending_ui_abilities().as_mut() {
         Some(map) => {

@@ -179,24 +179,38 @@ pub async fn start_ui_ability(
     // Record the label→id pairing so deep-link's per-window resolution can map a
     // calling Window's label back to its instance's want-URI storage (design D9).
     ::openharmony_ability::register_window_label(&label, window_id);
-    let bridge = app.bridge()?;
-    let response = bridge
-        .call_sync_from_worker::<AppControlBridgePlugin, StartUiAbilityRequest, StartUiAbilityResponse>(
-            "start-ui-ability",
-            StartUiAbilityRequest {
-                window_id,
-                label,
-                url,
-                transparent,
-            },
-        )
-        .await?;
-    if !response.accepted {
-        return Err(Error::from_reason(
-            "App-control plugin rejected start-ui-ability",
-        ));
+    let result = match app.bridge() {
+        Ok(bridge) => {
+            bridge
+                .call_sync_from_worker::<AppControlBridgePlugin, StartUiAbilityRequest, StartUiAbilityResponse>(
+                    "start-ui-ability",
+                    StartUiAbilityRequest {
+                        window_id,
+                        label,
+                        url,
+                        transparent,
+                    },
+                )
+                .await
+        }
+        Err(e) => Err(e),
+    };
+    // Roll the pairing back on every failure path (G15): a label whose start
+    // never completed must not keep resolving to a dead id — deep-link's
+    // "never spawned → primary (id 0)" contract (D9) would silently break.
+    match result {
+        Ok(response) if response.accepted => Ok(()),
+        Ok(_) => {
+            ::openharmony_ability::unregister_window_label(window_id);
+            Err(Error::from_reason(
+                "App-control plugin rejected start-ui-ability",
+            ))
+        }
+        Err(e) => {
+            ::openharmony_ability::unregister_window_label(window_id);
+            Err(e)
+        }
     }
-    Ok(())
 }
 
 /// A synchronous capability must be invoked in an exported N-API callback that owns `Env`.

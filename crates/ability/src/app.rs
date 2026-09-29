@@ -571,7 +571,9 @@ impl OpenHarmonyApp {
     }
 
     /// Takes the latest `want.parameters` JSON (draining the stored value).
-    /// Consumed by the `plugin-deep-link` facade (`DeepLinkClient`).
+    /// Test-only facade: production code goes through the window-id-keyed free
+    /// functions (`take_want_parameters_for_window` and siblings); kept for
+    /// unit tests.
     pub fn take_want_parameters(&self) -> String {
         self.inner
             .write()
@@ -588,7 +590,9 @@ impl OpenHarmonyApp {
     }
 
     /// Takes the initial `want.uri` from `onCreate` (draining the stored value).
-    /// Consumed by the `plugin-deep-link` facade to surface the cold-start deep link.
+    /// Test-only facade: production code goes through the window-id-keyed free
+    /// functions (`take_initial_want_uri_for_window` and siblings); kept for
+    /// unit tests.
     pub fn take_initial_want_uri(&self) -> String {
         self.inner
             .write()
@@ -606,7 +610,9 @@ impl OpenHarmonyApp {
     }
 
     /// Returns whether the current launch is an app-continuation restore.
-    /// Peek-only. Consumed by the `plugin-continuation` facade (`ContinuationClient`).
+    /// Peek-only. Test-only facade: production code goes through the
+    /// module-level free functions (`is_continuation_restore` and siblings);
+    /// kept for unit tests.
     pub fn is_continuation_restore(&self) -> bool {
         self.inner
             .read()
@@ -616,7 +622,8 @@ impl OpenHarmonyApp {
     }
 
     /// Takes the continuation payload JSON (draining the stored value).
-    /// Consumed by the `plugin-continuation` facade (`ContinuationClient`).
+    /// Test-only facade: production code goes through the module-level free
+    /// functions (`take_continuation_data` and siblings); kept for unit tests.
     pub fn take_continuation_data(&self) -> String {
         self.inner
             .write()
@@ -1439,7 +1446,7 @@ pub fn window_id_for_label(label: &str) -> i64 {
 /// `window_id_for_label` for the dead label resolves to 0 and would read the
 /// primary's memo. A call arriving from a destroyed window's webview is
 /// unreachable in practice, and keeping stale entries breaks the leak check.
-fn unregister_window_label(window_id: i64) {
+pub fn unregister_window_label(window_id: i64) {
     if let Ok(mut labels) = WINDOW_ID_BY_LABEL.lock() {
         labels.retain(|_, id| *id != window_id);
     }
