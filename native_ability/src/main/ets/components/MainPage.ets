@@ -117,7 +117,7 @@ struct MainPage {
         if (
           event.type === KeyType.Down &&
           this.acceleratorMatcher.matchesClipboardShortcut(event) &&
-          !isClipboardEnabled(MAIN_WINDOW_ID)
+          !isClipboardEnabled(this.windowId)
         ) {
           return true;
         }
@@ -125,7 +125,7 @@ struct MainPage {
         if (
           event.type === KeyType.Down &&
           this.acceleratorMatcher.matchesZoomShortcut(event) &&
-          !isZoomHotkeysEnabled(MAIN_WINDOW_ID)
+          !isZoomHotkeysEnabled(this.windowId)
         ) {
           return true;
         }
