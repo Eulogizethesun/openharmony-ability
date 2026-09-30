@@ -126,7 +126,7 @@ export class ProcessInitializer {
     const wm = WindowManager.getInstance();
     for (const module of this.nativeModules) {
       if (typeof module.registerCreateSubWindowTsfn === "function") {
-        // Float creation-race fix (doc/OHOS窗口遗留问题.md 问题七附注).
+        // Float creation-race fix (doc/OHOS窗口遗留问题.md issue-7 addendum).
         // Capability handshake (review V1) — arm the Rust-side pending registry
         // BEFORE any create_os_window can run. A stale HAR lacks these members
         // entirely, so the Rust side never gates Float ops and behavior stays

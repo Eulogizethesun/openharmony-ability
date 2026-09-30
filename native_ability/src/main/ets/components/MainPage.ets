@@ -133,7 +133,7 @@ struct MainPage {
         if (event.type === KeyType.Down && this.acceleratorMatcher.matches(event)) {
           const matchedItem = this.acceleratorMatcher.getMatchedItem();
           if (matchedItem) {
-            const handler = getMenuClickHandler(MAIN_WINDOW_ID);
+            const handler = getMenuClickHandler(this.windowId);
             if (handler) {
               handler(matchedItem);
             }
@@ -147,9 +147,9 @@ struct MainPage {
         if (
           event.type === KeyType.Down &&
           event.keyCode === KeyCode.KEYCODE_ESCAPE &&
-          !isMenubarVisible(MAIN_WINDOW_ID)
+          !isMenubarVisible(this.windowId)
         ) {
-          const recoverFn = getMenuBarRecoverFn(MAIN_WINDOW_ID);
+          const recoverFn = getMenuBarRecoverFn(this.windowId);
           if (recoverFn) {
             recoverFn();
           }

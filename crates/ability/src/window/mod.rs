@@ -98,7 +98,7 @@ pub fn create_os_window(params: WindowCreateParams) -> napi_ohos::Result<i64> {
         }
     };
 
-    // Float creation race fix (doc/OHOS窗口遗留问题.md 问题七附注): open the
+    // Float creation race fix (doc/OHOS窗口遗留问题.md issue-7 addendum): open the
     // pending entry BEFORE dispatching, so window ops the embedding runtime
     // dispatches between now and the ArkTS creation chain settling (tauri's
     // post-build set_visible/set_focus, or user setters right after build)
@@ -367,7 +367,10 @@ pub fn register_ui_ability_stage(window_id: i64) {
 /// Known bounded edge: a startAbility that fails after
 /// `register_pending_ui_ability` never fires an ability-destroy callback.
 /// The tao caller rolls the entry back on failure (unregister +
-/// drop_pending_window_ops), and `is_window_ready` — the combined gate
+/// drop_pending_window_ops), and — for a rejection arriving after the bridge
+/// response already returned accepted (AMS refuses the deferred startAbility)
+/// — the ArkTS catch rolls it back through `notify_ui_ability_start_failed`
+/// below. `is_window_ready` — the combined gate
 /// behind tao's dispatch_or_queue/spawn_or_queue — is a direct consumer of
 /// this registry: a stale entry would silently hold that window's queued
 /// ops forever (G15).
@@ -381,8 +384,43 @@ pub fn unregister_pending_ui_ability(id: i64) -> usize {
     }
 }
 
+/// NAPI: Called by the ArkTS `start-ui-ability` handler's deferred catch
+/// (AppControlPlugin.ets) when AMS rejects the spawn AFTER the bridge response
+/// already returned accepted=true ("dispatched", not "created"). Completes the
+/// same rollback the synchronous failure legs perform (G15): drops the pending
+/// D7 handshake entry (tao's Err leg) and the label→id pairing (the
+/// app-control facade's Err leg). Without it, a rejected spawn leaves an entry
+/// no `register_ui_ability_stage` will ever flip — `is_window_ready` stays
+/// false and every op queued for that window is held silently forever.
+///
+/// tao's queued-op drop (`drop_pending_window_ops`) is not reachable from this
+/// crate: removing the pending entry makes the id read as ready, so the
+/// embedding runtime's next drain pass replays those ops and each fails loudly
+/// at the bridge — the blessed degradation for a rolled-back id, never an
+/// infinite silent queue. The loop wake mirrors `notify_window_close` so that
+/// drain pass runs promptly instead of waiting for an unrelated event.
+///
+/// Idempotent by construction: an id that never registered (or was already
+/// torn down) is a no-op for both registries. A stray id 0 cannot corrupt
+/// primary state either — id 0 never has a pending handshake entry, and an
+/// unknown label already falls back to the primary id on lookup.
+#[napi]
+pub fn notify_ui_ability_start_failed(window_id: i64) {
+    let pending_len = unregister_pending_ui_ability(window_id);
+    crate::unregister_window_label(window_id);
+    crate::info!(
+        "notify_ui_ability_start_failed: id={} rolled back (pending registry now {} entries)",
+        window_id,
+        pending_len
+    );
+    // Wake the embedding runtime's event loop so queued ops drain (and fail
+    // loudly) on the next pass instead of sitting until an unrelated event —
+    // see the drop_pending_window_ops note above.
+    crate::waker::wake_installed_app();
+}
+
 // ─── Float creation pending registry (Float creation-time race fix,
-// doc/OHOS窗口遗留问题.md 问题七附注) ─────────────────────────────────────────
+// doc/OHOS窗口遗留问题.md issue-7 addendum) ─────────────────────────────────────────
 //
 // create_os_window pre-allocates an id and fires the createSubWindow TSFN
 // fire-and-forget; the ArkTS creation chain registers the window in
@@ -610,6 +648,25 @@ mod float_pending_tests {
         assert!(!is_window_ready(9_000_005));
         unregister_pending_ui_ability(9_000_005);
         assert!(is_window_ready(9_000_005));
+    }
+
+    #[test]
+    fn start_failed_rollback_clears_pending_and_label() {
+        // An AMS rejection arriving after the bridge response returned
+        // accepted ("dispatched" ≠ "created") must roll back the same
+        // registries the synchronous Err leg does, or the id never becomes
+        // ready and its queued ops are held silently forever (G15).
+        register_pending_ui_ability(9_000_006);
+        crate::register_window_label("af3-rolled-back", 9_000_006);
+        assert!(!is_ui_ability_stage_ready(9_000_006));
+        notify_ui_ability_start_failed(9_000_006);
+        // The pending entry is gone (unknown id reads as ready) and the label
+        // resolves back to the primary id.
+        assert!(is_ui_ability_stage_ready(9_000_006));
+        assert_eq!(crate::window_id_for_label("af3-rolled-back"), 0);
+        // Repeated notifies — or one for a never-registered id — are no-ops.
+        notify_ui_ability_start_failed(9_000_006);
+        notify_ui_ability_start_failed(9_000_099);
     }
 }
 

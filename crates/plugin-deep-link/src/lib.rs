@@ -47,16 +47,12 @@ impl_bridge_napi_type!(DeepLinkGetUriResponse, "ohos.deep-link.GetUriResponse");
 #[derive(Clone)]
 pub struct DeepLinkClient {
     bridge: BridgeRuntime,
-    /// App handle for the Rust-side want state (issue #87 major-9: migrated
-    /// from module statics into `OpenHarmonyAppInner`).
-    app: OpenHarmonyApp,
 }
 
 impl DeepLinkClient {
     pub fn new(app: &OpenHarmonyApp) -> Result<Self> {
         Ok(Self {
             bridge: app.bridge()?,
-            app: app.clone(),
         })
     }
 

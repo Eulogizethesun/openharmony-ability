@@ -222,12 +222,17 @@ export interface Module {
   ) => void;
   /** `notify_float_window_registered` — Float creation-chain settle signal (success or
    *  failure); drains the Rust-side ops queued against the pre-registration race window
-   *  (doc/OHOS窗口遗留问题.md 问题七附注). */
+   *  (doc/OHOS窗口遗留问题.md issue-7 addendum). */
   notifyFloatWindowRegistered?: (windowId: number, registered: boolean) => void;
   /** `enable_float_pending_tracking` — Float pending-registry capability handshake
    *  (review V1); arms the Rust-side gate only when present, so a stale HAR keeps the
    *  pre-fix fire-and-forget semantics. */
   enableFloatPendingTracking?: () => void;
+  /** `notify_ui_ability_start_failed` — start-ui-ability deferred-catch rollback
+   *  (AppControlPlugin): AMS rejected the spawn after the bridge response already
+   *  returned accepted; drops the pending D7 handshake entry and the label→id
+   *  pairing so a rejected spawn cannot strand them (review G15). */
+  notifyUiAbilityStartFailed?: (windowId: number) => void;
   /**
    * Synchronous ArkTS platform callback -> Rust plugin decision. The value is a named N-API
    * object and must be returned before the platform callback resumes.

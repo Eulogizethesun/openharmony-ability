@@ -142,8 +142,8 @@ export class NativeAbility extends UIAbility {
     this.abilityTransparent = want.parameters?.["tauri_transparent"] === "true";
     hilog.info(DOMAIN, 'NativeAbility', 'onCreate - windowId=%{public}d transparent=%{public}s (from want.parameters)', this.abilityWindowId, String(this.abilityTransparent));
 
-    // D4b plain-relaunch guard (design.md D4b): under launchType "standard"
-    // (entry_desktop template) a relaunch while the app is running — desktop
+    // D4b plain-relaunch guard (design.md D4b): for a bypassed/missing
+    // onAcceptWant route, a relaunch while the app is running — desktop
     // icon / taskbar / a second deep-link click — spawns a duplicate
     // EntryAbility whose want carries no tauri_window_id, so it resolves to
     // the primary id 0. Letting it proceed would overwrite the primary's

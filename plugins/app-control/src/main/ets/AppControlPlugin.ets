@@ -7,6 +7,8 @@ import {
   BridgeTypedValue,
   BridgeContextRequirement,
   SyncPluginBase,
+  NATIVE_MODULE_STORAGE_KEY,
+  Module,
 } from "@ohos-rs/ability";
 
 const TERMINATE_REQUEST_TYPE = "ohos.app_control.TerminateRequest";
@@ -255,6 +257,28 @@ export class AppControlPlugin extends SyncPluginBase {
       setTimeout(() => {
         ctx.startAbility(want).catch((e: BusinessError) => {
           console.error(`[AppControl] start-ui-ability id=${request.windowId} failed: ${e.code} ${e.message}`);
+          // accepted ≠ created: the Rust caller already returned Ok and tao
+          // pre-registered the pending D7 handshake entry plus the label→id
+          // pairing, so an AMS rejection here (this want never creates a
+          // stage) would strand both registries — the id never becomes ready
+          // and every op queued for that window is held silently forever
+          // (G15). Roll back the same registries the synchronous Err leg
+          // does: unregister_window_label + unregister_pending_ui_ability
+          // (tao's queued-op drop is Rust-side and unreachable here — the
+          // entry removal makes the id read as ready, so the runtime's next
+          // drain pass replays those ops and each fails loudly instead).
+          // typeof-probed optional export: a stale .so without it keeps
+          // today's fire-and-forget semantics. console.error only (C5: this
+          // catch must not hilog — NAPI re-entrancy turns the log itself into
+          // a thrown error and swallows the original one).
+          try {
+            const nativeModule: Module | undefined = AppStorage.get<Module>(NATIVE_MODULE_STORAGE_KEY);
+            if (nativeModule && typeof nativeModule.notifyUiAbilityStartFailed === "function") {
+              nativeModule.notifyUiAbilityStartFailed(request.windowId);
+            }
+          } catch (notifyErr) {
+            console.error(`[AppControl] start-ui-ability rollback notify failed: ${String(notifyErr)}`);
+          }
         });
       }, 0);
       return { typeName: START_UI_ABILITY_RESPONSE_TYPE, value: new StartUiAbilityResponse(true) };

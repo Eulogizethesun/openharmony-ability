@@ -564,6 +564,9 @@ impl OpenHarmonyApp {
     // inside already-tolerant callback contexts).
 
     /// Stores the latest `want.parameters` JSON from `onNewWant`.
+    /// Test-only facade: production code goes through the module-level
+    /// window-id-keyed free functions (same names, taking a leading
+    /// `window_id`); kept for unit tests.
     pub fn store_want_parameters(&self, json: &str) {
         if let Ok(mut inner) = self.inner.write() {
             inner.store_want_parameters(json);
@@ -583,6 +586,9 @@ impl OpenHarmonyApp {
     }
 
     /// Stores the initial `want.uri` from `onCreate` (cold start).
+    /// Test-only facade: production code goes through the module-level
+    /// window-id-keyed free functions (same names, taking a leading
+    /// `window_id`); kept for unit tests.
     pub fn store_initial_want_uri(&self, uri: &str) {
         if let Ok(mut inner) = self.inner.write() {
             inner.store_initial_want_uri(uri);
@@ -603,6 +609,10 @@ impl OpenHarmonyApp {
 
     /// Stores the continuation signal from a lifecycle callback
     /// (see `OpenHarmonyAppInner::store_continuation` for the clear-on-false contract).
+    /// Test-only facade: production code goes through the module-level free
+    /// function `store_continuation` (its doc is the public entry point, and
+    /// external tests — e.g. plugin-continuation — must call it instead of
+    /// this app-instance store); kept for unit tests.
     pub fn store_continuation(&self, is_continuation: bool, parameters_json: &str) {
         if let Ok(mut inner) = self.inner.write() {
             inner.store_continuation(is_continuation, parameters_json);
