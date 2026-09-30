@@ -214,10 +214,13 @@ export class WindowManager {
       try {
         nativeModule.registerUiAbilityStage(wid);
       } catch (e) {
-        // C5: this catch wraps a NAPI call — a hilog.error here throws
-        // "Argc mismatch" (NAPI re-entrancy) and swallows the original error.
-        // Console fallback, same escape hatch as setPointerStyle below.
-        console.error(`[WindowManager] registerUiAbilityStage NAPI call failed for id=${wid}: ${String(e)}`);
+        // Not a C5 (NAPI re-entrant) context: this method runs from
+        // onWindowStageCreate — an OS lifecycle callback whose NAPI call is
+        // ArkTS-initiated, not a Rust-into-ArkTS re-entry — so hilog.error
+        // is safe here and keeps the domain tag for hilog-side filtering
+        // (unlike setPointerStyle below, which IS called back from Rust and
+        // needs the console fallback).
+        hilog.error(DOMAIN, 'WindowManager', 'registerUiAbilityStage NAPI call failed for id=%{public}d (Rust handshake registry not notified): %{public}s', wid, String(e));
       }
     } else {
       hilog.warn(DOMAIN, 'WindowManager', 'nativeModule.registerUiAbilityStage unavailable; Rust handshake registry not notified for id=%{public}d', wid);
