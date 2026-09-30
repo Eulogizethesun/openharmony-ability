@@ -460,6 +460,13 @@ pub fn create_lifecycle_handle<'a>(
                 h(Event::NewWant { uri })
             }
         }
+        // For a spawned instance (window_id > 0) the parameters are stored
+        // per-id above, but `Event::NewWant` is NOT dispatched: there is a
+        // single event loop and no per-window new-want routing. A warm-start
+        // deep link into a spawned instance is therefore recorded (readable
+        // via take_want_parameters_for_window) but raises no event — a known
+        // limitation tracked as design.md NG8 (openspec
+        // multi-uiability-windows).
         Ok(())
     })?;
 

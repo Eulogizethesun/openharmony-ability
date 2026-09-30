@@ -101,9 +101,11 @@ impl DeepLinkClient {
 
     /// Returns the cold-start `want.uri` from the app's session state, then clears it.
     ///
-    /// This is a **synchronous** RwLock read — safe to call from any thread including the
-    /// main thread. Unlike [`get_initial_uri`](Self::get_initial_uri), this does NOT go
-    /// through the bridge and will not deadlock when called from a sync/main-thread context.
+    /// This is a synchronous read of a module-level mutex-guarded static
+    /// (`INITIAL_WANT_URI` in the ability crate; no bridge call, no await) —
+    /// safe to call from any thread including the main thread. Unlike
+    /// [`get_initial_uri`](Self::get_initial_uri), this does NOT go through
+    /// the bridge and will not deadlock when called from a sync/main-thread context.
     ///
     /// The value is populated by `onAbilityCreateWithWant` via the lifecycle callback.
     /// Resolves the primary instance's (window id 0) entry; use
@@ -122,8 +124,10 @@ impl DeepLinkClient {
 
     /// Returns the latest `want.parameters` JSON from `onNewWant`, then clears it.
     ///
-    /// This is a **synchronous** RwLock read — safe to call from any thread including the
-    /// main thread. The value is populated by the `on_new_want` lifecycle callback.
+    /// This is a synchronous read of a module-level mutex-guarded static
+    /// (`WANT_PARAMETERS` in the ability crate; no bridge call, no await) —
+    /// safe to call from any thread including the main thread. The value is
+    /// populated by the `on_new_want` lifecycle callback.
     pub fn take_want_parameters(&self) -> String {
         openharmony_ability::take_want_parameters()
     }

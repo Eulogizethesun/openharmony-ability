@@ -169,6 +169,17 @@ export class ProcessInitializer {
       }
     }
 
+    // UIAbility spawn pending-registry handshake (multi-uiability D7): arm the
+    // Rust-side gate before any start_ui_ability can be dispatched. A stale HAR
+    // lacks this member entirely, so the Rust side never opens pending entries
+    // and spawned-window ops keep fire-and-forget dispatch (no queue wedge —
+    // same degrade contract as enableFloatPendingTracking above).
+    for (const module of this.nativeModules) {
+      if (typeof module.enableUiAbilityPendingTracking === "function") {
+        module.enableUiAbilityPendingTracking();
+      }
+    }
+
     // module.init → bridge session creation is now performed by NativeAbility.onCreate,
     // which owns the per-Ability lifecycle and constructs BridgeHostRegistry sessions.
 

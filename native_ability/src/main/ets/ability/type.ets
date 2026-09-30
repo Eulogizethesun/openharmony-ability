@@ -233,6 +233,11 @@ export interface Module {
    *  returned accepted; drops the pending D7 handshake entry and the label→id
    *  pairing so a rejected spawn cannot strand them (review G15). */
   notifyUiAbilityStartFailed?: (windowId: number) => void;
+  /** `enable_ui_ability_pending_tracking` — UIAbility spawn pending-registry
+   *  capability handshake (mirrors enableFloatPendingTracking); arms the Rust-side
+   *  gate only when present, so a stale HAR keeps the pre-registry fire-and-forget
+   *  semantics instead of wedging ops against entries no ArkTS code would settle. */
+  enableUiAbilityPendingTracking?: () => void;
   /**
    * Synchronous ArkTS platform callback -> Rust plugin decision. The value is a named N-API
    * object and must be returned before the platform callback resumes.

@@ -10,6 +10,7 @@ import {
   setMenuClickHandler,
   setMenuBarRecoverFn,
   getMenuDataCallback,
+  windowKeyForId,
 } from "../components/MenuBarComponent";
 import {
   ApplicationLifecycle,
@@ -806,7 +807,10 @@ export class NativeAbility extends UIAbility {
           // Phase 3 (design.md D3): RECOVER→menubar logic stays synchronous (UI logic,
           // not throttled — must respond immediately on fullscreen exit).
           if (options.reason === window.RectChangeReason.RECOVER) {
-            const cb = getMenuDataCallback("main");
+            // Per-window menubar key (windowKeyForId(0) === "main"), so a
+            // spawned instance's RECOVER notifies its own menubar instead of
+            // the primary's.
+            const cb = getMenuDataCallback(windowKeyForId(this.abilityWindowId));
             cb?.onMenubarVisible?.(true);
           }
           // Phase 3 (design.md D2/D5): rect dispatch through this instance's
@@ -943,13 +947,13 @@ export class NativeAbility extends UIAbility {
       const snapshot = WindowManager.readWindowRectSnapshot(seedWindow);
       if (snapshot) {
         const wrapped: WindowRectEventWrap = {
-          windowId: 0,
+          windowId: this.abilityWindowId,
           reason: window.RectChangeReason.UNDEFINED,
           rect: snapshot.rect,
           drawable: snapshot.drawable,
         };
         WindowManager.getInstance().throttledRectDispatch(
-          0,
+          this.abilityWindowId,
           wrapped,
           (w: object) => {
             this.forEachLifecycle((lifecycle) =>
@@ -958,7 +962,9 @@ export class NativeAbility extends UIAbility {
           },
           "rect",
         );
-        hilog.info(DOMAIN, "NativeAbility", "rect cache seeded post-load (windowId=0)");
+        // Seed THIS instance's window id (spawned instances seed their own
+        // rect, not the primary's window 0).
+        hilog.info(DOMAIN, "NativeAbility", "rect cache seeded post-load (windowId=%{public}d)", this.abilityWindowId);
       }
     } catch (e) {
       hilog.warn(DOMAIN, "NativeAbility", "rect cache seed failed: %{public}s", String(e));

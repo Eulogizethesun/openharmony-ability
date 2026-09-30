@@ -1424,8 +1424,10 @@ fn remove_want_uri_storage(window_id: i64) {
 ///
 /// `start_ui_ability` records every label it spawns so the deep-link facade can
 /// resolve a calling `Window`'s label back to its instance's want-URI storage.
-/// The primary window (id 0) is registered on first stage registration with an
-/// empty label fallback handled by the caller.
+/// The primary window is never inserted at runtime: `window_id_for_label`
+/// resolves unknown labels to id 0 (`unwrap_or(0)`), which doubles as the
+/// fallback for the un-spawned "main" label — matching single-instance
+/// behavior.
 static WINDOW_ID_BY_LABEL: LazyLock<Mutex<HashMap<String, i64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 

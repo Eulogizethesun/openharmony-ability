@@ -274,6 +274,16 @@ struct PendingAbility {
 
 static PENDING_UI_ABILITIES: Mutex<Option<HashMap<i64, PendingAbility>>> = Mutex::new(None);
 
+/// Capability handshake for the UIAbility pending registry (mirrors
+/// `FLOAT_PENDING_TRACKING`): armed by the ArkTS ProcessInitializer via
+/// `enable_ui_ability_pending_tracking` before any spawn can run. A stale
+/// HAR (fresh .so, cached ArkTS) never sets the flag — the embedding
+/// runtime's spawn branch then skips pending registration and keeps the
+/// pre-registry fire-and-forget semantics, instead of queueing ops against
+/// an entry no ArkTS code would ever settle (`register_ui_ability_stage`
+/// ships in the same HAR generation as the arming call).
+static UI_ABILITY_PENDING_TRACKING: AtomicBool = AtomicBool::new(false);
+
 fn pending_ui_abilities() -> std::sync::MutexGuard<'static, Option<HashMap<i64, PendingAbility>>> {
     // A poisoned lock means some other thread panicked mid-handshake; the
     // registry contents are still consistent enough to keep serving.
@@ -284,8 +294,9 @@ fn pending_ui_abilities() -> std::sync::MutexGuard<'static, Option<HashMap<i64, 
 
 /// Opens the pending-handshake entry for a UIAbility window id allocated via
 /// [`next_window_id`]. Called by the embedding runtime when it fires
-/// start_ui_ability; the entry flips to ready when the new instance calls
-/// [`register_ui_ability_stage`] with the same id.
+/// start_ui_ability — only when the capability handshake is armed (see
+/// [`ui_ability_pending_tracking_enabled`]); the entry flips to ready when
+/// the new instance calls [`register_ui_ability_stage`] with the same id.
 pub fn register_pending_ui_ability(id: i64) {
     pending_ui_abilities()
         .get_or_insert_with(HashMap::new)
@@ -294,6 +305,30 @@ pub fn register_pending_ui_ability(id: i64) {
         "register_pending_ui_ability: id={} (startAbility dispatched, awaiting stage registration)",
         id
     );
+}
+
+/// NAPI: capability handshake for the UIAbility pending registry. Called by
+/// the ArkTS ProcessInitializer at bridge init — only after this does the
+/// embedding runtime (tao's UIAbility spawn branch) open pending entries. A
+/// stale HAR never calls it, keeping the pre-registry fire-and-forget
+/// semantics (and never wedging ops against entries no ArkTS code would
+/// settle).
+#[napi]
+pub fn enable_ui_ability_pending_tracking() {
+    let was = UI_ABILITY_PENDING_TRACKING.swap(true, Ordering::AcqRel);
+    if !was {
+        crate::info!(
+            "enable_ui_ability_pending_tracking: UIAbility spawn pending tracking armed (ProcessInitializer handshake)"
+        );
+    }
+}
+
+/// Whether the ArkTS side has armed the UIAbility pending-tracking
+/// handshake. Consumed by the embedding runtime's spawn branch (tao) to
+/// choose between pending registration (ops queue until the spawned
+/// instance's stage registers) and fire-and-forget dispatch.
+pub fn ui_ability_pending_tracking_enabled() -> bool {
+    UI_ABILITY_PENDING_TRACKING.load(Ordering::Acquire)
 }
 
 /// Attaches an event-loop waker to a pending handshake. If the stage has
@@ -363,6 +398,10 @@ pub fn register_ui_ability_stage(window_id: i64) {
 /// (design.md D13). Window ids are never reused (`NEXT_WINDOW_ID` is
 /// monotonic), so a removed entry can never collide with a future spawn.
 /// Returns the registry's remaining size for the E4 ten-round leak check.
+/// Any waker still attached to the entry is woken after removal, so tasks
+/// queued against this handshake re-poll — with the entry gone, readiness
+/// now reads true and their queued ops can drain instead of waiting for an
+/// unrelated event-loop wake.
 ///
 /// Known bounded edge: a startAbility that fails after
 /// `register_pending_ui_ability` never fires an ability-destroy callback.
@@ -375,13 +414,22 @@ pub fn register_ui_ability_stage(window_id: i64) {
 /// this registry: a stale entry would silently hold that window's queued
 /// ops forever (G15).
 pub fn unregister_pending_ui_ability(id: i64) -> usize {
-    match pending_ui_abilities().as_mut() {
-        Some(map) => {
-            map.remove(&id);
-            map.len()
+    let (waker, len) = {
+        let mut map = pending_ui_abilities();
+        match map.as_mut() {
+            Some(map) => {
+                let waker = map.remove(&id).and_then(|pending| pending.waker);
+                (waker, map.len())
+            }
+            None => (None, 0),
         }
-        None => 0,
+    };
+    // Wake outside the registry lock (uniform lock discipline: never call out
+    // to ArkTS or wake under a lock).
+    if let Some(waker) = waker {
+        waker.wake();
     }
+    len
 }
 
 /// NAPI: Called by the ArkTS `start-ui-ability` handler's deferred catch
