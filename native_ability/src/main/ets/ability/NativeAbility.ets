@@ -1172,6 +1172,24 @@ export class NativeAbility extends UIAbility {
    *          follows).
    */
   async onPrepareToTerminateAsync(): Promise<boolean> {
+    // Only the primary instance's termination ends the app — ask Rust for the
+    // app-level ExitRequested/confirm flow here. A spawned instance's close
+    // only destroys that window (the app keeps running), so it must NOT reach
+    // the app-level probe: tauri-runtime-wry's probe arm marks its process-wide
+    // exit_state dedup flag when a probe is allowed through, and a spawned
+    // instance's probe would burn that flag and silently neuter every later
+    // prevent_exit() (observed 2026-10-08: suite-closed spawned windows
+    // consumed the flag, then the primary's ✕ went straight through with
+    // Exit Confirm ON).
+    if (this.abilityWindowId !== 0) {
+      hilog.info(
+        DOMAIN,
+        "NativeAbility",
+        "onPrepareToTerminateAsync: spawned instance (id=%{public}d) — allow, app keeps running",
+        this.abilityWindowId,
+      );
+      return false;
+    }
     hilog.info(DOMAIN, "NativeAbility", "onPrepareToTerminateAsync: asking Rust lifecycles");
     let prevent = false;
     this.forEachLifecycle((lifecycle) => {
