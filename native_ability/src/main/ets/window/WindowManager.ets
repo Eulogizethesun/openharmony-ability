@@ -627,7 +627,27 @@ export class WindowManager {
     });
   }
 
-  resizeWindow(windowId: number, width: number, height: number): void {
+  resizeWindow(windowId: number, reqWidth: number, reqHeight: number): void {
+    // Phone-form clamp (see createSubWindow for the full rationale): keep
+    // resize targets inside the display so set_size can't push window
+    // content off-screen on phones. Values at or below the display size
+    // pass through untouched; PC/2in1 are not gated here at all.
+    let width = reqWidth;
+    let height = reqHeight;
+    if (deviceInfo.deviceType === "phone") {
+      try {
+        const d = display.getDefaultDisplaySync();
+        width = Math.min(width, Math.floor(d.width));
+        height = Math.min(height, Math.floor(d.height));
+      } catch (e) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Phone clamp skipped (display query failed): %{public}s`,
+          String(e),
+        );
+      }
+    }
     this.withWindow(windowId, "resizeWindow", (win: window.Window) => {
       this.fireAndForget(win.resize(width, height), "resizeWindow", Number(windowId));
     });
@@ -1458,14 +1478,69 @@ export class WindowManager {
     const {
       name,
       windowId,
-      width = 800,
-      height = 600,
-      x = 100,
-      y = 100,
       decorations = true,
       transparent = false,
       backgroundColor,
     } = opts;
+    // Geometry defaults (formerly destructuring defaults) — `let` because the
+    // phone-form clamp below may shrink them into the display rect.
+    let width: number = opts.width ?? 800;
+    let height: number = opts.height ?? 600;
+    let x: number = opts.x ?? 100;
+    let y: number = opts.y ?? 100;
+
+    // Phone-form creation clamp (2026-10-09 Mate 70 report): tauri's default
+    // window geometry is 800×600 LOGICAL, which arrives here already scaled
+    // to physical px (2600×1950 at density 3.25). WMS honors oversized
+    // sub-window rects literally, so on a 1216×2688 phone screen the created
+    // window is 2.1× wider than the display and its content's close
+    // affordance lands ~1400px off-screen — the reported popup could only be
+    // closed after dragging it back on-screen. Clamp creation geometry into
+    // the display rect on phones. PC/2in1 keep literal geometry (verified
+    // 305-case green; 2in1 screens are large enough that tauri defaults
+    // never exceed them).
+    if (deviceInfo.deviceType === "phone") {
+      try {
+        const d = display.getDefaultDisplaySync();
+        const maxW = Math.floor(d.width);
+        const maxH = Math.floor(d.height);
+        const clampedW = Math.min(width, maxW);
+        const clampedH = Math.min(height, maxH);
+        // Re-anchor the top-left into the visible rect — the default 100,100
+        // anchor would leave a full-width window's right edge off-screen.
+        const clampedX = Math.min(Math.max(x, 0), maxW - clampedW);
+        const clampedY = Math.min(Math.max(y, 0), maxH - clampedH);
+        if (clampedW !== width || clampedH !== height || clampedX !== x || clampedY !== y) {
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            `Phone clamp: window %{public}d %{public}dx%{public}d@%{public}d,%{public}d -> %{public}dx%{public}d@%{public}d,%{public}d (display %{public}dx%{public}d)`,
+            windowId,
+            width,
+            height,
+            x,
+            y,
+            clampedW,
+            clampedH,
+            clampedX,
+            clampedY,
+            maxW,
+            maxH,
+          );
+          width = clampedW;
+          height = clampedH;
+          x = clampedX;
+          y = clampedY;
+        }
+      } catch (e) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Phone clamp skipped (display query failed): %{public}s`,
+          String(e),
+        );
+      }
+    }
 
     // Validate windowId: sub-window ID must be greater than 0
     if (windowId <= 0) {
