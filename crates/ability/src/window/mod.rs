@@ -467,6 +467,69 @@ pub fn notify_ui_ability_start_failed(window_id: i64) {
     crate::waker::wake_installed_app();
 }
 
+// ─── UIAbility spawn rejection trace (mobile-form fail-fast surfacing) ──────
+//
+// tao's desktop-only spawn gate (window.rs) rejects a mobile-form UIAbility
+// spawn by returning Err from Window::new — but on the tauri stack that Err
+// never surfaces: runtime-wry's `Message::CreateWindow` dispatch has no reply
+// channel (upstream design), it logs the error and returns Ok, so
+// WebviewWindowBuilder::build() resolves Ok and the manager registers a
+// label-only zombie window. The embedding runtime therefore records the
+// rejection here under the window label BEFORE returning Err, and the
+// embedding app (tauri examples cmd.rs) consumes it after build() to surface
+// `mobile_fail_fast` at the API layer.
+//
+// Keyed by label, not window id: the gate runs before `next_window_id()`
+// opens any state (fail-fast, zero residue), so no id exists yet — the label
+// (which runtime-wry always sets via `with_label`) is the only key both
+// sides share.
+
+static UI_ABILITY_SPAWN_REJECTIONS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn ui_ability_spawn_rejections(
+) -> std::sync::MutexGuard<'static, Option<HashMap<String, String>>> {
+    // Poisoned lock: same policy as the pending registry — keep serving, the
+    // trace is diagnostic only.
+    UI_ABILITY_SPAWN_REJECTIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Records that the embedding runtime (tao) refused a UIAbility spawn for
+/// `label` with `reason` (the desktop-only form-factor gate). Called before
+/// the Err is handed to the caller — whatever swallows it afterwards, the
+/// trace is already here. Overwrites a stale entry for the same label (test
+/// labels are timestamp-unique, so in practice each entry is fresh).
+pub fn note_ui_ability_spawn_rejected(label: &str, reason: &str) {
+    ui_ability_spawn_rejections()
+        .get_or_insert_with(HashMap::new)
+        .insert(label.to_string(), reason.to_string());
+    crate::info!(
+        "note_ui_ability_spawn_rejected: label={} reason={}",
+        label,
+        reason
+    );
+}
+
+/// Consumes the rejection trace for `label`. Returns `Some(reason)` when the
+/// desktop-only gate rejected this spawn — the caller reports it as a
+/// structured mobile fail-fast marker instead of trusting build()'s Ok.
+/// Consuming (removing) keeps the registry bounded: a queried rejection is a
+/// delivered rejection, and a never-consumed entry can only exist for a
+/// window whose builder the app abandoned before asking.
+pub fn take_ui_ability_spawn_rejection(label: &str) -> Option<String> {
+    let reason = ui_ability_spawn_rejections()
+        .as_mut()
+        .and_then(|m| m.remove(label));
+    if reason.is_some() {
+        crate::info!(
+            "take_ui_ability_spawn_rejection: label={} consumed",
+            label
+        );
+    }
+    reason
+}
+
 // ─── Float creation pending registry (Float creation-time race fix,
 // doc/OHOS窗口遗留问题.md issue-7 addendum) ─────────────────────────────────────────
 //
