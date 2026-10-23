@@ -533,8 +533,11 @@ export class NativeAbility extends UIAbility {
         colorMode: resCfg.colorMode as number as ConfigurationConstant.ColorMode,
         direction: resCfg.direction as number as ConfigurationConstant.Direction,
         screenDensity: resCfg.screenDensity as number as ConfigurationConstant.ScreenDensity,
-        mcc: String(resCfg.mcc),
-        mnc: String(resCfg.mnc),
+        // mcc/mnc are absent when the host does not report them — String()
+        // would inject the literal "undefined" into the app Configuration.
+        // Guard to the empty string (the neutral "unknown" form).
+        mcc: typeof resCfg.mcc === "number" ? String(resCfg.mcc) : "",
+        mnc: typeof resCfg.mnc === "number" ? String(resCfg.mnc) : "",
         // SDK 20 resmgr exposes no such fields — neutral defaults (sources:
         // app-side defaults the system would report for a fresh UIAbility).
         fontSizeScale: 1.0,

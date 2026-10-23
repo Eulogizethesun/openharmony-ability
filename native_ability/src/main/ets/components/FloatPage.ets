@@ -194,7 +194,8 @@ struct FloatPage {
               hilog.warn(
                 DOMAIN,
                 "FloatPage",
-                "windowEvent skipped: win.on is not a function",
+                "windowEvent skipped: win.on is not a function: id=%{public}d",
+                this.windowId,
               );
             } else if (
               typeof arkWindow.WindowEventType === "undefined" ||
@@ -204,7 +205,8 @@ struct FloatPage {
               hilog.warn(
                 DOMAIN,
                 "FloatPage",
-                "windowEvent skipped: WindowEventType ACTIVE/INACTIVE not available on this host",
+                "windowEvent skipped: WindowEventType ACTIVE/INACTIVE not available on this host: id=%{public}d",
+                this.windowId,
               );
             } else {
               this.windowClass.on("windowEvent", (event: arkWindow.WindowEventType) => {
