@@ -924,7 +924,7 @@ export class WindowManager {
   // #219: async — the show command's bridge arm awaits this, so a failed
   // restore/show rejects into the ack chain instead of a fake success ack.
   async showWindowMethod(windowId: number): Promise<void> {
-    // UIAbility main window: hideWindow did win.minimize() → window is in MINIMIZE state.
+    // UIAbility main window: a minimized window is in MINIMIZE state.
     // showWindow() cannot restore from MINIMIZE (it only shows a hidden window / raises an
     // already-shown main window to the top). The documented inverse of minimize() for the
     // main window is restore() (the minimize() API doc links restore() for restoration;
@@ -954,24 +954,13 @@ export class WindowManager {
       });
       return;
     }
-    // Sub-window: showWindow() restores from minimize (symmetric with hideWindow's minimize).
+    // Sub-window: showWindow() restores from minimize.
     const win = this.getWindow(windowId);
     if (!win) {
       throw new Error(`showWindowMethod: window ${windowId} not found`);
     }
     await win.showWindow();
     hilog.info(DOMAIN, "WindowManager", "showWindowMethod %{public}d OK", windowId);
-  }
-
-  // hide: main window uses win.minimize() (hideAbility not supported on PC/2in1 — StartOptions check failed).
-  // show: main window uses restore() — the documented inverse of minimize() (see showWindowMethod).
-  // Sub-window: minimize + showWindow (symmetric, works).
-  hideWindow(windowId: number): void {
-    this.withWindow(windowId, "hideWindow", (win: window.Window) => {
-      this.fireAndForget(win.minimize(), "hideWindow", windowId, () => {
-        hilog.info(DOMAIN, "WindowManager", "hideWindow(minimize) %{public}d OK", windowId);
-      });
-    });
   }
 
   // set_fullscreen → dual-path immersive fullscreen based on screen form factor.
@@ -1101,8 +1090,10 @@ export class WindowManager {
     });
   }
   // Group D decoration button bitfield: bit0 closable, bit1 maximizable, bit2 minimizable, bit3 resizable.
-  // Only applies to Float sub-windows (writes LocalStorage); UIAbility main window is a no-op
-  // (decorations are system-provided).
+  // Only applies to Float sub-windows (writes LocalStorage). The UIAbility main window's
+  // three decoration buttons are OS-managed: no per-button enable/disable API exists
+  // (@ohos.window offers style injection via setDecorButtonStyle and whole-bar
+  // visibility via setWindowDecorVisible, not per-button control) — issue #238.
   // Read a decoration flag from LocalStorage (问题四: 拦截 API 执行路径)
   // key: 'closable' | 'maximizable' | 'minimizable' | 'resizable'
   // Returns true if not set (default = all available, backward compatible)
@@ -1117,13 +1108,19 @@ export class WindowManager {
 
   setDecorationFlags(windowId: number, flags: number): void {
     if (this.isUIAbilityMainWindow(windowId)) {
-      hilog.info(
+      // Issue #238: the former hilog no-op acked a fake success for a request
+      // the platform cannot honor. Throw so the bridge arm rejects the invoke
+      // instead (#219 unknown-window throw pattern); sub-windows DO honor the
+      // flags (LocalStorage-driven sub-window page buttons).
+      hilog.warn(
         DOMAIN,
         "WindowManager",
-        "setDecorationFlags: UIAbility main window (id=%{public}d) no-op",
+        "setDecorationFlags: UIAbility main window (id=%{public}d) not supported",
         windowId,
       );
-      return;
+      throw new Error(
+        `setDecorationFlags: setting decoration buttons is not supported on the OpenHarmony main window (window ${windowId}); sub-windows support it`,
+      );
     }
     const entry = this.windows.get(windowId);
     if (!entry || !entry.storage) {

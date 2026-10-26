@@ -829,7 +829,8 @@ impl WindowExt for OpenHarmonyApp {
 mod tests {
     use super::{
         validate_platform_integer, validate_resize_args, validate_window_id, AvoidAreaRequest,
-        AvoidAreaResponse, RawAvoidArea, RawRect, WindowBridgePlugin, MAX_SAFE_JAVASCRIPT_INTEGER,
+        AvoidAreaResponse, DecorationFlagsRequest, RawAvoidArea, RawRect, WindowBridgePlugin,
+        MAX_SAFE_JAVASCRIPT_INTEGER,
     };
     use openharmony_ability::{
         AvoidArea, BridgeContextRequirement, BridgeNapiType, BridgePlugin, Rect,
@@ -934,6 +935,35 @@ mod tests {
         assert!(validate_window_id(MAX_SAFE_JAVASCRIPT_INTEGER + 1).is_err());
         assert!(validate_platform_integer("x", -MAX_SAFE_JAVASCRIPT_INTEGER).is_ok());
         assert!(validate_platform_integer("x", MAX_SAFE_JAVASCRIPT_INTEGER + 1).is_err());
+    }
+
+    // Issue #238: the main window's decoration buttons are OS-managed — the
+    // ArkTS WindowManager.setDecorationFlags main-window branch now THROWS
+    // (former hilog no-op acked a fake success), so the set-decoration-flags
+    // bridge invoke rejects and the facade surfaces the ArkTS error text
+    // ("...not supported on the OpenHarmony main window..."). A host UT cannot
+    // round-trip a live bridge (no N-API Env); the host-testable half of that
+    // contract is that the facade must NOT pre-gate the main-window id
+    // Rust-side (the Err the caller sees must be the ArkTS throw, not a Rust
+    // validation message) and that the request payload carries the exact named
+    // wire contract the ArkTS isUIAbilityMainWindow branch keys on. The error
+    // text itself is asserted end-to-end by the api demo device suite
+    // (tauri repo, window-ops ut_ decoration-reject cases).
+    #[test]
+    fn decoration_flags_main_window_error_is_surfaced_from_the_arkts_throw() {
+        // Brief:
+        // 1. Main-window id 0 passes validate_window_id — the facade dispatches
+        //    it (no Rust-side gate); the rejection is the ArkTS throw.
+        // 2. The DecorationFlagsRequest wire contract name is the frozen string
+        //    the ArkTS bridge arm + isUIAbilityMainWindow branch consume.
+        // 3. Negative ids are still rejected Rust-side — the only error the
+        //    facade itself produces for this call.
+        assert!(validate_window_id(0).is_ok());
+        assert_eq!(
+            <DecorationFlagsRequest as BridgeNapiType>::TYPE_NAME,
+            "ohos.window.DecorationFlagsRequest"
+        );
+        assert!(validate_window_id(-1).is_err());
     }
 
     #[test]
