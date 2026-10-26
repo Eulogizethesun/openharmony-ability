@@ -105,10 +105,7 @@ fn all_displays_api() -> Option<&'static AllDisplaysApi> {
     ALL_DISPLAYS_API
         .get_or_init(|| unsafe {
             // RTLD_NOW | RTLD_LOCAL = 2 on OHOS musl.
-            let handle = dlopen(
-                b"libnative_display_manager.so\0".as_ptr() as *const c_char,
-                2,
-            );
+            let handle = dlopen(c"libnative_display_manager.so".as_ptr(), 2);
             if handle.is_null() {
                 crate::warn!(
                     "[ohos-display] dlopen libnative_display_manager.so failed — \
@@ -118,11 +115,11 @@ fn all_displays_api() -> Option<&'static AllDisplaysApi> {
             }
             let create = dlsym(
                 handle,
-                b"OH_NativeDisplayManager_CreateAllDisplays\0".as_ptr() as *const c_char,
+                c"OH_NativeDisplayManager_CreateAllDisplays".as_ptr(),
             );
             let destroy = dlsym(
                 handle,
-                b"OH_NativeDisplayManager_DestroyAllDisplays\0".as_ptr() as *const c_char,
+                c"OH_NativeDisplayManager_DestroyAllDisplays".as_ptr(),
             );
             if create.is_null() || destroy.is_null() {
                 crate::warn!(
@@ -208,7 +205,7 @@ fn sanitize_vp(vp: f32) -> f32 {
 /// `default_display_virtual_pixel_ratio() -> f32` (same family as
 /// [`default_display_scaled_density`], no new NAPI wire, no ArkTS surface).
 /// A binding value ≤ 0 (early calls / unsupported device) degrades to the 1.0
-/// identity fallback via [`sanitize_vp`]. Never blocks; the binding's own
+/// identity fallback via `sanitize_vp`. Never blocks; the binding's own
 /// error signaling is a non-zero return code, not a blocking call.
 pub fn virtual_pixel_ratio() -> f32 {
     sanitize_vp(default_display_virtual_pixel_ratio())
@@ -221,14 +218,18 @@ pub fn virtual_pixel_ratio() -> f32 {
 pub struct DisplaySnapshot {
     /// OHOS display id (`OH_NativeDisplayManager_GetDefaultDisplayId` domain).
     pub id: u32,
+    /// Display name reported by the display manager (empty when unknown).
     pub name: String,
     /// Top-left offset in the global display coordinate space (ArkTS
     /// `Display.x`/`y`; (0,0) when unknown — API < 19 or not yet pushed).
     pub x: i32,
+    /// Top-left Y offset in the global display coordinate space.
     pub y: i32,
     /// Physical size in pixels.
     pub width: u32,
+    /// Physical height in pixels (0 when not reported by the display API).
     pub height: u32,
+    /// Screen refresh rate in Hz (0 when not reported).
     pub refresh_rate: u32,
     /// `scaledDensity` — the same source `OpenHarmonyApp::scale()` uses for
     /// the default display.

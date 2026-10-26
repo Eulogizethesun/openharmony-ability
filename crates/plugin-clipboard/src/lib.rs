@@ -11,6 +11,7 @@ use openharmony_ability::{
     BridgeNapiType, BridgePlugin, BridgeRuntime, OpenHarmonyApp,
 };
 
+/// Bridge plugin exposing the `ohos.clipboard` actions.
 pub struct ClipboardBridgePlugin;
 
 impl BridgePlugin for ClipboardBridgePlugin {
@@ -23,15 +24,18 @@ impl BridgePlugin for ClipboardBridgePlugin {
 
 // ── read-text ───────────────────────────────────────────────────────────────────
 
+/// `read-text` request payload (empty).
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
 pub struct ClipboardReadTextRequest {}
 
 impl_bridge_napi_type!(ClipboardReadTextRequest, "ohos.clipboard.ReadTextRequest");
 
+/// `read-text` response payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardReadTextResponse {
+    /// Clipboard text content, or `None` when the clipboard holds no text.
     pub text: Option<String>,
 }
 
@@ -39,17 +43,21 @@ impl_bridge_napi_type!(ClipboardReadTextResponse, "ohos.clipboard.ReadTextRespon
 
 // ── write-text ──────────────────────────────────────────────────────────────────
 
+/// `write-text` request payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardWriteTextRequest {
+    /// Text to place on the clipboard (replaces all existing content).
     pub text: String,
 }
 
 impl_bridge_napi_type!(ClipboardWriteTextRequest, "ohos.clipboard.WriteTextRequest");
 
+/// `write-text` response payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardWriteTextResponse {
+    /// `true` when the ArkTS side accepted the write.
     pub accepted: bool,
 }
 
@@ -60,11 +68,15 @@ impl_bridge_napi_type!(
 
 // ── write-image ─────────────────────────────────────────────────────────────────
 
+/// `write-image` request payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardWriteImageRequest {
+    /// RGBA8 pixel data, row-major top-to-bottom (`width * height * 4` bytes).
     pub rgba: Vec<u8>,
+    /// Image width in pixels.
     pub width: u32,
+    /// Image height in pixels.
     pub height: u32,
 }
 
@@ -73,9 +85,11 @@ impl_bridge_napi_type!(
     "ohos.clipboard.WriteImageRequest"
 );
 
+/// `write-image` response payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardWriteImageResponse {
+    /// `true` when the ArkTS side accepted the write.
     pub accepted: bool,
 }
 
@@ -86,6 +100,7 @@ impl_bridge_napi_type!(
 
 // ── read-image ───────────────────────────────────────────────────────────────────
 
+/// `read-image` request payload (empty).
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
 pub struct ClipboardReadImageRequest {}
@@ -99,8 +114,11 @@ impl_bridge_napi_type!(ClipboardReadImageRequest, "ohos.clipboard.ReadImageReque
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardReadImageResponse {
+    /// Base64-encoded PNG of the clipboard image.
     pub png_base64: String,
+    /// Image width in pixels.
     pub width: u32,
+    /// Image height in pixels.
     pub height: u32,
 }
 
@@ -112,24 +130,31 @@ impl_bridge_napi_type!(
 /// A clipboard image decoded to RGBA8 (row-major, top to bottom).
 #[derive(Clone, Debug)]
 pub struct ClipboardImage {
+    /// RGBA8 pixel buffer (`width * height * 4` bytes).
     pub rgba: Vec<u8>,
+    /// Image width in pixels.
     pub width: u32,
+    /// Image height in pixels.
     pub height: u32,
 }
 
 // ── write-html ───────────────────────────────────────────────────────────────────
 
+/// `write-html` request payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardWriteHtmlRequest {
+    /// HTML markup to place on the clipboard.
     pub html: String,
 }
 
 impl_bridge_napi_type!(ClipboardWriteHtmlRequest, "ohos.clipboard.WriteHtmlRequest");
 
+/// `write-html` response payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardWriteHtmlResponse {
+    /// `true` when the ArkTS side accepted the write.
     pub accepted: bool,
 }
 
@@ -140,15 +165,18 @@ impl_bridge_napi_type!(
 
 // ── clear ────────────────────────────────────────────────────────────────────────
 
+/// `clear` request payload (empty).
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
 pub struct ClipboardClearRequest {}
 
 impl_bridge_napi_type!(ClipboardClearRequest, "ohos.clipboard.ClearRequest");
 
+/// `clear` response payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ClipboardClearResponse {
+    /// `true` when the ArkTS side accepted the clear.
     pub accepted: bool,
 }
 
@@ -161,6 +189,10 @@ pub struct ClipboardClient {
 }
 
 impl ClipboardClient {
+    /// Creates a client bound to the app's bridge runtime.
+    ///
+    /// # Errors
+    /// Returns an error when the app has no bridge runtime installed yet.
     pub fn new(app: &OpenHarmonyApp) -> Result<Self> {
         Ok(Self {
             bridge: app.bridge()?,
@@ -276,7 +308,12 @@ impl ClipboardClient {
     }
 }
 
+/// Extension trait providing the `clipboard()` client on `OpenHarmonyApp`.
 pub trait ClipboardExt {
+    /// Returns a worker-safe [`ClipboardClient`] for this app.
+    ///
+    /// # Errors
+    /// Returns an error when the app has no bridge runtime installed yet.
     fn clipboard(&self) -> Result<ClipboardClient>;
 }
 
@@ -505,11 +542,11 @@ mod tests {
         let mut crc = !0u32;
         for &byte in bytes {
             crc ^= byte as u32;
-            for _ in 0..8 {
+            for _ in 0_i32..8_i32 {
                 crc = if crc & 1 != 0 {
-                    (crc >> 1) ^ 0xEDB8_8320
+                    (crc >> 1_i32) ^ 0xEDB8_8320
                 } else {
-                    crc >> 1
+                    crc >> 1_i32
                 };
             }
         }

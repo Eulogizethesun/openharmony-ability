@@ -10,6 +10,8 @@ use openharmony_ability::{
     BridgeContextRequirement, BridgeNapiType, BridgePlugin, BridgeRuntime, OpenHarmonyApp, Rect,
 };
 
+/// Rust facade marker for the built-in `ohos.window` plugin (async; requires
+/// the UI-context readiness signal).
 pub struct WindowBridgePlugin;
 
 impl BridgePlugin for WindowBridgePlugin {
@@ -20,38 +22,53 @@ impl BridgePlugin for WindowBridgePlugin {
         &[BridgeContextRequirement::UiContext];
 }
 
+/// Request for one system avoid-area of the component window.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct AvoidAreaRequest {
+    /// Raw OHOS `AvoidAreaType` value (`AvoidAreaType::into()` of the Rust enum).
     pub area_type: i32,
 }
 
 impl_bridge_napi_type!(AvoidAreaRequest, "ohos.window.AvoidAreaRequest");
 
+/// Response carrying the requested avoid area in raw wire shape.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct AvoidAreaResponse {
+    /// Raw avoid-area payload; convert with `Into<AvoidArea>`.
     pub area: RawAvoidArea,
 }
 
 impl_bridge_napi_type!(AvoidAreaResponse, "ohos.window.AvoidAreaResponse");
 
+/// Raw (wire-shape) avoid area as reported by the ArkTS side.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct RawAvoidArea {
+    /// Whether the area currently occludes the window.
     pub visible: bool,
+    /// Docked panel / system dock on the left edge.
     pub left_rect: RawRect,
+    /// Status bar / notch area on the top edge.
     pub top_rect: RawRect,
+    /// Scrollbar or split-screen divider on the right edge.
     pub right_rect: RawRect,
+    /// Navigation indicator / keyboard on the bottom edge.
     pub bottom_rect: RawRect,
 }
 
+/// Raw (wire-shape) rectangle in physical px.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct RawRect {
+    /// Top offset in px.
     pub top: i32,
+    /// Left offset in px.
     pub left: i32,
+    /// Width in px.
     pub width: i32,
+    /// Height in px.
     pub height: i32,
 }
 
@@ -80,13 +97,19 @@ impl From<RawAvoidArea> for AvoidArea {
 
 // ── Multi-window operations ────────────────────────────────────────────────────
 
+/// Request to create and fully configure one OS sub-window.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowCreateRequest {
+    /// Window name (ArkTS sub-window tag); must not be blank.
     pub name: String,
+    /// Initial window width in px (must be positive).
     pub width: i32,
+    /// Initial window height in px (must be positive).
     pub height: i32,
+    /// Initial left offset in px.
     pub x: i32,
+    /// Initial top offset in px.
     pub y: i32,
     /// Whether to show window decorations (title bar, drag area, close button).
     pub decorations: bool,
@@ -103,7 +126,7 @@ impl WindowCreateRequest {
         if self.name.trim().is_empty() {
             return Err(Error::from_reason("window name must not be empty"));
         }
-        if self.width <= 0 || self.height <= 0 {
+        if self.width <= 0_i32 || self.height <= 0_i32 {
             return Err(Error::from_reason(
                 "window width and height must be positive",
             ));
@@ -112,158 +135,213 @@ impl WindowCreateRequest {
     }
 }
 
+/// Response carrying the OHOS-assigned sub-window id.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowCreateResponse {
+    /// OHOS window id (NOT the tao NEXT_WINDOW_ID placeholder registry).
     pub window_id: i64,
 }
 
 impl_bridge_napi_type!(WindowCreateResponse, "ohos.window.CreateResponse");
 
+/// Generic one-window request (window id only).
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowIdRequest {
+    /// Target window id (0 = main/UIAbility window).
     pub window_id: i64,
 }
 
 impl_bridge_napi_type!(WindowIdRequest, "ohos.window.WindowIdRequest");
 
+/// Request to toggle window decorations.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowDecorationsRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// `true` shows the title bar / drag area / close button.
     pub decorations: bool,
 }
 
 impl_bridge_napi_type!(WindowDecorationsRequest, "ohos.window.DecorationsRequest");
 
+/// Request to toggle immersive fullscreen layout.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowFullscreenRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// `true` enters fullscreen (`setWindowLayoutFullScreen(true)` + hide bars).
     pub on: bool,
 }
 
 impl_bridge_napi_type!(WindowFullscreenRequest, "ohos.window.FullscreenRequest");
 
+/// Request to set the window background color.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowColorRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// Background color in 0xAARRGGBB format.
     pub color: u32,
 }
 
 impl_bridge_napi_type!(WindowColorRequest, "ohos.window.ColorRequest");
 
+/// Request to set the window shadow (background blur) radius.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowBlurRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// Shadow radius in vp (non-negative finite; ArkTS gates API level).
     pub radius: f64,
 }
 
 impl_bridge_napi_type!(WindowBlurRequest, "ohos.window.BlurRequest");
 
+/// Request to move a window's top-left corner.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowMoveRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// New left offset in px (JavaScript-safe integer).
     pub x: i64,
+    /// New top offset in px (JavaScript-safe integer).
     pub y: i64,
 }
 
 impl_bridge_napi_type!(WindowMoveRequest, "ohos.window.MoveRequest");
 
+/// Request to resize a window (outer or drawable size depending on action).
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowResizeRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// New width in px (positive, JavaScript-safe integer).
     pub width: i64,
+    /// New height in px (positive, JavaScript-safe integer).
     pub height: i64,
 }
 
 impl_bridge_napi_type!(WindowResizeRequest, "ohos.window.ResizeRequest");
 
+/// Request to set whether a window can take focus.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowFocusableRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// `true` allows the window to become focused.
     pub focusable: bool,
 }
 
 impl_bridge_napi_type!(WindowFocusableRequest, "ohos.window.FocusableRequest");
 
+/// Request to set whether a window consumes touch/mouse events.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowTouchableRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// `false` makes the window click-through (pass-through).
     pub touchable: bool,
 }
 
 impl_bridge_napi_type!(WindowTouchableRequest, "ohos.window.TouchableRequest");
 
+/// Request to keep a window above all others.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowTopmostRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// `true` pins the window on top (API14+ + WINDOW_TOPMOST permission).
     pub topmost: bool,
 }
 
 impl_bridge_napi_type!(WindowTopmostRequest, "ohos.window.TopmostRequest");
 
+/// Request to set the window title text.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowTitleRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// New title (at most 1024 characters).
     pub title: String,
 }
 
 impl_bridge_napi_type!(WindowTitleRequest, "ohos.window.TitleRequest");
 
+/// Request to set min/max window size limits.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowLimitsRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// Minimum width in px (0 = no limit).
     pub min_width: i64,
+    /// Minimum height in px (0 = no limit).
     pub min_height: i64,
+    /// Maximum width in px (0 = no limit).
     pub max_width: i64,
+    /// Maximum height in px (0 = no limit).
     pub max_height: i64,
 }
 
 impl_bridge_napi_type!(WindowLimitsRequest, "ohos.window.LimitsRequest");
 
+/// Request to inform the IME of the cursor rect.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ImePositionRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// Cursor left in physical px.
     pub x: i64,
+    /// Cursor top in physical px.
     pub y: i64,
 }
 
 impl_bridge_napi_type!(ImePositionRequest, "ohos.window.ImePositionRequest");
 
+/// Response for the IME position update (soft rejection, not a bridge error).
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ImePositionResponse {
+    /// `true` when the IME accepted the cursor rect.
     pub ok: bool,
+    /// OHOS error code (`12800009` = no focused editor, normal when absent).
     pub code: i32,
+    /// Human-readable failure reason when `ok` is `false`.
     pub message: String,
 }
 
 impl_bridge_napi_type!(ImePositionResponse, "ohos.window.ImePositionResponse");
 
+/// Request for edge-drag / resize-by-drag toggles (shared wire shape).
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowDraggableRequest {
+    /// Target window id.
     pub window_id: i64,
+    /// `true` allows the user drag operation.
     pub enable: bool,
 }
 
 impl_bridge_napi_type!(WindowDraggableRequest, "ohos.window.DraggableRequest");
 
+/// Request to set the pointer cursor style for one window.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct CursorIconRequest {
+    /// Target window id.
     pub window_id: i64,
     /// PointerStyle id as understood by WindowManager.setPointerStyle.
     pub style: i32,
@@ -271,6 +349,7 @@ pub struct CursorIconRequest {
 
 impl_bridge_napi_type!(CursorIconRequest, "ohos.window.CursorIconRequest");
 
+/// Request to set the global pointer visibility.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct CursorVisibleRequest {
@@ -281,9 +360,11 @@ pub struct CursorVisibleRequest {
 
 impl_bridge_napi_type!(CursorVisibleRequest, "ohos.window.CursorVisibleRequest");
 
+/// Request to apply the decoration flag bit-field.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct DecorationFlagsRequest {
+    /// Target window id.
     pub window_id: i64,
     /// FLAG bit-field (closable=1, maximizable=2, minimizable=4, resizable=8).
     pub flags: i32,
@@ -291,9 +372,11 @@ pub struct DecorationFlagsRequest {
 
 impl_bridge_napi_type!(DecorationFlagsRequest, "ohos.window.DecorationFlagsRequest");
 
+/// Response carrying the resolved real OHOS window id.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct RealWindowIdResponse {
+    /// Native OHOS window id (usable with `OH_WindowManager_*` C APIs).
     pub window_id: i64,
 }
 
@@ -306,15 +389,19 @@ impl_bridge_napi_type!(RealWindowIdResponse, "ohos.window.RealWindowIdResponse")
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowRectsResponse {
+    /// Outer (window-manager) rectangle in physical px.
     pub window_rect: RawRect,
+    /// Drawable (content) rectangle in physical px.
     pub drawable_rect: RawRect,
 }
 
 impl_bridge_napi_type!(WindowRectsResponse, "ohos.window.RectsResponse");
 
+/// Generic acknowledgement for window operations.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowAcknowledgement {
+    /// `true` when the ArkTS side accepted the operation.
     pub accepted: bool,
 }
 
@@ -332,9 +419,11 @@ impl WindowAcknowledgement {
     }
 }
 
+/// Boolean state query response (`is-maximized` / `is-minimized`).
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct WindowStateResponse {
+    /// Queried state value.
     pub value: bool,
 }
 
@@ -381,6 +470,10 @@ pub struct WindowClient {
 }
 
 impl WindowClient {
+    /// Builds a window client bound to the app's bridge session.
+    ///
+    /// # Errors
+    /// Fails when the app has no active bridge session yet.
     pub fn new(app: &OpenHarmonyApp) -> Result<Self> {
         Ok(Self {
             bridge: app.bridge()?,
@@ -436,6 +529,10 @@ impl WindowClient {
         Ok(window_id)
     }
 
+    /// Sets whether the window is decorated with native title bar controls.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn set_window_decorations(&self, window_id: i64, decorations: bool) -> Result<()> {
         validate_window_id(window_id)?;
         self.call::<WindowDecorationsRequest, WindowAcknowledgement>(
@@ -463,6 +560,10 @@ impl WindowClient {
         .ensure()
     }
 
+    /// Sets the window background color as a 32-bit ARGB value.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn set_window_background_color(&self, window_id: i64, color: u32) -> Result<()> {
         validate_window_id(window_id)?;
         self.call::<WindowColorRequest, WindowAcknowledgement>(
@@ -476,7 +577,7 @@ impl WindowClient {
     /// Sets the platform sub-window shadow radius. The ArkTS side rejects unsupported API levels.
     pub async fn set_window_blur(&self, window_id: i64, radius: f64) -> Result<()> {
         validate_window_id(window_id)?;
-        if !radius.is_finite() || radius < 0.0 {
+        if !radius.is_finite() || radius < 0.0_f64 {
             return Err(Error::from_reason(
                 "window shadow radius must be a non-negative finite number",
             ));
@@ -489,10 +590,18 @@ impl WindowClient {
         .ensure()
     }
 
+    /// Moves input focus to the window.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn focus_window(&self, window_id: i64) -> Result<()> {
         self.window_command("focus", window_id).await
     }
 
+    /// Sets whether the window can take input focus.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn set_window_focusable(&self, window_id: i64, focusable: bool) -> Result<()> {
         validate_window_id(window_id)?;
         self.call::<WindowFocusableRequest, WindowAcknowledgement>(
@@ -523,6 +632,10 @@ impl WindowClient {
         .ensure()
     }
 
+    /// Moves the window's top-left corner to (`x`, `y`) in px.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn move_window_to(&self, window_id: i64, x: i64, y: i64) -> Result<()> {
         validate_window_id(window_id)?;
         validate_platform_integer("x coordinate", x)?;
@@ -535,6 +648,10 @@ impl WindowClient {
         .ensure()
     }
 
+    /// Resizes the window to `width` x `height` in px.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn resize_window(&self, window_id: i64, width: i64, height: i64) -> Result<()> {
         validate_resize_args(window_id, width, height)?;
         self.call::<WindowResizeRequest, WindowAcknowledgement>(
@@ -592,22 +709,43 @@ impl WindowClient {
         Ok((response.window_rect.into(), response.drawable_rect.into()))
     }
 
+    /// Minimizes the window.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn minimize_window(&self, window_id: i64) -> Result<()> {
         self.window_command("minimize", window_id).await
     }
 
+    /// Maximizes the window.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn maximize_window(&self, window_id: i64) -> Result<()> {
         self.window_command("maximize", window_id).await
     }
 
+    /// Exits the maximized state (OHOS `Window.restore`).
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn restore_window(&self, window_id: i64) -> Result<()> {
         self.window_command("restore", window_id).await
     }
 
+    /// Recovers the window size from the maximized or minimized state
+    /// (OHOS `Window.recover`).
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn recover_window(&self, window_id: i64) -> Result<()> {
         self.window_command("recover", window_id).await
     }
 
+    /// Shows the window.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn show_window(&self, window_id: i64) -> Result<()> {
         self.window_command("show", window_id).await
     }
@@ -617,10 +755,18 @@ impl WindowClient {
         self.window_command("destroy-window", window_id).await
     }
 
+    /// Returns `true` when the window is currently maximized.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the query.
     pub async fn is_window_maximized(&self, window_id: i64) -> Result<bool> {
         self.window_state("is-maximized", window_id).await
     }
 
+    /// Returns `true` when the window is currently minimized.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the query.
     pub async fn is_window_minimized(&self, window_id: i64) -> Result<bool> {
         self.window_state("is-minimized", window_id).await
     }
@@ -637,6 +783,10 @@ impl WindowClient {
         .ensure()
     }
 
+    /// Sets the window title text.
+    ///
+    /// # Errors
+    /// Fails when the bridge rejects the operation.
     pub async fn set_window_title(&self, window_id: i64, title: String) -> Result<()> {
         validate_window_id(window_id)?;
         if title.chars().count() > 1024 {
@@ -816,6 +966,10 @@ impl WindowClient {
 
 /// Extension trait supplied by the capability package, never by framework core.
 pub trait WindowExt {
+    /// Returns the window plugin client bound to this app's bridge session.
+    ///
+    /// # Errors
+    /// Fails when the app has no active bridge session yet.
     fn window(&self) -> Result<WindowClient>;
 }
 
@@ -999,11 +1153,11 @@ mod tests {
         };
         let outer: Rect = response.window_rect.into();
         let drawable: Rect = response.drawable_rect.into();
-        assert_eq!((outer.top, outer.left), (76, 113));
-        assert_eq!((drawable.top, drawable.left), (146, 7));
+        assert_eq!((outer.top, outer.left), (76_i32, 113_i32));
+        assert_eq!((drawable.top, drawable.left), (146_i32, 7_i32));
         // Vertical chrome = title bar; horizontal chrome = left inset.
-        assert_eq!(outer.height - drawable.height, 146);
-        assert_eq!(outer.width - drawable.width, 7);
+        assert_eq!(outer.height - drawable.height, 146_i32);
+        assert_eq!(outer.width - drawable.width, 7_i32);
     }
 
     #[test]

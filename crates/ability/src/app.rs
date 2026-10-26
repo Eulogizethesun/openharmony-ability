@@ -29,17 +29,29 @@ static ID: AtomicI64 = AtomicI64::new(0);
 
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
+/// Initialization context pushed by the ArkTS entry during `openharmony()`.
 pub struct AbilityInitContext {
+    /// Ability-scoped base directory (ArkTS `context.filesDir` domain).
     pub base_path: Option<String>,
+    /// Preferences directory for key-value stores (ArkTS `preferences` domain).
     pub pref_path: Option<String>,
+    /// Comma-separated preferred locale list from the system.
     pub preferred_locales: Option<String>,
+    /// HAP module name the ability belongs to.
     pub module_name: Option<String>,
+    /// OpenHarmony SDK API level of the running device.
     pub sdk_api_version: Option<i32>,
+    /// HarmonyOS distribution API version (`M*10000 + S*100 + F`).
     #[napi(js_name = "distributionOSApiVersion")]
     pub distribution_api_version: Option<i32>,
 }
 
 impl AbilityInitContext {
+    /// Decodes the init context from the ArkTS options object; missing keys
+    /// yield `None` fields.
+    ///
+    /// # Errors
+    /// Returns an error when a present property cannot be read as its expected type.
     pub fn from_object(context: Option<&Object<'_>>) -> Result<Self> {
         let Some(context) = context else {
             return Ok(Self::default());
@@ -57,6 +69,7 @@ impl AbilityInitContext {
 }
 
 #[derive(Clone)]
+/// Per-process shared application state (the inner half of `OpenHarmonyApp`).
 pub struct OpenHarmonyAppInner {
     pub(crate) raw_window: Option<RawWindow>,
     pub(crate) xcomponent: Option<XComponent>,
@@ -143,6 +156,7 @@ impl Default for OpenHarmonyAppInner {
 }
 
 impl OpenHarmonyAppInner {
+    /// Creates a zero-initialized inner state with a fresh app id.
     pub fn new() -> Self {
         let id = ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         OpenHarmonyAppInner {
@@ -189,10 +203,14 @@ impl OpenHarmonyAppInner {
         self.save_state = true;
     }
 
+    /// Returns the latest device configuration snapshot.
     pub fn config(&self) -> Configuration {
         self.configuration.clone()
     }
 
+    /// Sets the XComponent frame rate range (min/max/expected FPS).
+    ///
+    /// No-op when no XComponent is mounted; failures are logged, not fatal.
     pub fn set_frame_rate(&self, min: i32, max: i32, expected: i32) {
         if let Some(xcomponent) = self.xcomponent.as_ref() {
             // Callable from embedding apps; a failure here must not abort the
@@ -270,6 +288,7 @@ impl OpenHarmonyAppInner {
         Some(surface_was_active)
     }
 
+    /// Returns the primary window's content (safe-area-adjusted) rect.
     pub fn content_rect(&self) -> Rect {
         self.rect
     }
@@ -336,18 +355,22 @@ impl OpenHarmonyAppInner {
         }
     }
 
+    /// Returns the latest avoid area of the given type, if reported.
     pub fn avoid_area(&self, area_type: AvoidAreaType) -> Option<AvoidArea> {
         self.avoid_areas.get(&area_type).copied()
     }
 
+    /// Returns a snapshot of all reported avoid areas by type.
     pub fn avoid_areas(&self) -> HashMap<AvoidAreaType, AvoidArea> {
         self.avoid_areas.clone()
     }
 
+    /// Returns the raw native window handle, if the surface is mounted.
     pub fn native_window(&self) -> Option<RawWindow> {
         self.raw_window
     }
 
+    /// Returns the default display's scaled density (font scale basis).
     pub fn scale(&self) -> f32 {
         default_display_scaled_density()
     }
@@ -384,10 +407,12 @@ impl OpenHarmonyAppInner {
         default_display_height() as u32
     }
 
+    /// Returns the init context pushed by the ArkTS entry.
     pub fn init_context(&self) -> AbilityInitContext {
         self.init_context.clone()
     }
 
+    /// Overwrites the init context (ArkTS entry may refresh it during setup).
     pub fn set_init_context(&mut self, context: AbilityInitContext) {
         self.init_context = context;
     }
@@ -443,6 +468,11 @@ struct ActiveBridgeSession {
     main_thread_endpoint: MainThreadBridgeEndpoint,
 }
 
+/// Cloneable handle to one NativeAbility/module session's application state.
+///
+/// Clones share the same inner state (compared by `Arc` pointer identity);
+/// this is the primary facade embedding apps use (`app.updater()`,
+/// `app.bridge()`, `app.node()`, ...).
 #[derive(Clone)]
 pub struct OpenHarmonyApp {
     pub(crate) inner: Arc<RwLock<OpenHarmonyAppInner>>,
@@ -500,6 +530,7 @@ impl Ord for OpenHarmonyApp {
 }
 
 impl OpenHarmonyApp {
+    /// Creates a fresh app handle with no session state attached yet.
     pub fn new() -> Self {
         Self {
             #[allow(clippy::arc_with_non_send_sync)]
@@ -518,14 +549,17 @@ impl OpenHarmonyApp {
         }
     }
 
+    /// Stores the app state saved via the ArkTS `onSaveState` chain.
     pub fn save(&self, state: Vec<u8>) {
         self.inner.write().unwrap().save(state);
     }
 
+    /// Loads the previously saved app state (peek-only; `None` before first save).
     pub fn load(&self) -> Option<Vec<u8>> {
         self.inner.read().unwrap().load()
     }
 
+    /// Sets the XComponent frame rate range (min/max/expected FPS).
     pub fn set_frame_rate(&self, min: i32, max: i32, expected: i32) {
         self.inner
             .read()
@@ -533,27 +567,33 @@ impl OpenHarmonyApp {
             .set_frame_rate(min, max, expected);
     }
 
+    /// Overwrites the init context pushed by the ArkTS entry (test hook).
     #[doc(hidden)]
     pub fn set_init_context(&self, context: AbilityInitContext) {
         self.inner.write().unwrap().set_init_context(context);
     }
 
+    /// Returns the init context pushed by the ArkTS entry.
     pub fn init_context(&self) -> AbilityInitContext {
         self.inner.read().unwrap().init_context()
     }
 
+    /// Returns the HAP module name, when the ArkTS entry provided one.
     pub fn module_name(&self) -> Option<String> {
         self.init_context().module_name
     }
 
+    /// Returns the ability-scoped base directory, when provided.
     pub fn base_path(&self) -> Option<String> {
         self.init_context().base_path
     }
 
+    /// Returns the preferences directory, when provided.
     pub fn pref_path(&self) -> Option<String> {
         self.init_context().pref_path
     }
 
+    /// Returns the system's preferred locale list, when provided.
     pub fn preferred_locales(&self) -> Option<String> {
         self.init_context().preferred_locales
     }
@@ -803,6 +843,8 @@ impl OpenHarmonyApp {
         self.bridge_plugins.declarations()
     }
 
+    /// Dispatches a synchronous ArkTS platform callback into the bridge
+    /// main-thread endpoint (generated-code port; see `on_bridge_sync_event`).
     #[doc(hidden)]
     pub fn dispatch_bridge_main_thread_event<'env>(
         &self,
@@ -811,6 +853,8 @@ impl OpenHarmonyApp {
         self.bridge_plugins.dispatch_main_thread_event(event)
     }
 
+    /// Forwards an ArkTS-only lifecycle transition (UI-context readiness) to
+    /// the registered plugins (generated-code port; see `on_bridge_lifecycle`).
     #[doc(hidden)]
     pub fn dispatch_plugin_lifecycle(&self, event: PluginLifecycleEvent) -> Result<()> {
         self.bridge_plugins.dispatch_lifecycle(event)
@@ -893,6 +937,11 @@ impl OpenHarmonyApp {
         }
     }
 
+    /// Shows the soft keyboard for the focused text input.
+    ///
+    /// Guards against re-entrant invocation with the `is_keyboard_show`
+    /// mutex and is a no-op when no IME has been attached to this module
+    /// (no `attach_ime` call from the generated entry or tests).
     pub fn show_keyboard(&self) {
         let _guard = self
             .is_keyboard_show
@@ -902,6 +951,10 @@ impl OpenHarmonyApp {
             ime.show_keyboard();
         }
     }
+    /// Hides the soft keyboard.
+    ///
+    /// Same re-entrancy guard and no-IMe no-op behavior as
+    /// [`OpenHarmonyApp::show_keyboard`].
     pub fn hide_keyboard(&self) {
         let _guard = self
             .is_keyboard_show
@@ -911,14 +964,29 @@ impl OpenHarmonyApp {
             ime.hide_keyboard();
         }
     }
+    /// Creates a [`OpenHarmonyWaker`] bound to this app's waker slot.
+    ///
+    /// The slot lives on the app wrapper rather than the inner state so
+    /// that `wake()` always reads the *current* TSFN (live-read rationale
+    /// in `waker.rs`); the returned handle stays valid across UIAbility
+    /// restarts that swap the underlying `ThreadsafeFunction`.
     pub fn create_waker(&self) -> OpenHarmonyWaker {
         // The waker slot lives on the app (wrapper), not the inner state —
         // see `waker.rs` for the live-read rationale.
         OpenHarmonyWaker::new(self.waker.clone())
     }
+    /// Returns the current UI configuration snapshot (color mode, direction,
+    /// screen density, font scale).
+    ///
+    /// The snapshot is refreshed by the ArkTS `onConfigurationUpdate`
+    /// callback; callers see the values from the most recent callback.
     pub fn config(&self) -> Configuration {
         self.inner.read().unwrap().config()
     }
+    /// Returns the content rect of the primary window in physical px.
+    ///
+    /// Empty (`0,0,0,0`) until the first `windowRectChange` callback fires;
+    /// per-window variants: [`OpenHarmonyApp::window_rect_for`].
     pub fn content_rect(&self) -> Rect {
         self.inner.read().unwrap().content_rect()
     }
@@ -1020,13 +1088,26 @@ impl OpenHarmonyApp {
         self.window_rect_for(window_id)
     }
 
+    /// Returns the latest system avoid-area snapshot for one area type.
+    ///
+    /// `None` before the ArkTS side has delivered any `onAvoidAreaChange`
+    /// payload for `area_type`. The full map variant:
+    /// [`OpenHarmonyApp::avoid_areas`].
     pub fn avoid_area(&self, area_type: AvoidAreaType) -> Option<AvoidArea> {
         self.inner.read().unwrap().avoid_area(area_type)
     }
 
+    /// Returns the full latest avoid-area map (all known area types).
+    ///
+    /// Populated by ArkTS `onAvoidAreaChange` callbacks; see
+    /// [`OpenHarmonyApp::avoid_area`] for the per-type accessor.
     pub fn avoid_areas(&self) -> HashMap<AvoidAreaType, AvoidArea> {
         self.inner.read().unwrap().avoid_areas()
     }
+    /// Returns the raw native window handle registered by the render node.
+    ///
+    /// `None` before the XComponent surface is created (and after it is
+    /// destroyed). The handle is only valid for use on the main thread.
     pub fn native_window(&self) -> Option<RawWindow> {
         self.inner.read().unwrap().native_window()
     }
@@ -1108,6 +1189,17 @@ impl OpenHarmonyApp {
         Ok(())
     }
 
+    /// Installs the app-wide event loop handler and enters the loop.
+    ///
+    /// All UIAbility instances of one app share a single event loop by
+    /// design (multi-UIAbility NG4): the first `run_loop` call wins and
+    /// installs the handler; a second call on the same app logs an error
+    /// and keeps the original handler (per-app latch, design.md D10 —
+    /// replaces the old process-global silent no-op).
+    ///
+    /// The handler must be `'static` because it is stored in the
+    /// `Box<dyn FnMut(Event)>` slot without lifetime erasure, so it cannot
+    /// borrow from `self` or any non-`'static` data.
     pub fn run_loop<F: FnMut(Event) + 'static>(&self, event_handle: F) {
         // Per-app latch (design.md D10, openspec multi-uiability-windows —
         // replaces the old process-global HAS_EVENT silent no-op). All
@@ -1206,6 +1298,9 @@ impl Default for OpenHarmonyApp {
 unsafe impl Send for OpenHarmonyApp {}
 unsafe impl Sync for OpenHarmonyApp {}
 
+/// `true` when the host device is a 2-in-1 / PC-class OHOS device (as opposed
+/// to a phone/tablet). The generated entry uses this to gate desktop-only
+/// behaviors (e.g. tray-style window chrome); see the `#[ability]` derive.
 #[napi]
 pub fn is_desktop_device() -> bool {
     cfg!(desktop)
@@ -1435,23 +1530,29 @@ pub fn drain_pending_window_focus() -> Vec<(i64, bool)> {
         .unwrap_or_default()
 }
 
+/// Save-side handle passed with [`Event::SaveState`]; the handler stores the
+/// state bytes the system should persist for this ability instance.
 #[derive(Clone)]
 pub struct SaveSaver<'a> {
     pub(crate) app: &'a OpenHarmonyApp,
 }
 
 impl<'a> SaveSaver<'a> {
+    /// Stores the state bytes to persist for this ability instance.
     pub fn save(&self, state: Vec<u8>) {
         self.app.save(state);
     }
 }
 
+/// Load-side handle passed with [`Event::Resume`]; the handler reads the state
+/// bytes persisted by a previous session (when restoring).
 #[derive(Clone)]
 pub struct SaveLoader<'a> {
     pub(crate) app: &'a OpenHarmonyApp,
 }
 
 impl<'a> SaveLoader<'a> {
+    /// Loads the persisted state bytes, or `None` when nothing was saved.
     pub fn load(&self) -> Option<Vec<u8>> {
         self.app.load()
     }
@@ -2102,13 +2203,13 @@ mod tests {
                 height: 1100,
             },
         );
-        assert_eq!(inner.inner_rect_for(2).width, 760);
-        assert_eq!(inner.inner_rect_for(2).height, 1100);
+        assert_eq!(inner.inner_rect_for(2).width, 760_i32);
+        assert_eq!(inner.inner_rect_for(2).height, 1_100_i32);
         // release_render_owner tears down the MAIN window surface: key 0's
         // cached rects go with it; sub-window snapshots are unaffected.
         assert_eq!(inner.release_render_owner("owner"), Some(false));
         assert!(!inner.inner_rects.contains_key(&0));
-        assert_eq!(inner.inner_rect_for(2).height, 1100);
+        assert_eq!(inner.inner_rect_for(2).height, 1_100_i32);
     }
 
     #[test]
@@ -2118,8 +2219,8 @@ mod tests {
         // is no estimate arithmetic between the snapshot and the read that
         // could accumulate error across cycles.
         let mut inner = OpenHarmonyAppInner::new();
-        for cycle in 0..8 {
-            let (w, h) = (1000 + cycle, 700 - cycle);
+        for cycle in 0_i32..8_i32 {
+            let (w, h) = (1_000_i32 + cycle, 700_i32 - cycle);
             inner.window_rects.insert(
                 0,
                 Rect {
@@ -2139,7 +2240,7 @@ mod tests {
                 },
             );
             let read = inner.inner_rect_for(0);
-            assert_eq!((read.width, read.height), (w, h - 146));
+            assert_eq!((read.width, read.height), (w, h - 146_i32));
             // save→restore would push the same drawable back next cycle; the
             // read never feeds arithmetic that could shift it.
         }
@@ -2151,11 +2252,11 @@ mod tests {
         update_cursor_position(10.5, 20.25);
         assert_eq!(
             f64::from_bits(CURSOR_POSITION_X.load(Ordering::Relaxed)),
-            10.5
+            10.5_f64
         );
         assert_eq!(
             f64::from_bits(CURSOR_POSITION_Y.load(Ordering::Relaxed)),
-            20.25
+            20.25_f64
         );
     }
 
@@ -2167,7 +2268,7 @@ mod tests {
     fn cursor_position_with_tracked_feed_multiplies_scale_by_scale() {
         assert_eq!(
             cursor_position_with(true, 100.5, 50.25, 2.0),
-            Ok((201.0, 100.5))
+            Ok((201.0_f64, 100.5_f64))
         );
     }
 
@@ -2194,8 +2295,8 @@ mod tests {
     fn cursor_position_with_scale_one_identity_and_fed_zero_is_legal() {
         assert_eq!(
             cursor_position_with(true, 100.5, 50.25, 1.0),
-            Ok((100.5, 50.25))
+            Ok((100.5_f64, 50.25_f64))
         );
-        assert_eq!(cursor_position_with(true, 0.0, 0.0, 2.0), Ok((0.0, 0.0)));
+        assert_eq!(cursor_position_with(true, 0.0, 0.0, 2.0), Ok((0.0_f64, 0.0_f64)));
     }
 }
