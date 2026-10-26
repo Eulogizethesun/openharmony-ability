@@ -5,7 +5,7 @@ import pointer from '@ohos.multimodalInput.pointer';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import display from '@ohos.display';
-import * as FloatPage from '../components/FloatPage';
+import * as SubWindowPage from '../components/SubWindowPage';
 import { getMenuDataCallback, windowKeyForId } from '../components/MenuBarComponent';
 import { DOMAIN, NATIVE_MODULE_STORAGE_KEY } from '../helper/constants';
 import { clearClipboardEnabled, clearZoomHotkeysEnabled, setClipboardEnabled, setZoomHotkeysEnabled } from '../helper/accelerator_matcher';
@@ -25,7 +25,7 @@ interface WindowEntry {
   // destroyWindow/removeWindow can call win.off("windowRectChange", handler) to avoid
   // leaking the listener past window destruction.
   rectChangeHandler?: (options: window.RectChangeOptions) => void;
-  // Phase 3 (design.md D4): set to true just before destroyWindow()/closeWindow Float
+  // Phase 3 (design.md D4): set to true just before destroyWindow()/closeWindow sub-window
   // path calls win.destroyWindow(). throttledRectDispatch checks this to discard
   // in-flight events for a window being torn down (no consumers left).
   destroying: boolean;
@@ -47,7 +47,7 @@ export interface SubWindowOptions {
 // Enum of window kinds. All UIAbility windows are equal, no primary/subordinate distinction.
 export enum WindowKind {
   UIAbility, // All UIAbility main windows (id=0 or id>0, equivalent)
-  Float, // Float sub-window created by windowStage.createSubWindow
+  SubWindow, // Sub-window created by windowStage.createSubWindow
 }
 
 export class WindowManager {
@@ -72,7 +72,7 @@ export class WindowManager {
   // setWindowBackgroundColor/setWindowContainerColor after the window is fully ready.
   private transparentFlags: Map<number, boolean> = new Map();
 
-  // windowKinds tracks each window's kind (UIAbility or Float) by windowId.
+  // windowKinds tracks each window's kind (UIAbility or SubWindow) by windowId.
   // Used by isUIAbilityMainWindow() — windowId=0 is NOT special, all UIAbility
   // windows (id=0 or id>0) are equal and system-managed.
   private windowKinds: Map<number, WindowKind> = new Map();
@@ -487,7 +487,7 @@ export class WindowManager {
 
   // ─── User Interaction Tracking (onTouch-based window targeting) ───
   //
-  // Called from page root Stack.onTouch() (MainPage/FloatPage, D8) when the user physically touches a window.
+  // Called from page root Stack.onTouch() (MainPage/SubWindowPage, D8) when the user physically touches a window.
   // ArkUI onTouch bubbles from child to parent, covering MenuBarComponent + webview + drag bars.
   // Used by tray menu to determine which window to operate on.
   setUserInteractedWindow(windowId: number): void {
@@ -694,7 +694,7 @@ export class WindowManager {
   // --- pre-maximize rect snapshot helpers (shared with WindowPlugin's tao bridge path) ---
   // WMS recover() re-anchors the floating rect to the pointer (GetFullScreenToFloatingRect);
   // these snapshot/restore the pre-maximize position so any maximize→recover pair —
-  // FloatPage title-bar buttons OR the tao set_maximized bridge (WindowPlugin.windowCommand,
+  // SubWindowPage title-bar buttons OR the tao set_maximized bridge (WindowPlugin.windowCommand,
   // which cannot delegate to maximizeWindow/recoverWindow without losing its await
   // completion semantics) — lands back where it started.
   snapshotPreMaximizeRect(windowId: number, win: window.Window): void {
@@ -762,7 +762,7 @@ export class WindowManager {
   // capability, not an op failure).
   async setWindowTopmost(windowId: number, topmost: boolean): Promise<void> {
     // win.setWindowTopmost() is API14+. Requires ohos.permission.WINDOW_TOPMOST
-    // (system_grant, declared in module.json5). Main window only — Float sub-windows
+    // (system_grant, declared in module.json5). Main window only — sub-windows
     // will error (non-fatal). Only effective in freeform window mode; returns 801
     // on devices without freeform support (phone/tablet).
     if (deviceInfo.sdkApiVersion < 14) {
@@ -796,10 +796,10 @@ export class WindowManager {
     if (!win) {
       throw new Error(`setWindowTitle: window ${windowId} not found`);
     }
-    // win.setWindowTitle(title) is Promise form (1 arg). Main window + Float sub-windows
+    // win.setWindowTitle(title) is Promise form (1 arg). Main window + sub-windows
     // both support title text (icon is NOT changeable at runtime). No extra permission
     // for main window. Only visible when window decorations are enabled (decorEnabled=true).
-    // Also update LocalStorage 'title' so FloatPage @LocalStorageProp('title') refreshes the title bar text.
+    // Also update LocalStorage 'title' so SubWindowPage @LocalStorageProp('title') refreshes the title bar text.
     const entry = this.windows.get(windowId);
     if (entry?.storage) {
       entry.storage.setOrCreate("title", title);
@@ -1090,7 +1090,7 @@ export class WindowManager {
     });
   }
   // Group D decoration button bitfield: bit0 closable, bit1 maximizable, bit2 minimizable, bit3 resizable.
-  // Only applies to Float sub-windows (writes LocalStorage). The UIAbility main window's
+  // Only applies to SubWindow sub-windows (writes LocalStorage). The UIAbility main window's
   // three decoration buttons are OS-managed: no per-button enable/disable API exists
   // (@ohos.window offers style injection via setDecorButtonStyle and whole-bar
   // visibility via setWindowDecorVisible, not per-button control) — issue #238.
@@ -1251,7 +1251,7 @@ export class WindowManager {
   //   closes the instance (removed from recent tasks), distinct from hideAbility
   //   which only backgrounds it. The first instance (id=0) terminating == app
   //   exit; secondary instances (id>0) terminating == that instance only exits.
-  // - Float sub-window: win.destroyWindow() + removeWindow cleanup.
+  // - SubWindow: win.destroyWindow() + removeWindow cleanup.
   async closeWindow(windowId: number): Promise<void> {
     if (this.isUIAbilityMainWindow(windowId)) {
       const ctx = this.uiAbilityContexts.get(Number(windowId));
@@ -1289,7 +1289,7 @@ export class WindowManager {
       hilog.warn(DOMAIN, "WindowManager", "closeWindow: window %{public}d not found", windowId);
       return;
     }
-    // Phase 3 (design.md D4): set destroying=true before win.destroyWindow() (Float path).
+    // Phase 3 (design.md D4): set destroying=true before win.destroyWindow() (sub-window path).
     const entry = this.windows.get(windowId);
     if (entry) {
       entry.destroying = true;
@@ -1632,7 +1632,7 @@ export class WindowManager {
       // unless the sub-window declared maximize capability at creation
       // (SubWindowOptions.maximizeSupported defaults to false). title/decorEnabled are
       // required fields (API11+); decorEnabled:false keeps the system decoration off —
-      // FloatPage draws its own title bar. On non-2in1/Tablet devices maximizeSupported
+      // SubWindowPage draws its own title bar. On non-2in1/Tablet devices maximizeSupported
       // is silently ignored (documented no-op), so it is safe to always pass on API19+.
       // This also unlocks maximize for the menu PredefinedMenuItem 'maximize' path and
       // setFullscreen's maximize(ENTER_IMMERSIVE) on sub-windows (same WMS gate).
@@ -1678,15 +1678,15 @@ export class WindowManager {
     // Title (set by setWindowTitle → updates this via setWindowTitle impl)
     storage.setOrCreate("title", "");
     this.windows.set(windowId, { window: win, storage, destroying: false });
-    // Register the Float kind explicitly. isUIAbilityMainWindow reads this map —
-    // today Float windows work only because a MISSING key is treated as "not a
+    // Register the SubWindow kind explicitly. isUIAbilityMainWindow reads this map —
+    // today sub-windows work only because a MISSING key is treated as "not a
     // UIAbility main window". Making the kind explicit removes that implicit
-    // "absent means Float" dependency (removeWindow's windowKinds.delete above
+    // "absent means SubWindow" dependency (removeWindow's windowKinds.delete above
     // stays idempotent).
-    this.windowKinds.set(windowId, WindowKind.Float);
+    this.windowKinds.set(windowId, WindowKind.SubWindow);
 
     // Phase 2 (design.md D3): register this sub-window's windowRectChange handler.
-    // This is the only clean registration point for Float sub-windows — createSubWindow
+    // This is the only clean registration point for sub-windows — createSubWindow
     // holds both `win` and `windowId`. The handler wraps { windowId, reason, rect } and
     // invokes the single rectChangeCallback (registered by NativeAbility.onWindowStageCreate
     // to fan out to lifecycles), so the Rust window_rect_change closure routes the rect
@@ -1758,10 +1758,10 @@ export class WindowManager {
       hilog.info(
         DOMAIN,
         "WindowManager",
-        `Loading content: FloatPage for window %{public}d`,
+        `Loading content: SubWindowPage for window %{public}d`,
         windowId,
       );
-      await win.loadContentByName(FloatPage.RouteName, storage);
+      await win.loadContentByName(SubWindowPage.RouteName, storage);
       hilog.info(
         DOMAIN,
         "WindowManager",
@@ -1775,7 +1775,7 @@ export class WindowManager {
       // drawableRect (unreadable before loadContent) and the Rust side updates
       // the outer/drawable pair atomically — so they seed nothing at all. This
       // snapshot restores the initial-size signal (the first dispatchable
-      // Resized for Float sub-windows) and fills inner_rects (chrome is 0 for
+      // Resized for sub-windows) and fills inner_rects (chrome is 0 for
       // decorEnabled:false sub-windows; the pair keeps semantics uniform).
       try {
         const snapshot = WindowManager.readWindowRectSnapshot(win);
@@ -1843,11 +1843,11 @@ export class WindowManager {
         hilog.info(
           DOMAIN,
           "WindowManager",
-          `Setting Float window %{public}d to transparent`,
+          `Setting sub-window %{public}d to transparent`,
           windowId,
         );
         await win.setWindowBackgroundColor("#00000000");
-        // Float sub-windows ALSO have a window container layer. Without setting
+        // SubWindow sub-windows ALSO have a window container layer. Without setting
         // it transparent, an opaque container sits between the window background
         // and ArkUI content — blocking backdropBlur from sampling through the
         // transparent window to content behind it (vibrancy/frosted glass effect).
@@ -1859,7 +1859,7 @@ export class WindowManager {
             hilog.info(
               DOMAIN,
               "WindowManager",
-              `Float window %{public}d container color set to transparent (API %{public}d)`,
+              `SubWindow %{public}d container color set to transparent (API %{public}d)`,
               windowId,
               deviceInfo.sdkApiVersion,
             );
@@ -1992,7 +1992,7 @@ export class WindowManager {
   //   The old implementation used hideSystemBar/showSystemBar (status bar, since deleted),
   //   which was wrong — status bar != title bar.
   //   May be unsupported on phones (throws 801); the catch fallback does not affect other logic.
-  // Float sub-window: LocalStorage setOrCreate('decorations') — FloatPage @LocalStorageProp reactively re-renders.
+  // Float sub-window: LocalStorage setOrCreate('decorations') — SubWindowPage @LocalStorageProp reactively re-renders.
   // Returns whether the window kind was handled: Float storage write and a successful
   // UIAbility setWindowDecorVisible return true; a missing window, a thrown system call,
   // or an unknown window kind return false (the plugin handler surfaces that as an error).
@@ -2001,7 +2001,7 @@ export class WindowManager {
   // `windowKinds` and never carry a `windows` entry.
   setDecorations(windowId: number, decorations: boolean): boolean {
     hilog.info(DOMAIN, 'WindowManager', 'setDecorations %{public}d decorations=%{public}s ENTER', windowId, String(decorations));
-    // Float sub-window: write LocalStorage to drive FloatPage title bar show/hide
+    // Float sub-window: write LocalStorage to drive SubWindowPage title bar show/hide
     const entry = this.windows.get(windowId);
     if (entry && entry.storage) {
       entry.storage.setOrCreate('decorations', decorations);
@@ -2308,7 +2308,7 @@ export class WindowManager {
 
   // Static facade over WindowAttachmentRegistry.onComponentRootRegistered (used by
   // WebviewPlugin to replay deferred webview creates — timing race: webview bridge
-  // create arrives ~3ms after TSFN dispatch, but FloatPage.aboutToAppear which
+  // create arrives ~3ms after TSFN dispatch, but SubWindowPage.aboutToAppear which
   // registers the componentRoot takes ~69ms). Static so it works exactly as before.
   static onComponentRootRegistered(windowId: number, callback: () => void): void {
     WindowAttachmentRegistry.onComponentRootRegistered(windowId, callback);
@@ -2320,7 +2320,7 @@ export class WindowManager {
   }
 
   // Clean up controller and UIContext only (used by DefaultXComponent aboutToDisappear)
-  // Does not remove from windows Map (managed by FloatPage's destroyWindow path)
+  // Does not remove from windows Map (managed by SubWindowPage's destroyWindow path)
   removeControllerAndUIContext(windowId: number): void {
     this.attachments.removeControllerAndUIContext(windowId);
     hilog.info(

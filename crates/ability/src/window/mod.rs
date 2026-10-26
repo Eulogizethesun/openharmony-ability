@@ -25,8 +25,6 @@ static NEXT_WINDOW_ID: AtomicI64 = AtomicI64::new(1);
 pub struct WindowCreateParams {
     /// Window label/name, used as the ArkTS sub-window name.
     pub name: String,
-    /// OHOS window type enum value (0=App, 8=Float, etc.)
-    pub window_type: i32,
     /// Initial window width in px. Default: 800.
     pub width: i32,
     /// Initial window height in px. Default: 600.
@@ -36,7 +34,7 @@ pub struct WindowCreateParams {
     /// Initial window Y position in px. Default: 100.
     pub y: i32,
     /// Whether to show window decorations (title bar, drag area, close button).
-    /// Phase 2: controls FloatPage conditional rendering via LocalStorage.
+    /// Phase 2: controls SubWindowPage conditional rendering via LocalStorage.
     pub decorations: bool,
     /// Whether the window background should be fully transparent.
     /// Phase 3: when true, overrides background_color with 0x00000000.
@@ -50,7 +48,6 @@ impl Default for WindowCreateParams {
     fn default() -> Self {
         Self {
             name: String::new(),
-            window_type: 0,
             width: 800,
             height: 600,
             x: 100,

@@ -146,7 +146,7 @@ export class ProcessInitializer {
             return wm.createSubWindow(config)
               .then((id: number): number => {
                 // Settle signal: the creation chain finished (window registered
-                // in WindowManager.windows, FloatPage UI loaded). Rust drains
+                // in WindowManager.windows, SubWindowPage UI loaded). Rust drains
                 // the ops queued against the pre-registration window. Attached
                 // at promise END on purpose — an earlier notify would let
                 // replayed ops race the chain's trailing
@@ -183,7 +183,7 @@ export class ProcessInitializer {
     // module.init → bridge session creation is now performed by NativeAbility.onCreate,
     // which owns the per-Ability lifecycle and constructs BridgeHostRegistry sessions.
 
-    // Publish the primary native module to AppStorage so ArkUI components (FloatPage ×
+    // Publish the primary native module to AppStorage so ArkUI components (SubWindowPage ×
     // button / aboutToDisappear, menu.ets closeWindow, NativeAbility windowStatusChange)
     // can call NAPI fns (notifyWindowClose / notifyWindowStatus). Without this, every
     // AppStorage.get(NATIVE_MODULE_STORAGE_KEY) returns undefined → notifyWindowClose is

@@ -29,7 +29,7 @@ interface Position {
 
 @Entry({ routeName: RouteName, storage: LocalStorage.getShared() })
 @Component
-struct FloatPage {
+struct SubWindowPage {
   // Receive windowId from WindowManager.createSubWindow
   @LocalStorageProp("windowId") windowId: number = 0;
   @LocalStorageProp("decorations") decorations: boolean = true;
@@ -64,7 +64,7 @@ struct FloatPage {
 
   aboutToDisappear(): void {
     // When the OHOS system close button destroys the sub-window,
-    // neither the FloatPage × onClick nor the webview onCloseWindow fires.
+    // neither the SubWindowPage × onClick nor the webview onCloseWindow fires.
     // aboutToDisappear is our last chance to notify Rust.
     if (this.closeNotified) {
       return;
@@ -76,7 +76,7 @@ struct FloatPage {
     }
     hilog.info(
       DOMAIN,
-      "FloatPage",
+      "SubWindowPage",
       "aboutToDisappear: system close detected for window %{public}d",
       this.windowId,
     );
@@ -87,7 +87,7 @@ struct FloatPage {
         nativeModule.notifyWindowClose(this.windowId);
         hilog.info(
           DOMAIN,
-          "FloatPage",
+          "SubWindowPage",
           "Window %{public}d close notified via NAPI (system close)",
           this.windowId,
         );
@@ -96,7 +96,7 @@ struct FloatPage {
     } catch (e) {
       hilog.error(
         DOMAIN,
-        "FloatPage",
+        "SubWindowPage",
         "aboutToDisappear cleanup failed for window %{public}d: %{public}s",
         this.windowId,
         JSON.stringify(e),
@@ -109,14 +109,14 @@ struct FloatPage {
   }
 
   aboutToAppear(): void {
-    hilog.info(DOMAIN, "FloatPage", "=== FloatPage aboutToAppear START ===");
-    hilog.info(DOMAIN, "FloatPage", "Received windowId: %{public}d", this.windowId);
+    hilog.info(DOMAIN, "SubWindowPage", "=== SubWindowPage aboutToAppear START ===");
+    hilog.info(DOMAIN, "SubWindowPage", "Received windowId: %{public}d", this.windowId);
 
     if (this.windowId <= 0) {
       hilog.error(
         DOMAIN,
-        "FloatPage",
-        "Invalid windowId: %{public}d. FloatPage requires windowId > 0.",
+        "SubWindowPage",
+        "Invalid windowId: %{public}d. SubWindowPage requires windowId > 0.",
         this.windowId,
       );
       return;
@@ -135,7 +135,7 @@ struct FloatPage {
             if (rect.height > 0) this.currentHeight = rect.height;
             hilog.info(
               DOMAIN,
-              "FloatPage",
+              "SubWindowPage",
               "Got windowClass: left=%{public}d, top=%{public}d, w=%{public}d, h=%{public}d",
               rect.left,
               rect.top,
@@ -145,7 +145,7 @@ struct FloatPage {
           } catch (e) {
             hilog.error(
               DOMAIN,
-              "FloatPage",
+              "SubWindowPage",
               "Failed to get window rect: %{public}s",
               JSON.stringify(e),
             );
@@ -177,7 +177,7 @@ struct FloatPage {
           } catch (e) {
             hilog.warn(
               DOMAIN,
-              "FloatPage",
+              "SubWindowPage",
               "windowStatusChange registration failed: %{public}s",
               String(e),
             );
@@ -193,7 +193,7 @@ struct FloatPage {
             if (typeof this.windowClass.on !== "function") {
               hilog.warn(
                 DOMAIN,
-                "FloatPage",
+                "SubWindowPage",
                 "windowEvent skipped: win.on is not a function: id=%{public}d",
                 this.windowId,
               );
@@ -204,7 +204,7 @@ struct FloatPage {
             ) {
               hilog.warn(
                 DOMAIN,
-                "FloatPage",
+                "SubWindowPage",
                 "windowEvent skipped: WindowEventType ACTIVE/INACTIVE not available on this host: id=%{public}d",
                 this.windowId,
               );
@@ -221,12 +221,12 @@ struct FloatPage {
                 } else {
                   // Fix-variant m6: a stale HAR (native module without
                   // notifyWindowFocus) used to silently drop focus transitions.
-                  // One-time structured warn per FloatPage instance instead.
+                  // One-time structured warn per SubWindowPage instance instead.
                   if (!this.focusNotifyWarned) {
                     this.focusNotifyWarned = true;
                     hilog.warn(
                       DOMAIN,
-                      "FloatPage",
+                      "SubWindowPage",
                       "windowEvent dropped: native module notifyWindowFocus unavailable (stale HAR?): id=%{public}d event=%{public}d",
                       this.windowId,
                       event as number,
@@ -238,7 +238,7 @@ struct FloatPage {
           } catch (e) {
             hilog.warn(
               DOMAIN,
-              "FloatPage",
+              "SubWindowPage",
               "windowEvent registration failed: %{public}s",
               String(e),
             );
@@ -246,14 +246,14 @@ struct FloatPage {
         } else {
           hilog.error(
             DOMAIN,
-            "FloatPage",
+            "SubWindowPage",
             "findWindow returned null for name: %{public}s",
             winName,
           );
         }
       }
     } catch (e) {
-      hilog.error(DOMAIN, "FloatPage", "Failed to get windowClass: %{public}s", JSON.stringify(e));
+      hilog.error(DOMAIN, "SubWindowPage", "Failed to get windowClass: %{public}s", JSON.stringify(e));
     }
 
     try {
@@ -261,7 +261,7 @@ struct FloatPage {
     } catch (e) {
       hilog.warn(
         DOMAIN,
-        "FloatPage",
+        "SubWindowPage",
         "Failed to get CursorController: %{public}s",
         JSON.stringify(e),
       );
@@ -270,9 +270,9 @@ struct FloatPage {
     try {
       const defaultDisplay = display.getDefaultDisplaySync();
       this.dpiScale = defaultDisplay.densityPixels;
-      hilog.info(DOMAIN, "FloatPage", "Display densityPixels: %{public}f", this.dpiScale);
+      hilog.info(DOMAIN, "SubWindowPage", "Display densityPixels: %{public}f", this.dpiScale);
     } catch (e) {
-      hilog.warn(DOMAIN, "FloatPage", "Failed to get display scale: %{public}s", JSON.stringify(e));
+      hilog.warn(DOMAIN, "SubWindowPage", "Failed to get display scale: %{public}s", JSON.stringify(e));
     }
   }
 
@@ -326,7 +326,7 @@ struct FloatPage {
                   } catch (err) {
                     hilog.warn(
                       DOMAIN,
-                      "FloatPage",
+                      "SubWindowPage",
                       "minimize failed: %{public}s",
                       JSON.stringify(err),
                     );
@@ -365,7 +365,7 @@ struct FloatPage {
                   } catch (err) {
                     hilog.warn(
                       DOMAIN,
-                      "FloatPage",
+                      "SubWindowPage",
                       "maximize/restore failed: %{public}s",
                       JSON.stringify(err),
                     );
@@ -390,7 +390,7 @@ struct FloatPage {
                 .onClick(async () => {
                   hilog.info(
                     DOMAIN,
-                    "FloatPage",
+                    "SubWindowPage",
                     "Close button clicked for window %{public}d",
                     this.windowId,
                   );
@@ -402,7 +402,7 @@ struct FloatPage {
                   if (!WindowManager.getInstance().getDecorationFlag(this.windowId, "closable")) {
                     hilog.warn(
                       DOMAIN,
-                      "FloatPage",
+                      "SubWindowPage",
                       "Close blocked: closable flag not set (window %{public}d)",
                       this.windowId,
                     );
@@ -418,14 +418,14 @@ struct FloatPage {
                       nativeModule.notifyWindowClose(this.windowId);
                       hilog.info(
                         DOMAIN,
-                        "FloatPage",
+                        "SubWindowPage",
                         "Window %{public}d close notified via NAPI",
                         this.windowId,
                       );
                     } else {
                       hilog.warn(
                         DOMAIN,
-                        "FloatPage",
+                        "SubWindowPage",
                         "NAPI notifyWindowClose not available for window %{public}d",
                         this.windowId,
                       );
@@ -438,7 +438,7 @@ struct FloatPage {
                       await this.windowClass.destroyWindow();
                       hilog.info(
                         DOMAIN,
-                        "FloatPage",
+                        "SubWindowPage",
                         "Window %{public}d destroyed and cleaned up",
                         this.windowId,
                       );
@@ -446,7 +446,7 @@ struct FloatPage {
                   } catch (e) {
                     hilog.error(
                       DOMAIN,
-                      "FloatPage",
+                      "SubWindowPage",
                       "Failed to close window %{public}d: %{public}s",
                       this.windowId,
                       JSON.stringify(e),
@@ -486,13 +486,13 @@ struct FloatPage {
                   this.windowClass?.startMoving()?.catch((err: BusinessError) => {
                     hilog.warn(
                       DOMAIN,
-                      "FloatPage",
+                      "SubWindowPage",
                       "startMoving failed: %{public}s",
                       JSON.stringify(err),
                     );
                   });
                 } catch (err) {
-                  hilog.warn(DOMAIN, "FloatPage", "startMoving exception: %{public}s", String(err));
+                  hilog.warn(DOMAIN, "SubWindowPage", "startMoving exception: %{public}s", String(err));
                 }
               }
             });
@@ -536,7 +536,7 @@ struct FloatPage {
                 } catch (e) {
                   hilog.error(
                     DOMAIN,
-                    "FloatPage",
+                    "SubWindowPage",
                     "Right resize failed: w=%{public}d, h=%{public}d, err=%{public}s",
                     this.currentWidth,
                     this.currentHeight,
@@ -574,7 +574,7 @@ struct FloatPage {
                 } catch (e) {
                   hilog.error(
                     DOMAIN,
-                    "FloatPage",
+                    "SubWindowPage",
                     "Bottom resize failed: w=%{public}d, h=%{public}d, err=%{public}s",
                     this.currentWidth,
                     this.currentHeight,
@@ -616,7 +616,7 @@ struct FloatPage {
                 } catch (e) {
                   hilog.error(
                     DOMAIN,
-                    "FloatPage",
+                    "SubWindowPage",
                     "Corner resize failed: w=%{public}d, h=%{public}d, err=%{public}s",
                     this.currentWidth,
                     this.currentHeight,
@@ -687,7 +687,7 @@ struct FloatPage {
         } catch (e) {
           hilog.warn(
             DOMAIN,
-            "FloatPage",
+            "SubWindowPage",
             "onTouch: WindowManager not ready: %{public}s",
             String(e),
           );
@@ -711,7 +711,7 @@ struct FloatPage {
     .onMouse((event: MouseEvent) => {
       if (event.action === MouseAction.Move || event.action === MouseAction.Press) {
         // Module reference taken the same way as this page's other NAPI
-        // calls (notifyWindowClose/notifyWindowStatus — FloatPage.ets:82/161/
+        // calls (notifyWindowClose/notifyWindowStatus — SubWindowPage.ets:82/161/
         // 170/352 pattern): AppStorage is safe here because
         // ProcessInitializer.ets:193-195 seeds NATIVE_MODULE_STORAGE_KEY
         // during process init, before any page feed point can fire. The

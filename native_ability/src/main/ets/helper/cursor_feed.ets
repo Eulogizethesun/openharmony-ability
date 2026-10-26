@@ -1,10 +1,10 @@
 /**
  * Shared cursor-position feed helper (ohos-cursor-passthrough D2).
  *
- * Both ArkUI hosts of runtime windows — MainPage (main window) and FloatPage
+ * Both ArkUI hosts of runtime windows — MainPage (main window) and SubWindowPage
  * (Float sub-windows) — call {@link feedCursorFromMouse} from their root
  * `onMouse` (Move/Press) so EVERY window's mouse traffic updates the
- * process-level cursor snapshot. Root-cause-1 fix: FloatPage had no onMouse
+ * process-level cursor snapshot. Root-cause-1 fix: SubWindowPage had no onMouse
  * at all, so a cursor over a Float sub-window left the snapshot at the last
  * main-window coordinate (the consumer's hit-test then never matched →
  * `set_ignore_cursor_events` stayed true → the whole toolbar was
@@ -22,7 +22,7 @@
  * Module-reference policy (D2): the helper does NOT read AppStorage. Each
  * caller passes its own module reference (MainPage: its own `this.nativeModule`
  * — AppStorage is a process-global single value a spawned instance would
- * overwrite, see MainPage.ets:34 admonition; FloatPage: the same
+ * overwrite, see MainPage.ets:34 admonition; SubWindowPage: the same
  * `AppStorage.get(NATIVE_MODULE_STORAGE_KEY)` reference its other NAPI calls
  * already use, seeded process-wide by ProcessInitializer before any page
  * exists). NAPI spelling is camelCase (`updateCursorPosition`) — the

@@ -1278,7 +1278,7 @@ pub fn drain_pending_window_closes() -> Vec<i32> {
 }
 
 // ─── Cursor position tracking ─────────────────────────────────────────────
-// ArkTS `onMouse` handlers (MainPage AND FloatPage — ohos-cursor-passthrough
+// ArkTS `onMouse` handlers (MainPage AND SubWindowPage — ohos-cursor-passthrough
 // D2) call `update_cursor_position` via NAPI because the NDK
 // `DispatchMouseEvent` path does not fire while the cursor is over the
 // WebView (which covers the window). tao's `cursor_position()` reads these

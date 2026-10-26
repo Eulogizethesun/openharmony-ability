@@ -11,7 +11,7 @@ import { DOMAIN } from '../helper/constants';
  * - raw attached WebviewControllers (WebviewPlugin.handleControllerAttached)
  * - UIContexts / component root FrameNodes
  * - vibrancy state (persistent blur radius + runtime refresh callbacks)
- * - deferred componentRoot callbacks (webview create racing FloatPage.aboutToAppear)
+ * - deferred componentRoot callbacks (webview create racing SubWindowPage.aboutToAppear)
  *
  * WindowManager keeps facade methods for all of these; nothing outside the window/
  * module imports this class.
@@ -36,7 +36,7 @@ export class WindowAttachmentRegistry {
   private blurRefreshCallbacks: Map<number, (radius: number) => void> = new Map();
   // Callback registry for plugins that need to react to componentRoot registration.
   // Used by WebviewPlugin to replay deferred webview creates (timing race: webview
-  // bridge create arrives ~3ms after TSFN dispatch, but FloatPage.aboutToAppear
+  // bridge create arrives ~3ms after TSFN dispatch, but SubWindowPage.aboutToAppear
   // which registers the componentRoot takes ~69ms).
   // Static: callable before the WindowManager singleton exists (the registry itself
   // needs no instance state for registration).
@@ -85,7 +85,7 @@ export class WindowAttachmentRegistry {
     hilog.info(DOMAIN, 'WindowManager', `Component root registered for window: %{public}d`, windowId);
     this.componentRoots.set(windowId, root);
     // Flush any pending callbacks registered by plugins (e.g. webview create deferred
-    // due to timing race — webview bridge create arriving before FloatPage.aboutToAppear).
+    // due to timing race — webview bridge create arriving before SubWindowPage.aboutToAppear).
     this.flushPendingComponentRootCallbacks(windowId);
   }
 
