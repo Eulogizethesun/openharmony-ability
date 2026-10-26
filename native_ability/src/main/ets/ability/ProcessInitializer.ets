@@ -126,10 +126,10 @@ export class ProcessInitializer {
     const wm = WindowManager.getInstance();
     for (const module of this.nativeModules) {
       if (typeof module.registerCreateSubWindowTsfn === "function") {
-        // Float creation-race fix (doc/OHOS窗口遗留问题.md issue-7 addendum).
+        // SubWindow creation-race fix (doc/OHOS窗口遗留问题.md issue-7 addendum).
         // Capability handshake (review V1) — arm the Rust-side pending registry
         // BEFORE any create_os_window can run. A stale HAR lacks these members
-        // entirely, so the Rust side never gates Float ops and behavior stays
+        // entirely, so the Rust side never gates sub-window ops and behavior stays
         // exactly the pre-fix fire-and-forget semantics; a fresh HAR on an old
         // .so is covered by the typeof probes in notifySettled below.
         if (typeof module.enableFloatPendingTracking === "function") {
@@ -187,7 +187,7 @@ export class ProcessInitializer {
     // button / aboutToDisappear, menu.ets closeWindow, NativeAbility windowStatusChange)
     // can call NAPI fns (notifyWindowClose / notifyWindowStatus). Without this, every
     // AppStorage.get(NATIVE_MODULE_STORAGE_KEY) returns undefined → notifyWindowClose is
-    // never invoked → ArkTS destroys the Float window but the Rust tauri manager keeps a
+    // never invoked → ArkTS destroys the sub-window but the Rust tauri manager keeps a
     // zombie entry → getByLabel returns a dead handle → same-label windows can't rebuild
     // (manual_tests §二十八 close lifecycle defect).
     if (this.nativeModules.length > 0) {

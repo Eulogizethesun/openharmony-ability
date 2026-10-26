@@ -2,7 +2,7 @@
  * Shared cursor-position feed helper (ohos-cursor-passthrough D2).
  *
  * Both ArkUI hosts of runtime windows — MainPage (main window) and SubWindowPage
- * (Float sub-windows) — call {@link feedCursorFromMouse} from their root
+ * (sub-windows) — call {@link feedCursorFromMouse} from their root
  * `onMouse` (Move/Press) so EVERY window's mouse traffic updates the
  * process-level cursor snapshot. Root-cause-1 fix: SubWindowPage had no onMouse
  * at all, so a cursor over a Float sub-window left the snapshot at the last

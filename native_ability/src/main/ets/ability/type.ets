@@ -202,12 +202,12 @@ export interface Module {
   /** `is_desktop_device` — desktop form-factor probe (setupMenuPopup guard,
    *  SubWindowPage `__openharmony_ability_is_desktop__`). */
   isDesktopDevice?: () => boolean;
-  /** `notify_window_close` — Float close-button / SubWindowPage aboutToDisappear. */
+  /** `notify_window_close` — sub-window close-button / SubWindowPage aboutToDisappear. */
   notifyWindowClose?: (windowId: number) => void;
   /** `notify_window_status` — NativeAbility windowStatusChange fan-in. */
   notifyWindowStatus?: (windowId: number, status: number) => void;
   /** `notify_window_focus` — SubWindowPage windowEvent ACTIVE/INACTIVE fan-in
-   *  (#180①: Float-window focus transitions reach tao through the
+   *  (#180①: sub-window focus transitions reach tao through the
    *  PENDING_WINDOW_FOCUS queue; camelCase wire, typeof-probed like the other
    *  optional exports so stale HARs degrade to a structured warn). */
   notifyWindowFocus?: (windowId: number, focused: boolean) => void;

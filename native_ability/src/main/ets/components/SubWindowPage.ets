@@ -151,7 +151,7 @@ struct SubWindowPage {
             );
           }
           // 回灌系统窗口状态到 tao 镜像位(问题五 5.3)。
-          // Float 子窗口的 maximize/minimize/fullscreen 系统状态变化经
+          // SubWindow 子窗口的 maximize/minimize/fullscreen 系统状态变化经
           // notifyWindowStatus NAPI 入队,runtime-wry drain 路由到对应 tao Window。
           // API 11+;不支持则静默降级。详见 doc/OHOS窗口遗留问题.md。
           try {
@@ -182,7 +182,7 @@ struct SubWindowPage {
               String(e),
             );
           }
-          // #180①: Float-window focus transitions reach tao through the
+          // #180①: sub-window focus transitions reach tao through the
           // PENDING_WINDOW_FOCUS queue (notifyWindowFocus → event-loop drain
           // with edge dedup + paired-blur synthesis). `windowFocusChange` is
           // absent from the local SDK20 @ohos.window.d.ets; `windowEvent`
@@ -353,7 +353,7 @@ struct SubWindowPage {
                       // recover() switches MAXIMIZE/FULL_SCREEN → FLOATING (API11+) — the
                       // documented inverse of maximize(). restore() is main-window-only
                       // (restores a minimized MAIN window on 2in1, API14+); on a maximized
-                      // Float sub-window it is the wrong API. Mirrors tao set_maximized(false)
+                      // SubWindow sub-window it is the wrong API. Mirrors tao set_maximized(false)
                       // → recover_window (plugin-window bridge).
                       WindowManager.getInstance().recoverWindow(this.windowId);
                     } else {
@@ -465,7 +465,7 @@ struct SubWindowPage {
             // A PanGesture fallback is NOT attached alongside startMoving — a simultaneously
             // bound PanGesture consumes the Down event and blocks startMoving, so the two
             // cannot coexist; mutually-exclusive Row branching was deemed not worth the
-            // duplication given Float dragging targets API14+ desktop.
+            // duplication given sub-window dragging targets API14+ desktop.
             .onTouch((event: TouchEvent) => {
               if (event.type === TouchType.Down) {
                 // While maximized, startMoving() at touch-DOWN triggers WMS
@@ -695,7 +695,7 @@ struct SubWindowPage {
       }
     })
     // ohos-cursor-passthrough 3.3 (root cause 1): feed the process cursor
-    // snapshot from Float sub-windows too. This root-Stack onMouse sits at
+    // snapshot from sub-windows too. This root-Stack onMouse sits at
     // the same layer as onKeyPreIme/onTouch above; ArkUI onMouse bubbles from
     // the whole subtree (MenuBarComponent + DefaultXComponent/webview + drag
     // bar + resize handles) — the same mechanism MainPage relies on in

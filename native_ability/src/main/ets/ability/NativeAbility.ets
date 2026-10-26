@@ -633,7 +633,7 @@ export class NativeAbility extends UIAbility {
     // receives its own window id, the shared bridge session id (D12 join) and
     // its own want URIs, never the process-global AppStorage values the
     // primary instance published. Same pattern as WindowManager.createSubWindow
-    // for Float sub-windows.
+    // for SubWindow sub-windows.
     const storage = new LocalStorage();
     storage.setOrCreate('windowId', this.abilityWindowId);
     storage.setOrCreate('bridgeSessionId', this.bridgeSessionId);

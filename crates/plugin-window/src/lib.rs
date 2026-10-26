@@ -950,7 +950,7 @@ mod tests {
     // text itself is asserted end-to-end by the api demo device suite
     // (tauri repo, window-ops ut_ decoration-reject cases).
     #[test]
-    fn decoration_flags_main_window_error_is_surfaced_from_the_arkts_throw() {
+    fn ut_decoration_flags_main_window_error_is_surfaced_from_the_arkts_throw() {
         // Brief:
         // 1. Main-window id 0 passes validate_window_id — the facade dispatches
         //    it (no Rust-side gate); the rejection is the ArkTS throw.
