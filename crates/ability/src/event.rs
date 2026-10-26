@@ -54,11 +54,11 @@ impl Clone for TerminateAnswer {
 pub enum Event<'a> {
     /// window stage create event
     /// alias onWindowStageCreate
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonwindowstagecreate
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonwindowstagecreate>
     WindowCreate,
     /// window stage destroy event
     /// alias onWindowStageDestroy
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonwindowstagedestroy
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonwindowstagedestroy>
     ///
     /// `window_id` is the UIAbility instance whose stage is being torn down
     /// (0 = primary). Phase 4 (design.md D5): every instance's destroy
@@ -80,7 +80,7 @@ pub enum Event<'a> {
     },
     /// window resize event
     /// alias window.on("windowSizeChange")
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-window-V5#onwindowsizechange7
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-window-V5#onwindowsizechange7>
     ///
     /// `window_id` is the OHOS window this resize originated from (0 = main,
     /// any positive value = a Float sub-window). Populated by the
@@ -95,25 +95,25 @@ pub enum Event<'a> {
     },
     /// window rect change event
     /// alias window.on("windowRectChange")
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-window-V5#onwindowrectchange12
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-window-V5#onwindowrectchange12>
     ContentRectChange(ContentRect),
     /// window avoid area change event
     /// alias window.on("avoidAreaChange")
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references/arkts-apis-window-window#onavoidareachange9
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references/arkts-apis-window-window#onavoidareachange9>
     AvoidAreaChange(AvoidAreaInfo),
 
     /// window configuration changed
     /// alias onWindowConfigurationChanged
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-environmentcallback-V5#environmentcallbackonconfigurationupdated
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-environmentcallback-V5#environmentcallbackonconfigurationupdated>
     ConfigChanged(Configuration),
     /// low memory event
     /// alias onMemoryLevel
     /// it will execute when system memory is low(MEMORY_LEVEL_CRITICAL)
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-environmentcallback-V5#environmentcallbackonmemorylevel
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-environmentcallback-V5#environmentcallbackonmemorylevel>
     LowMemory,
 
     /// WindowStateEventChanged
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-window-V5#onwindowstageevent9
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-window-V5#onwindowstageevent9>
     /// window show
     /// alias WindowStageEventType.SHOWN
     Start,
@@ -147,15 +147,15 @@ pub enum Event<'a> {
 
     /// ability save state event
     /// alias onAbilitySaveState
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonabilitysavestate12
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonabilitysavestate12>
     SaveState(SaveSaver<'a>),
     /// ability create event
     /// alias onAbilityCreate
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonabilitycreate
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonabilitycreate>
     Create,
     /// ability destroy event
     /// alias onAbilityDestroy
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonabilitydestroy
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-abilitylifecyclecallback-V5#abilitylifecyclecallbackonabilitydestroy>
     Destroy,
 
     /// surface create event
@@ -179,12 +179,12 @@ pub enum Event<'a> {
 
     /// keyboard event
     /// alias onKeyboardHeightChange
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references/arkts-apis-window-window#onkeyboardheightchange7
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references/arkts-apis-window-window#onkeyboardheightchange7>
     KeyboardEvent(i32),
 
     /// ability new want event (deep link / URL scheme)
     /// alias onNewWant
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-uiAbility-V5#uiabilityonnewwant
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-app-ability-uiAbility-V5#uiabilityonnewwant>
     NewWant {
         /// URI carried by the want (deep link / URL scheme target).
         uri: String,
@@ -192,7 +192,7 @@ pub enum Event<'a> {
 
     /// ability prepare-to-terminate event (PC/2in1 pre-close interception,
     /// API 15+) alias UIAbility.onPrepareToTerminateAsync
-    /// <https://developer.huawei.com>/consumer/cn/doc/harmonyos-references/js-apis-app-ability-uiability#onpreparetoterminateasync15
+    /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-app-ability-uiability#onpreparetoterminateasync15>
     ///
     /// Fired BEFORE any teardown when the user closes the app via the window
     /// close button / taskbar shortcut / tray exit (requires
