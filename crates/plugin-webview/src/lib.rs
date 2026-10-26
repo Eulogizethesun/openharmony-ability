@@ -63,6 +63,53 @@ impl BridgePlugin for WebviewBridgePlugin {
         &self,
         event: BridgeMainThreadEvent<'env>,
     ) -> Result<Unknown<'env>> {
+        // Routing only - the per-family handling lives in the associated
+        // helpers below so this function stays inside the cyclomatic
+        // complexity budget (the inline version carried 48 try operators on
+        // top of its match arms). Arm grouping mirrors the helper families;
+        // every event name keeps its original handler semantics and order.
+        match event.name() {
+            SEAL_ENGINE_SCHEMES_EVENT | BEFORE_ENGINE_INIT_EVENT | ENGINE_INITIALIZED_EVENT => {
+                Self::on_engine_lifecycle_event(&event)
+            }
+            CONTROLLER_ATTACHED_EVENT | "controller-removed" => {
+                Self::on_controller_event(&event)
+            }
+            "navigation-request" | "new-window-request" | "download-start" | "https-intercept" => {
+                Self::on_callback_decision_event(&event)
+            }
+            "drag-enter" | "drag-over" | "drag-drop" | "drag-leave" | "page-begin" | "page-end"
+            | "download-end" | "title-change" | "print-state" => {
+                Self::on_callback_ack_event(&event)
+            }
+            _ => Err(unsupported_main_thread_event(&event)),
+        }
+    }
+
+    fn on_lifecycle(&self, event: &PluginLifecycleEvent) -> Result<()> {
+        // The attached controller/protocol/js-proxy state belongs to the primary window's
+        // XComponent webview. A spawned UIAbility instance teardown must not clear it
+        // (multi-uiability-windows R11); single-instance events all carry window_id 0,
+        // so this gate never changes existing behavior.
+        if matches!(
+            event,
+            PluginLifecycleEvent::UiContextDestroyed { window_id: 0, .. }
+                | PluginLifecycleEvent::AbilityDestroyed { window_id: 0 }
+        ) {
+            clear_attached_webview_state()?;
+        }
+        Ok(())
+    }
+}
+
+impl WebviewBridgePlugin {
+    /// Engine lifecycle family (seal schemes / before-engine-init /
+    /// engine-initialized). Arms extracted verbatim from
+    /// `on_main_thread_event`'s original match; the trailing wildcard
+    /// mirrors the dispatcher and is unreachable through it.
+    fn on_engine_lifecycle_event<'env>(
+        event: &BridgeMainThreadEvent<'env>,
+    ) -> Result<Unknown<'env>> {
         match event.name() {
             SEAL_ENGINE_SCHEMES_EVENT => {
                 let lifecycle = event.decode::<WebviewEngineLifecycleEvent>()?;
@@ -83,6 +130,15 @@ impl BridgePlugin for WebviewBridgePlugin {
                 WebviewProtocol::mark_engine_initialized(&engine_scheme_pairs(&lifecycle))?;
                 event.respond(engine_lifecycle_response()?)
             }
+            _ => Err(unsupported_main_thread_event(event)),
+        }
+    }
+
+    /// Controller attach/remove family. Arms extracted verbatim from
+    /// `on_main_thread_event`'s original match; the trailing wildcard
+    /// mirrors the dispatcher and is unreachable through it.
+    fn on_controller_event<'env>(event: &BridgeMainThreadEvent<'env>) -> Result<Unknown<'env>> {
+        match event.name() {
             CONTROLLER_ATTACHED_EVENT => {
                 let controller = event.decode::<WebviewControllerEvent>()?;
                 let (webview_id, native_tag) = controller_identity(controller)?;
@@ -102,43 +158,26 @@ impl BridgePlugin for WebviewBridgePlugin {
                 controller::on_removed(&webview_id, &native_tag)?;
                 event.respond(WebviewEventAcknowledgement { accepted: true })
             }
+            _ => Err(unsupported_main_thread_event(event)),
+        }
+    }
+
+    /// Decision-returning callback family (the bridge replies with the
+    /// callback's decision instead of a plain acknowledgement). Arms
+    /// extracted verbatim from `on_main_thread_event`'s original match;
+    /// the trailing wildcard mirrors the dispatcher and is unreachable
+    /// through it.
+    fn on_callback_decision_event<'env>(
+        event: &BridgeMainThreadEvent<'env>,
+    ) -> Result<Unknown<'env>> {
+        match event.name() {
             "navigation-request" => {
                 let request = event.decode::<WebviewNavigationRequest>()?;
                 event.respond(callbacks::navigation_decision(request)?)
             }
-            "drag-enter" => {
-                let drag_event = event.decode::<WebviewDragEvent>()?;
-                callbacks::dispatch_drag_enter(drag_event)?;
-                event.respond(WebviewEventAcknowledgement { accepted: true })
-            }
-            "drag-over" => {
-                let drag_event = event.decode::<WebviewDragEvent>()?;
-                callbacks::dispatch_drag_over(drag_event)?;
-                event.respond(WebviewEventAcknowledgement { accepted: true })
-            }
-            "drag-drop" => {
-                let drop_event = event.decode::<WebviewDropEvent>()?;
-                callbacks::dispatch_drag_drop(drop_event)?;
-                event.respond(WebviewEventAcknowledgement { accepted: true })
-            }
-            "drag-leave" => {
-                let drag_event = event.decode::<WebviewDragEvent>()?;
-                callbacks::dispatch_drag_leave(drag_event)?;
-                event.respond(WebviewEventAcknowledgement { accepted: true })
-            }
             "new-window-request" => {
                 let request = event.decode::<WebviewNewWindowRequest>()?;
                 event.respond(callbacks::new_window_decision(request)?)
-            }
-            "page-begin" => {
-                let page_event = event.decode::<WebviewPageEvent>()?;
-                callbacks::dispatch_page_begin(page_event)?;
-                event.respond(WebviewEventAcknowledgement { accepted: true })
-            }
-            "page-end" => {
-                let page_event = event.decode::<WebviewPageEvent>()?;
-                callbacks::dispatch_page_end(page_event)?;
-                event.respond(WebviewEventAcknowledgement { accepted: true })
             }
             "download-start" => {
                 let request = event.decode::<WebviewDownloadStartRequest>()?;
@@ -160,6 +199,46 @@ impl BridgePlugin for WebviewBridgePlugin {
                 );
                 event.respond(result)
             }
+            _ => Err(unsupported_main_thread_event(event)),
+        }
+    }
+
+    /// Acknowledgement callback family (dispatch + ack reply). Arms
+    /// extracted verbatim from `on_main_thread_event`'s original match;
+    /// the trailing wildcard mirrors the dispatcher and is unreachable
+    /// through it.
+    fn on_callback_ack_event<'env>(event: &BridgeMainThreadEvent<'env>) -> Result<Unknown<'env>> {
+        match event.name() {
+            "drag-enter" => {
+                let drag_event = event.decode::<WebviewDragEvent>()?;
+                callbacks::dispatch_drag_enter(drag_event)?;
+                event.respond(WebviewEventAcknowledgement { accepted: true })
+            }
+            "drag-over" => {
+                let drag_event = event.decode::<WebviewDragEvent>()?;
+                callbacks::dispatch_drag_over(drag_event)?;
+                event.respond(WebviewEventAcknowledgement { accepted: true })
+            }
+            "drag-drop" => {
+                let drop_event = event.decode::<WebviewDropEvent>()?;
+                callbacks::dispatch_drag_drop(drop_event)?;
+                event.respond(WebviewEventAcknowledgement { accepted: true })
+            }
+            "drag-leave" => {
+                let drag_event = event.decode::<WebviewDragEvent>()?;
+                callbacks::dispatch_drag_leave(drag_event)?;
+                event.respond(WebviewEventAcknowledgement { accepted: true })
+            }
+            "page-begin" => {
+                let page_event = event.decode::<WebviewPageEvent>()?;
+                callbacks::dispatch_page_begin(page_event)?;
+                event.respond(WebviewEventAcknowledgement { accepted: true })
+            }
+            "page-end" => {
+                let page_event = event.decode::<WebviewPageEvent>()?;
+                callbacks::dispatch_page_end(page_event)?;
+                event.respond(WebviewEventAcknowledgement { accepted: true })
+            }
             "download-end" => {
                 let notification = event.decode::<WebviewDownloadEndEvent>()?;
                 callbacks::dispatch_download_end(notification)?;
@@ -177,27 +256,16 @@ impl BridgePlugin for WebviewBridgePlugin {
                 let _ = print_state_channel().0.send(notification);
                 event.respond(WebviewEventAcknowledgement { accepted: true })
             }
-            _ => Err(Error::from_reason(format!(
-                "Unsupported ohos.webview main-thread event '{}'",
-                event.name()
-            ))),
+            _ => Err(unsupported_main_thread_event(event)),
         }
     }
+}
 
-    fn on_lifecycle(&self, event: &PluginLifecycleEvent) -> Result<()> {
-        // The attached controller/protocol/js-proxy state belongs to the primary window's
-        // XComponent webview. A spawned UIAbility instance teardown must not clear it
-        // (multi-uiability-windows R11); single-instance events all carry window_id 0,
-        // so this gate never changes existing behavior.
-        if matches!(
-            event,
-            PluginLifecycleEvent::UiContextDestroyed { window_id: 0, .. }
-                | PluginLifecycleEvent::AbilityDestroyed { window_id: 0 }
-        ) {
-            clear_attached_webview_state()?;
-        }
-        Ok(())
-    }
+fn unsupported_main_thread_event(event: &BridgeMainThreadEvent<'_>) -> Error {
+    Error::from_reason(format!(
+        "Unsupported ohos.webview main-thread event '{}'",
+        event.name()
+    ))
 }
 
 fn clear_attached_webview_state() -> Result<()> {

@@ -154,93 +154,9 @@ pub fn create_lifecycle_handle<'a>(
             Ok(())
         })?;
 
-    let configuration_updated_app = app.clone();
-    let on_configuration_updated =
-        env.create_function_from_closure("configuration_updated", move |ctx| {
-            let configuration = ctx.first_arg::<Object>()?;
-            let window_id = window_id_arg(&ctx, 1);
-            let language = configuration.get_named_property::<String>("language")?;
-            let color_mode = configuration.get_named_property::<i32>("colorMode")?;
-            let direction = configuration.get_named_property::<i32>("direction")?;
-            let screen_density = configuration.get_named_property::<i32>("screenDensity")?;
-            let display_id = configuration.get_named_property::<i32>("displayId")?;
-            let has_pointer_device =
-                configuration.get_named_property::<bool>("hasPointerDevice")?;
-            let font_size_scale = configuration.get_named_property::<f64>("fontSizeScale")?;
-            let font_weight_scale = configuration.get_named_property::<f64>("fontWeightScale")?;
-            let mcc = configuration.get_named_property::<String>("mcc")?;
-            let mnc = configuration.get_named_property::<String>("mnc")?;
+    let on_configuration_updated = make_on_configuration_updated(env, app.clone())?;
 
-            let configuration = crate::Configuration {
-                language,
-                color_mode: color_mode.into(),
-                direction: direction.into(),
-                screen_density: screen_density.into(),
-                display_id,
-                has_pointer_device,
-                font_size_scale,
-                font_weight_scale,
-                mcc,
-                mnc,
-            };
-            // The cached configuration and the app-level Event::ConfigChanged stay
-            // primary-instance-driven (R10: app-level dispatch keeps WindowId(0));
-            // OHOS notifies every live instance, so the primary's copy suffices.
-            if window_id == 0 {
-                configuration_updated_app
-                    .inner
-                    .write()
-                    .unwrap()
-                    .configuration = configuration.clone();
-                if let Some(ref mut h) = *configuration_updated_app.event_loop.borrow_mut() {
-                    h(Event::ConfigChanged(configuration))
-                }
-            }
-            let _ = configuration_updated_app
-                .dispatch_plugin_lifecycle(PluginLifecycleEvent::ConfigurationUpdated { window_id });
-            Ok(())
-        })?;
-
-    let window_stage_event_app = app.clone();
-    let window_stage_event =
-        env.create_function_from_closure("window_stage_event", move |ctx| {
-            let event_type = ctx.first_arg::<i32>()?;
-            let window_id = window_id_arg(&ctx, 1);
-            let _ = window_stage_event_app
-                .dispatch_plugin_lifecycle(PluginLifecycleEvent::WindowStageEvent { window_id, event_type });
-
-            // Phase 4 (design.md D5): focus dispatches per-window — a spawned
-            // instance's ACTIVE/INACTIVE reaches its own tao window (and when it
-            // gains focus, the primary receives the matching LostFocus half of
-            // the pair). The remaining stage events map to tao app-level events
-            // (Resumed/Pause/…) with no window routing, so they stay
-            // primary-only (window_id == 0).
-            // #221: the conversion is fallible (TryFrom); an unrecognized code
-            // (system upgrade / new event) is warned here at the call site and
-            // the event is dropped instead of panicking the bridge thread.
-            let state_event = match StageEventType::try_from(event_type) {
-                Ok(e) => e,
-                Err(v) => {
-                    crate::warn!("[ability] unknown StageEventType value {}, ignoring", v);
-                    return Ok(());
-                }
-            };
-            let e = match state_event {
-                StageEventType::Active => Event::GainedFocus { window_id },
-                StageEventType::Inactive => Event::LostFocus { window_id },
-                StageEventType::Shown if window_id == 0 => Event::Start,
-                StageEventType::Hidden if window_id == 0 => Event::Stop,
-                StageEventType::Resumed if window_id == 0 => Event::Resume(SaveLoader {
-                    app: &window_stage_event_app,
-                }),
-                StageEventType::Paused if window_id == 0 => Event::Pause,
-                _ => return Ok(()),
-            };
-            if let Some(ref mut h) = *window_stage_event_app.event_loop.borrow_mut() {
-                h(e)
-            }
-            Ok(())
-        })?;
+    let window_stage_event = make_on_window_stage_event(env, app.clone())?;
 
     // Phase 3 (design.md D6 / task 3.5): ArkTS wraps onWindowSizeChange options as
     // { windowId, width, height }. We read windowId here so tao's run_loop can route
@@ -266,81 +182,10 @@ pub fn create_lifecycle_handle<'a>(
 
     // TODO: we may can remove it
     // Phase 2 (design.md D2/D4): the ArkTS side wraps windowRectChange options as
-    // { windowId, reason, rect, drawable? }. We read windowId here and route the rect
-    // pair into the per-window HashMaps (set_window_rects) instead of the old shared
-    // single field. windowId is read with a fallback to 0 (main window): some
-    // registration points may not yet wrap the options (e.g. a path added later) —
-    // degrading to the old main-window behavior is preferable to erroring out the
-    // whole callback.
-    //
-    // `drawable` (issue Eulogizethesun/tauri#97): the same event's
-    // `getWindowProperties().drawableRect` snapshot (position relative to the
-    // window + drawable-area size, px), read synchronously by the ArkTS handler.
-    // Optional-with-skip: when the ArkTS read threw (window not yet created /
-    // content not loaded) the field is absent — the last snapshot pair stays
-    // (BOTH rects, review R14: set_window_rects skips the update entirely so a
-    // new outer can never be composed with a stale drawable) until the next
-    // successful one. Both rects are stored under ONE lock so a concurrent
-    // inner_rect_for can never see a torn pair.
-    let window_rect_app = app.clone();
-    let window_rect_change =
-        env.create_function_from_closure("window_rect_change", move |ctx| {
-            let options = ctx.first_arg::<Object>()?;
-            let reason = options.get_named_property::<i32>("reason")?;
-            let rect = parse_rect(options.get_named_property::<Object>("rect")?)?;
-            // windowId is optional-with-fallback: missing or wrong type degrades to 0
-            // (main window) rather than failing the callback.
-            let window_id = options.get_named_property::<i64>("windowId").unwrap_or(0);
-            let drawable = options
-                .get_named_property::<Object>("drawable")
-                .ok()
-                .and_then(|drawable| parse_rect(drawable).ok());
-            window_rect_app.set_window_rects(window_id, rect, drawable);
+    // { windowId, reason, rect, drawable? } — see make_on_window_rect_change.
+    let window_rect_change = make_on_window_rect_change(env, app.clone())?;
 
-            if let Some(ref mut h) = *window_rect_app.event_loop.borrow_mut() {
-                h(Event::ContentRectChange(ContentRect {
-                    reason: reason.into(),
-                    rect,
-                    window_id,
-                }))
-            }
-            Ok(())
-        })?;
-
-    let avoid_area_change_app = app.clone();
-    let avoid_area_change = env.create_function_from_closure("avoid_area_change", move |ctx| {
-        let options = ctx.first_arg::<Object>()?;
-        let window_id = window_id_arg(&ctx, 1);
-        let area_type = AvoidAreaType::from(options.get_named_property::<i32>("type")?);
-        let area = options.get_named_property::<Object>("area")?;
-        let visible = area.get_named_property::<bool>("visible")?;
-        let avoid_area = AvoidArea {
-            visible,
-            left_rect: parse_rect(area.get_named_property::<Object>("leftRect")?)?,
-            top_rect: parse_rect(area.get_named_property::<Object>("topRect")?)?,
-            right_rect: parse_rect(area.get_named_property::<Object>("rightRect")?)?,
-            bottom_rect: parse_rect(area.get_named_property::<Object>("bottomRect")?)?,
-        };
-
-        // The avoid-area cache and Event::AvoidAreaChange remain primary-window scoped
-        // until per-window avoid areas land (same known-limitation family as NG7).
-        // Sub-window registrations from the existing Float path call back without the
-        // trailing id, degrade to 0, and keep their current behavior.
-        if window_id == 0 {
-            {
-                let mut inner = avoid_area_change_app.inner.write().unwrap();
-                inner.avoid_areas.insert(area_type, avoid_area);
-            }
-
-            if let Some(ref mut h) = *avoid_area_change_app.event_loop.borrow_mut() {
-                h(Event::AvoidAreaChange(AvoidAreaInfo {
-                    area_type,
-                    area: avoid_area,
-                }))
-            }
-        }
-        Ok(())
-    })?;
+    let avoid_area_change = make_on_avoid_area_change(env, app.clone())?;
 
     let on_window_stage_create_app = app.clone();
     let on_window_stage_create =
@@ -546,5 +391,182 @@ pub fn create_lifecycle_handle<'a>(
         keyboard_event_callback: KeyboardCallback {
             on_keyboard_height_change: keyboard_event_callback,
         },
+    })
+}
+
+fn make_on_configuration_updated<'a>(
+    env: &'a Env,
+    app: OpenHarmonyApp,
+) -> Result<Function<'a, (), ()>> {
+    let configuration_updated_app = app;
+    env.create_function_from_closure("configuration_updated", move |ctx| {
+        let configuration = ctx.first_arg::<Object>()?;
+        let window_id = window_id_arg(&ctx, 1);
+        let language = configuration.get_named_property::<String>("language")?;
+        let color_mode = configuration.get_named_property::<i32>("colorMode")?;
+        let direction = configuration.get_named_property::<i32>("direction")?;
+        let screen_density = configuration.get_named_property::<i32>("screenDensity")?;
+        let display_id = configuration.get_named_property::<i32>("displayId")?;
+        let has_pointer_device = configuration.get_named_property::<bool>("hasPointerDevice")?;
+        let font_size_scale = configuration.get_named_property::<f64>("fontSizeScale")?;
+        let font_weight_scale = configuration.get_named_property::<f64>("fontWeightScale")?;
+        let mcc = configuration.get_named_property::<String>("mcc")?;
+        let mnc = configuration.get_named_property::<String>("mnc")?;
+
+        let configuration = crate::Configuration {
+            language,
+            color_mode: color_mode.into(),
+            direction: direction.into(),
+            screen_density: screen_density.into(),
+            display_id,
+            has_pointer_device,
+            font_size_scale,
+            font_weight_scale,
+            mcc,
+            mnc,
+        };
+        // The cached configuration and the app-level Event::ConfigChanged stay
+        // primary-instance-driven (R10: app-level dispatch keeps WindowId(0));
+        // OHOS notifies every live instance, so the primary's copy suffices.
+        if window_id == 0 {
+            configuration_updated_app.inner.write().unwrap().configuration = configuration.clone();
+            if let Some(ref mut h) = *configuration_updated_app.event_loop.borrow_mut() {
+                h(Event::ConfigChanged(configuration))
+            }
+        }
+        let _ = configuration_updated_app
+            .dispatch_plugin_lifecycle(PluginLifecycleEvent::ConfigurationUpdated { window_id });
+        Ok(())
+    })
+}
+
+fn make_on_window_stage_event<'a>(
+    env: &'a Env,
+    app: OpenHarmonyApp,
+) -> Result<Function<'a, i32, ()>> {
+    let window_stage_event_app = app;
+    env.create_function_from_closure("window_stage_event", move |ctx| {
+        let event_type = ctx.first_arg::<i32>()?;
+        let window_id = window_id_arg(&ctx, 1);
+        let _ = window_stage_event_app
+            .dispatch_plugin_lifecycle(PluginLifecycleEvent::WindowStageEvent { window_id, event_type });
+
+        // Phase 4 (design.md D5): focus dispatches per-window — a spawned
+        // instance's ACTIVE/INACTIVE reaches its own tao window (and when it
+        // gains focus, the primary receives the matching LostFocus half of
+        // the pair). The remaining stage events map to tao app-level events
+        // (Resumed/Pause/…) with no window routing, so they stay
+        // primary-only (window_id == 0).
+        // #221: the conversion is fallible (TryFrom); an unrecognized code
+        // (system upgrade / new event) is warned here at the call site and
+        // the event is dropped instead of panicking the bridge thread.
+        let state_event = match StageEventType::try_from(event_type) {
+            Ok(e) => e,
+            Err(v) => {
+                crate::warn!("[ability] unknown StageEventType value {}, ignoring", v);
+                return Ok(());
+            }
+        };
+        let e = match state_event {
+            StageEventType::Active => Event::GainedFocus { window_id },
+            StageEventType::Inactive => Event::LostFocus { window_id },
+            StageEventType::Shown if window_id == 0 => Event::Start,
+            StageEventType::Hidden if window_id == 0 => Event::Stop,
+            StageEventType::Resumed if window_id == 0 => Event::Resume(SaveLoader {
+                app: &window_stage_event_app,
+            }),
+            StageEventType::Paused if window_id == 0 => Event::Pause,
+            _ => return Ok(()),
+        };
+        if let Some(ref mut h) = *window_stage_event_app.event_loop.borrow_mut() {
+            h(e)
+        }
+        Ok(())
+    })
+}
+
+/// Builds `onWindowRectChange`. Phase 2 (design.md D2/D4): the ArkTS side wraps
+/// windowRectChange options as { windowId, reason, rect, drawable? }. windowId
+/// is read here and the rect pair is routed into the per-window HashMaps
+/// (set_window_rects) instead of the old shared single field. windowId is read
+/// with a fallback to 0 (main window): some registration points may not yet
+/// wrap the options (e.g. a path added later) — degrading to the old
+/// main-window behavior is preferable to erroring out the whole callback.
+///
+/// `drawable` (issue Eulogizethesun/tauri#97): the same event's
+/// `getWindowProperties().drawableRect` snapshot (position relative to the
+/// window + drawable-area size, px), read synchronously by the ArkTS handler.
+/// Optional-with-skip: when the ArkTS read threw (window not yet created /
+/// content not loaded) the field is absent — the last snapshot pair stays
+/// (BOTH rects, review R14: set_window_rects skips the update entirely so a
+/// new outer can never be composed with a stale drawable) until the next
+/// successful one. Both rects are stored under ONE lock so a concurrent
+/// inner_rect_for can never see a torn pair.
+fn make_on_window_rect_change<'a>(
+    env: &'a Env,
+    app: OpenHarmonyApp,
+) -> Result<Function<'a, Object<'a>, ()>> {
+    let window_rect_app = app;
+    env.create_function_from_closure("window_rect_change", move |ctx| {
+        let options = ctx.first_arg::<Object>()?;
+        let reason = options.get_named_property::<i32>("reason")?;
+        let rect = parse_rect(options.get_named_property::<Object>("rect")?)?;
+        // windowId is optional-with-fallback: missing or wrong type degrades to 0
+        // (main window) rather than failing the callback.
+        let window_id = options.get_named_property::<i64>("windowId").unwrap_or(0);
+        let drawable = options
+            .get_named_property::<Object>("drawable")
+            .ok()
+            .and_then(|drawable| parse_rect(drawable).ok());
+        window_rect_app.set_window_rects(window_id, rect, drawable);
+
+        if let Some(ref mut h) = *window_rect_app.event_loop.borrow_mut() {
+            h(Event::ContentRectChange(ContentRect {
+                reason: reason.into(),
+                rect,
+                window_id,
+            }))
+        }
+        Ok(())
+    })
+}
+
+fn make_on_avoid_area_change<'a>(
+    env: &'a Env,
+    app: OpenHarmonyApp,
+) -> Result<Function<'a, Object<'a>, ()>> {
+    let avoid_area_change_app = app;
+    env.create_function_from_closure("avoid_area_change", move |ctx| {
+        let options = ctx.first_arg::<Object>()?;
+        let window_id = window_id_arg(&ctx, 1);
+        let area_type = AvoidAreaType::from(options.get_named_property::<i32>("type")?);
+        let area = options.get_named_property::<Object>("area")?;
+        let visible = area.get_named_property::<bool>("visible")?;
+        let avoid_area = AvoidArea {
+            visible,
+            left_rect: parse_rect(area.get_named_property::<Object>("leftRect")?)?,
+            top_rect: parse_rect(area.get_named_property::<Object>("topRect")?)?,
+            right_rect: parse_rect(area.get_named_property::<Object>("rightRect")?)?,
+            bottom_rect: parse_rect(area.get_named_property::<Object>("bottomRect")?)?,
+        };
+
+        // The avoid-area cache and Event::AvoidAreaChange remain primary-window scoped
+        // until per-window avoid areas land (same known-limitation family as NG7).
+        // Sub-window registrations from the existing Float path call back without the
+        // trailing id, degrade to 0, and keep their current behavior.
+        if window_id == 0 {
+            {
+                let mut inner = avoid_area_change_app.inner.write().unwrap();
+                inner.avoid_areas.insert(area_type, avoid_area);
+            }
+
+            if let Some(ref mut h) = *avoid_area_change_app.event_loop.borrow_mut() {
+                h(Event::AvoidAreaChange(AvoidAreaInfo {
+                    area_type,
+                    area: avoid_area,
+                }))
+            }
+        }
+        Ok(())
     })
 }
