@@ -1,11 +1,17 @@
 /// Window stage event codes forwarded by the ArkTS bridge (`onWindowStageEvent`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageEventType {
+    /// Window stage is shown (OHOS `SHOWN`, value 1).
     Shown = 1,
+    /// Window gained focus (OHOS `ACTIVE`, value 2).
     Active,
+    /// Window lost focus (OHOS `INACTIVE`, value 3).
     Inactive,
+    /// Window stage is hidden (OHOS `HIDDEN`, value 4).
     Hidden,
+    /// Ability resumed to foreground (OHOS `RESUMED`, value 5).
     Resumed,
+    /// Ability paused to background (OHOS `PAUSED`, value 6).
     Paused,
 }
 

@@ -12,24 +12,40 @@ use crate::{
 };
 
 #[napi(object)]
+/// ArkTS-side environment callbacks (`EnvironmentCallback` pair).
 pub struct EnvironmentCallback<'a> {
+    /// Invoked when device configuration changes (language, color mode, ...).
     pub on_configuration_updated: Function<'a, (), ()>,
+    /// Invoked when the system memory level changes.
     pub on_memory_level: Function<'a, i32, ()>,
 }
 
 #[napi(object)]
+/// ArkTS-side ability / window-stage lifecycle callback bundle.
 pub struct WindowStageEventCallback<'a> {
+    /// Invoked when the window stage is created.
     pub on_window_stage_create: Function<'a, (), ()>,
+    /// Invoked when the window stage is destroyed.
     pub on_window_stage_destroy: Function<'a, (), ()>,
+    /// Invoked on ability create; receives the launch parameter string.
     pub on_ability_create: Function<'a, String, ()>,
+    /// Invoked on ability destroy.
     pub on_ability_destroy: Function<'a, (), ()>,
+    /// Invoked when the system asks the ability to save its state.
     pub on_ability_save_state: Function<'a, (), ()>,
+    /// Invoked when the system asks the ability to restore saved state.
     pub on_ability_restore_state: Function<'a, (), ()>,
+    /// Invoked on window stage show/hide/active/inactive transitions.
     pub on_window_stage_event: Function<'a, i32, ()>,
+    /// Invoked on window resize; receives the wrapped size object.
     pub on_window_size_change: Function<'a, Object<'a>, ()>,
+    /// Invoked on content-rect change; receives the wrapped rect object.
     pub on_window_rect_change: Function<'a, Object<'a>, ()>,
+    /// Invoked when an avoid area changes; receives the wrapped area object.
     pub on_avoid_area_change: Function<'a, Object<'a>, ()>,
+    /// Invoked on `onNewWant` (deep link); receives the wrapped want object.
     pub on_new_want: Function<'a, Object<'a>, ()>,
+    /// Invoked on ability create; receives the full want object.
     pub on_ability_create_with_want: Function<'a, Object<'a>, ()>,
     /// PC/2in1 pre-close probe (UIAbility.onPrepareToTerminateAsync). Returns
     /// `true` to CANCEL this termination (the app stays alive), `false` to
@@ -38,15 +54,22 @@ pub struct WindowStageEventCallback<'a> {
 }
 
 #[napi(object)]
+/// ArkTS-side keyboard callbacks.
 pub struct KeyboardCallback<'a> {
+    /// Invoked when the soft keyboard height changes (px; 0 = hidden).
     pub on_keyboard_height_change: Function<'a, i32, ()>,
 }
 
 #[napi(object)]
+/// Top-level lifecycle bundle the ArkTS entry hands to the Rust runtime.
 pub struct ApplicationLifecycle<'a> {
+    /// Plugin declarations to register into the bridge registry.
     pub bridge_plugins: Vec<BridgePluginDeclaration>,
+    /// Environment callback pair (configuration / memory level).
     pub environment_callback: EnvironmentCallback<'a>,
+    /// Ability / window-stage callback bundle.
     pub window_stage_event_callback: WindowStageEventCallback<'a>,
+    /// Keyboard callback bundle.
     pub keyboard_event_callback: KeyboardCallback<'a>,
 }
 

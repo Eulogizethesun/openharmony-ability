@@ -1,3 +1,5 @@
+//! Geometry primitives shared by the event and area modules.
+
 mod avoid;
 mod rect;
 mod rect_reason;
@@ -9,10 +11,14 @@ pub use rect_reason::*;
 pub use size::*;
 
 #[derive(Clone)]
+/// Content (safe) rectangle of a window with the reason for its last change.
 pub struct ContentRect {
+    /// What triggered the rect change.
     pub reason: RectChangeReason,
+    /// The new content rectangle in window coordinates.
     pub rect: Rect,
-    /// Window this rect change originated from (0 = main window, >0 = Float sub-window).
+    /// Window this rect change originated from (0 = main window, any positive
+    /// value = Float sub-window).
     /// Populated by the window_rect_change lifecycle closure from the windowId wrapped
     /// into the options by ArkTS (design.md D2). Phase 2 does not consume this field in
     /// tao's run_loop (the match arm stays unchanged); Phase 3 routes the event by it.

@@ -154,8 +154,13 @@ pub fn create_os_window(params: WindowCreateParams) -> napi_ohos::Result<i64> {
 // immediately without waiting for ArkTS to finish (the sub-window is guaranteed to be
 // ready before the webview bridge create arrives, since both are serialized on the
 // ArkTS UI thread event loop and createSubWindow is dispatched first).
+/// Flattened payload tuple carried by the `createSubWindow` TSFN (mirrors the
+/// flattened NAPI parameters of `createSubWindow(config)`); destructured by
+/// `build_create_sub_window_args`.
+type CreateSubWindowPayload = (String, i64, i32, i32, i32, i32, bool, bool, Option<u32>);
+
 type CreateSubWindowTsfn = ThreadsafeFunction<
-    (String, i64, i32, i32, i32, i32, bool, bool, Option<u32>),
+    CreateSubWindowPayload,
     (),
     FnArgs<(Object<'static>,)>,
     Status,
@@ -181,20 +186,10 @@ pub fn register_create_sub_window_tsfn(
         return Ok(());
     }
     let tsfn = create_fn
-        .build_threadsafe_function::<(String, i64, i32, i32, i32, i32, bool, bool, Option<u32>)>()
+        .build_threadsafe_function::<CreateSubWindowPayload>()
         .callee_handled::<false>()
         .build_callback(
-            move |ctx: ThreadsafeCallContext<(
-                String,
-                i64,
-                i32,
-                i32,
-                i32,
-                i32,
-                bool,
-                bool,
-                Option<u32>,
-            )>| {
+            move |ctx: ThreadsafeCallContext<CreateSubWindowPayload>| {
                 build_create_sub_window_args(ctx.env, ctx.value).map(|args| FnArgs { data: args })
             },
         )?;
@@ -207,7 +202,7 @@ pub fn register_create_sub_window_tsfn(
 /// Builds a WindowConfig Object from the flattened parameter tuple.
 fn build_create_sub_window_args(
     env: Env,
-    value: (String, i64, i32, i32, i32, i32, bool, bool, Option<u32>),
+    value: CreateSubWindowPayload,
 ) -> Result<(Object<'static>,)> {
     let (name, window_id, width, height, x, y, decorations, transparent, bg_color) = value;
     let mut config = Object::new(&env)?;
@@ -836,16 +831,13 @@ fn cursor_lock_api() -> Option<&'static CursorLockApi> {
     CURSOR_LOCK_API
         .get_or_init(|| unsafe {
             // RTLD_NOW | RTLD_LOCAL = 2 on OHOS musl.
-            let handle = dlopen(
-                b"libnative_window_manager.so\0".as_ptr() as *const std::ffi::c_char,
-                2,
-            );
+            let handle = dlopen(c"libnative_window_manager.so".as_ptr(), 2);
             if handle.is_null() {
                 crate::warn!("[ohos-window] dlopen libnative_window_manager.so failed (library missing/broken) — cursor grab unsupported");
                 return None;
             }
-            let lock = dlsym(handle, b"OH_WindowManager_LockCursor\0".as_ptr() as *const std::ffi::c_char);
-            let unlock = dlsym(handle, b"OH_WindowManager_UnlockCursor\0".as_ptr() as *const std::ffi::c_char);
+            let lock = dlsym(handle, c"OH_WindowManager_LockCursor".as_ptr());
+            let unlock = dlsym(handle, c"OH_WindowManager_UnlockCursor".as_ptr());
             if lock.is_null() || unlock.is_null() {
                 crate::warn!("[ohos-window] OH_WindowManager_LockCursor/UnlockCursor not exported — cursor grab unsupported");
                 return None;
@@ -954,17 +946,14 @@ fn window_privacy_api() -> Option<&'static WindowPrivacyApi> {
     WINDOW_PRIVACY_API
         .get_or_init(|| unsafe {
             // RTLD_NOW | RTLD_LOCAL = 2 on OHOS musl.
-            let handle = dlopen(
-                b"libnative_window_manager.so\0".as_ptr() as *const std::ffi::c_char,
-                2,
-            );
+            let handle = dlopen(c"libnative_window_manager.so".as_ptr(), 2);
             if handle.is_null() {
                 crate::warn!("[ohos-window] dlopen libnative_window_manager.so failed (library missing/broken) — content protection unsupported");
                 return None;
             }
             let set_privacy = dlsym(
                 handle,
-                b"OH_WindowManager_SetWindowPrivacyMode\0".as_ptr() as *const std::ffi::c_char,
+                c"OH_WindowManager_SetWindowPrivacyMode".as_ptr(),
             );
             if set_privacy.is_null() {
                 crate::warn!("[ohos-window] OH_WindowManager_SetWindowPrivacyMode not exported — content protection unsupported");
