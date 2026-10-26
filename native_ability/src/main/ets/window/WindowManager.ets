@@ -1091,9 +1091,11 @@ export class WindowManager {
   }
   // Group D decoration button bitfield: bit0 closable, bit1 maximizable, bit2 minimizable, bit3 resizable.
   // Only applies to SubWindow sub-windows (writes LocalStorage). The UIAbility main window's
-  // three decoration buttons are OS-managed: no per-button enable/disable API exists
-  // (@ohos.window offers style injection via setDecorButtonStyle and whole-bar
-  // visibility via setWindowDecorVisible, not per-button control) — issue #238.
+  // three decoration buttons are OS-managed: no API maps to the enable/disable flag
+  // semantics (@ohos.window offers style injection via setDecorButtonStyle, whole-bar
+  // visibility via setWindowDecorVisible, and per-button visibility via
+  // setWindowTitleButtonVisible (API 14+), but none disables the operations
+  // themselves) — issue #238.
   // Read a decoration flag from LocalStorage (问题四: 拦截 API 执行路径)
   // key: 'closable' | 'maximizable' | 'minimizable' | 'resizable'
   // Returns true if not set (default = all available, backward compatible)
