@@ -2,7 +2,7 @@
 //!
 //! The `#[ability]` derive (crate `openharmony_ability_derive`) generates the
 //! N-API entry around an [`OpenHarmonyApp`] facade; this crate supplies the
-//! facade and its supporting surfaces — the ArkTS↔Rust bridge
+//! facade and its supporting surfaces - the ArkTS<->Rust bridge
 //! ([`BridgePlugin`] / [`BridgeRuntime`]), lifecycle and event plumbing,
 //! input/IME, display and window geometry, and the plugin ecosystem
 //! (`openharmony_ability_plugin_*` crates) built on the bridge contracts.
@@ -48,7 +48,7 @@ pub mod global_shortcut;
 
 // ─── Logging macros (gated behind "log" feature) ───
 // When the feature is on, delegate to the `log` crate (backed by ohos-hilog-binding on OHOS).
-// When off, expand to no-ops — zero overhead, no dependency on `log`.
+// When off, expand to no-ops - zero overhead, no dependency on `log`.
 
 /// Logs at error level (delegates to `log::error!`; no-op without the `log` feature).
 #[cfg(feature = "log")]

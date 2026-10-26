@@ -122,7 +122,7 @@ pub fn create_lifecycle_handle<'a>(
 
     {
         // Install the TSFN into the app's per-app waker slot (design.md D10,
-        // openspec multi-uiability-windows — replaces the old process-global
+        // openspec multi-uiability-windows - replaces the old process-global
         // WAKER). Every OpenHarmonyWaker handle created via `create_waker`
         // reads this slot live at wake() time.
         let tsfn = Arc::new(tsfn);
@@ -182,7 +182,7 @@ pub fn create_lifecycle_handle<'a>(
 
     // TODO: we may can remove it
     // Phase 2 (design.md D2/D4): the ArkTS side wraps windowRectChange options as
-    // { windowId, reason, rect, drawable? } — see make_on_window_rect_change.
+    // { windowId, reason, rect, drawable? } - see make_on_window_rect_change.
     let window_rect_change = make_on_window_rect_change(env, app.clone())?;
 
     let avoid_area_change = make_on_avoid_area_change(env, app.clone())?;
@@ -208,7 +208,7 @@ pub fn create_lifecycle_handle<'a>(
             let _ = on_window_stage_destroy_app.dispatch_plugin_lifecycle(
                 PluginLifecycleEvent::WindowStageDestroyed { window_id },
             );
-            // Phase 4 (design.md D5): dispatch per-window — a spawned instance's
+            // Phase 4 (design.md D5): dispatch per-window - a spawned instance's
             // stage teardown reaches its own tao window (CloseRequested +
             // Destroyed for that id) so tauri-runtime-wry cleans the window
             // store entry; the primary (0) keeps its historical exit-chain
@@ -250,7 +250,7 @@ pub fn create_lifecycle_handle<'a>(
             // the event before their per-window state disappears.
             on_ability_destroy_app.unregister_ui_ability_state(window_id);
             // The critical Phase-3 gate (design.md D8 / OQ4): a spawned instance
-            // closing must NOT run the process exit chain — only the primary
+            // closing must NOT run the process exit chain - only the primary
             // instance's destroy ends the app.
             if window_id == 0 {
                 if let Some(ref mut h) = *on_ability_destroy_app.event_loop.borrow_mut() {
@@ -263,7 +263,7 @@ pub fn create_lifecycle_handle<'a>(
     // PC/2in1 pre-close probe (onPrepareToTerminateAsync, issue
     // Eulogizethesun/tauri#103). Synchronous by necessity: the answer must be
     // returned to ArkTS before the callback returns. The tao event handler
-    // runs inline on this (UI) thread — same as onAbilityDestroy — so the
+    // runs inline on this (UI) thread - same as onAbilityDestroy - so the
     // ExitRequested dispatch + prevent decision complete before the
     // is_prevented() read below. The TerminateAnswer lives on this closure's
     // stack for the duration of the h(...) call only.
@@ -348,7 +348,7 @@ pub fn create_lifecycle_handle<'a>(
         // per-id above, but `Event::NewWant` is NOT dispatched: there is a
         // single event loop and no per-window new-want routing. A warm-start
         // deep link into a spawned instance is therefore recorded (readable
-        // via take_want_parameters_for_window) but raises no event — a known
+        // via take_want_parameters_for_window) but raises no event - a known
         // limitation tracked as design.md NG8 (openspec
         // multi-uiability-windows).
         Ok(())
@@ -469,11 +469,11 @@ fn make_on_window_stage_event<'a>(
             },
         );
 
-        // Phase 4 (design.md D5): focus dispatches per-window — a spawned
+        // Phase 4 (design.md D5): focus dispatches per-window - a spawned
         // instance's ACTIVE/INACTIVE reaches its own tao window (and when it
         // gains focus, the primary receives the matching LostFocus half of
         // the pair). The remaining stage events map to tao app-level events
-        // (Resumed/Pause/…) with no window routing, so they stay
+        // (Resumed/Pause/...) with no window routing, so they stay
         // primary-only (window_id == 0).
         // #221: the conversion is fallible (TryFrom); an unrecognized code
         // (system upgrade / new event) is warned here at the call site and
@@ -508,14 +508,14 @@ fn make_on_window_stage_event<'a>(
 /// is read here and the rect pair is routed into the per-window HashMaps
 /// (set_window_rects) instead of the old shared single field. windowId is read
 /// with a fallback to 0 (main window): some registration points may not yet
-/// wrap the options (e.g. a path added later) — degrading to the old
+/// wrap the options (e.g. a path added later) - degrading to the old
 /// main-window behavior is preferable to erroring out the whole callback.
 ///
 /// `drawable` (issue Eulogizethesun/tauri#97): the same event's
 /// `getWindowProperties().drawableRect` snapshot (position relative to the
 /// window + drawable-area size, px), read synchronously by the ArkTS handler.
 /// Optional-with-skip: when the ArkTS read threw (window not yet created /
-/// content not loaded) the field is absent — the last snapshot pair stays
+/// content not loaded) the field is absent - the last snapshot pair stays
 /// (BOTH rects, review R14: set_window_rects skips the update entirely so a
 /// new outer can never be composed with a stale drawable) until the next
 /// successful one. Both rects are stored under ONE lock so a concurrent

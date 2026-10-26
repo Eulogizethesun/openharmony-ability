@@ -249,7 +249,7 @@ impl WebviewBridgePlugin {
             }
             "print-state" => {
                 // Fire-and-forget: non-blocking unbounded send; the consumer polls on a
-                // worker thread (never recv on the main thread — deadlock precedent).
+                // worker thread (never recv on the main thread - deadlock precedent).
                 let notification = event.decode::<WebviewPrintStateEvent>()?;
                 let _ = print_state_channel().0.send(notification);
                 event.respond(WebviewEventAcknowledgement { accepted: true })
@@ -672,13 +672,13 @@ pub struct WebviewHttpsInterceptRequest {
     pub url: String,
     /// HTTP method of the intercepted request (e.g. "GET"/"POST"), captured by the ArkTS
     /// interceptor via `WebResourceRequest.getRequestMethod()`. Absent in payloads from
-    /// older ArkTS plugins — consumers fall back to the current default (GET).
+    /// older ArkTS plugins - consumers fall back to the current default (GET).
     pub method: Option<String>,
     /// Request header names captured by the ArkTS interceptor
     /// (`WebResourceRequest.getRequestHeader()`), same order as [`Self::header_values`].
-    /// Parallel-array wire form (`Vec<String>` — the established `protocols` precedent;
+    /// Parallel-array wire form (`Vec<String>` - the established `protocols` precedent;
     /// no nested-map wire exists in this crate). Absent in payloads from older ArkTS
-    /// plugins — consumers fall back to no headers.
+    /// plugins - consumers fall back to no headers.
     pub header_names: Option<Vec<String>>,
     /// Request header values, same order as [`Self::header_names`].
     pub header_values: Option<Vec<String>>,
@@ -704,10 +704,10 @@ pub struct WebviewHttpsInterceptResponse {
     /// Raw response body bytes transported as `Uint8Array` across the NAPI boundary.
     pub body: Vec<u8>,
     /// #186 (fix-variant M1): response header names the protocol handler attached,
-    /// same order as [`Self::header_values`] (parallel-array wire form — the
+    /// same order as [`Self::header_values`] (parallel-array wire form - the
     /// established request-side precedent; no nested-map wire exists in this
     /// crate). Content-Type travels via [`Self::mime_type`] and is never
-    /// duplicated here. `None` when the handler set no other headers — keeps the
+    /// duplicated here. `None` when the handler set no other headers - keeps the
     /// wire identical to the pre-M1 shape (D9 byte-identical default).
     pub header_names: Option<Vec<String>>,
     /// Response header values, same order as [`Self::header_names`].
@@ -799,7 +799,7 @@ impl_bridge_napi_type!(
 // ── create-pdf ──────────────────────────────────────────────────────────────────
 
 /// Optional PDF generation configuration, mirroring `webview.PdfConfiguration`.
-/// Every field is optional — when `None`, the ArkTS side falls back to its
+/// Every field is optional - when `None`, the ArkTS side falls back to its
 /// defaults (A4 8.27×11.69in, zero margins, background printing on).
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
@@ -853,7 +853,7 @@ impl_bridge_napi_type!(WebviewPrintResponse, "ohos.webview.PrintResponse");
 ///
 /// Pushed from ArkTS `WebviewPlugin.ets` PrintTask `.on("succeed"|"fail"|"cancel"|"block")`
 /// handlers through the `print-state` main-thread event. Decoded on the NAPI main thread and
-/// forwarded through a process-wide crossbeam channel — never blocked on from the main
+/// forwarded through a process-wide crossbeam channel - never blocked on from the main
 /// thread (the consumer polls on a worker thread, see `print_state_receiver`).
 #[napi(object)]
 #[derive(Clone, Debug)]
@@ -884,7 +884,7 @@ fn print_state_channel() -> &'static (
 ///
 /// Each `printPdf` terminal state (`succeed`/`fail`/`cancel`/`block`) produces one event
 /// carrying the originating WebView `id`. The receiver is `'static` and safe to poll on a
-/// worker thread (do NOT `recv` on the NAPI main thread — that would deadlock). Consumer
+/// worker thread (do NOT `recv` on the NAPI main thread - that would deadlock). Consumer
 /// pattern: spawn a thread, `while let Ok(event) = receiver.recv() { ... }`, then emit an
 /// event to the embedding runtime via the app handle.
 pub fn print_state_receiver() -> &'static Receiver<WebviewPrintStateEvent> {
@@ -925,7 +925,7 @@ impl_bridge_napi_type!(WebviewSnapshotResponse, "ohos.webview.SnapshotResponse")
 
 /// Response for `capture-webview`: the viewport snapshot (the on-screen area, not the
 /// full scrollable page) encoded as a base64 PNG string plus its pixel dimensions.
-/// base64 (not raw bytes) — a `Vec<u8>` in a napi object would
+/// base64 (not raw bytes) - a `Vec<u8>` in a napi object would
 /// serialize as `Array<number>`, inflating a multi-hundred-KB PNG ~8x in memory.
 /// Requests reuse [`WebviewControllerRequest`].
 #[napi(object)]
@@ -1194,7 +1194,7 @@ impl WebviewClient {
     /// on failure the entries would otherwise stay in the process-global
     /// registries forever, because wry webview ids are per-attempt. A failed
     /// create attached no ArkTS controller, so nothing was installed on the
-    /// ArkWeb side — dropping the queued Rust entries is the complete cleanup.
+    /// ArkWeb side - dropping the queued Rust entries is the complete cleanup.
     ///
     /// The PROCESS-GLOBAL scheme declarations (`WebviewProtocol::register`)
     /// are intentionally retained: they are shared across webviews, idempotent
@@ -1224,7 +1224,7 @@ impl WebviewClient {
             .await
     }
 
-    /// Like [`call`] with an explicit per-call policy — heavy actions override the
+    /// Like [`call`] with an explicit per-call policy - heavy actions override the
     /// 15s default timeout via [`snapshot_call_options`].
     async fn call_with_options<Request, Response>(
         &self,
@@ -1253,7 +1253,7 @@ fn snapshot_call_options() -> BridgeCallOptions {
 /// Returns the active ArkWeb engine version, e.g. `"M132"` / `"M132 (evergreen)"`.
 ///
 /// ArkWeb identifies its engine by kernel generation rather than a semantic
-/// version string — there is no `getWebVersion()`-style API; the public native
+/// version string - there is no `getWebVersion()`-style API; the public native
 /// surface is `OH_NativeArkWeb_GetActiveWebEngineVersion` (API 20+) from
 /// `libohweb.so`, resolved lazily via dlopen+dlsym (same pattern as the
 /// cursor-lock C API in the window module) so systems below API 20 degrade to
@@ -1292,9 +1292,9 @@ mod arkweb_version_capi {
     }
 
     /// Resolves the ArkWeb version C API once per process; `Err` carries the
-    /// specific reason (dlopen failure vs symbol not exported — the caller
+    /// specific reason (dlopen failure vs symbol not exported - the caller
     /// surfaces it, the log warns once). The handle is intentionally never
-    /// closed — the library stays loaded for the process lifetime.
+    /// closed - the library stays loaded for the process lifetime.
     fn api() -> Result<&'static ArkWebVersionApi, &'static str> {
         ARKWEB_VERSION_API
             .get_or_init(|| unsafe {
@@ -1392,12 +1392,12 @@ impl WebviewExt for OpenHarmonyApp {
 /// `WebCookieManager.fetchCookieSync` is a UI-thread-only static API. The async
 /// [`WebviewBridgePlugin`] cannot serve it to a main-thread caller: its TSFN
 /// round-trip needs that same main thread to pump, i.e. a deadlock. This sync
-/// plugin carries the fetch instead — invoked through
+/// plugin carries the fetch instead - invoked through
 /// [`OpenHarmonyApp::with_main_thread_bridge`], the call always executes on the
 /// UI thread, exactly where the official API requires it.
 ///
 /// The ArkTS counterpart is `WebviewCookiePlugin` (plugin id
-/// `ohos.webview-cookie`, no context requirements — the cookie manager is
+/// `ohos.webview-cookie`, no context requirements - the cookie manager is
 /// process-global, not per-webview).
 pub struct WebviewCookieBridgePlugin;
 
@@ -1410,7 +1410,7 @@ impl BridgePlugin for WebviewCookieBridgePlugin {
 
 /// Request for the `fetch-cookies` action: the URL whose cookies to fetch.
 /// #188: `incognito` optionally selects the incognito cookie store
-/// (`fetchCookieSync(url, incognito)` — local SDK
+/// (`fetchCookieSync(url, incognito)` - local SDK
 /// @ohos.web.webview.d.ts:1642). `None` keeps the previous default-store
 /// behavior byte-identical; the caller (wry) forwards its creation-time
 /// incognito flag because the sync request is id-less.
@@ -1480,14 +1480,14 @@ static COOKIE_SYNC_APP: OnceLock<OpenHarmonyApp> = OnceLock::new();
 ///
 /// Call once during runtime setup. Mirrors `tray_icon::set_ohos_app`, which
 /// registers its own bridge plugins the same way. wry embedders don't call
-/// this directly — `wry::set_ohos_app` forwards here, and tauri calls that
+/// this directly - `wry::set_ohos_app` forwards here, and tauri calls that
 /// automatically during app initialization. The ArkTS counterpart
 /// (`WebviewCookiePlugin`) must be present in the host Ability's
 /// `bridgePlugins` list.
 pub fn set_cookie_sync_app(app: &OpenHarmonyApp) -> Result<()> {
     app.register_plugin(WebviewCookieBridgePlugin)?;
     // #192: the get-url sync plugin rides the same registration point and the
-    // same COOKIE_SYNC_APP app handle — the sync bridge addresses plugins by
+    // same COOKIE_SYNC_APP app handle - the sync bridge addresses plugins by
     // ID, so no second OnceLock is needed.
     app.register_plugin(WebviewUrlBridgePlugin)?;
     if COOKIE_SYNC_APP.set(app.clone()).is_err() {
@@ -1500,7 +1500,7 @@ pub fn set_cookie_sync_app(app: &OpenHarmonyApp) -> Result<()> {
 
 /// Synchronously fetches the cookies for `url` (ArkTS `fetchCookieSync`).
 ///
-/// **Must be called from the N-API main thread** — the `MainThreadSync` bridge
+/// **Must be called from the N-API main thread** - the `MainThreadSync` bridge
 /// contract. The main-thread `Env` is recovered from the thread-local set by
 /// the XComponent render entry, the same recovery tao's terminate path uses.
 ///
@@ -1531,8 +1531,8 @@ pub fn cookies_for_url_on_main_thread(url: &str, incognito: bool) -> Result<Stri
 ///
 /// `WebviewController.getUrl()` is a synchronous ArkTS API, but the async
 /// bridge cannot serve it to a main-thread caller (its TSFN round-trip needs
-/// that same thread to pump — deadlock). This sync plugin carries the read
-/// instead — invoked through [`OpenHarmonyApp::with_main_thread_bridge`], the
+/// that same thread to pump - deadlock). This sync plugin carries the read
+/// instead - invoked through [`OpenHarmonyApp::with_main_thread_bridge`], the
 /// call always executes on the UI thread. Mirrors [`WebviewCookieBridgePlugin`]
 /// in every mechanical respect; the ArkTS counterpart (`getUrlSync` handler,
 /// action `get-url`) is registered in the same bridge plugin list as the
@@ -1594,10 +1594,10 @@ impl WebviewUrlSyncExt for OpenHarmonyApp {
 
 /// Synchronously reads the live URL of webview `id` (ArkTS `getUrlSync`).
 ///
-/// **Must be called from the N-API main thread** — same `MainThreadSync`
+/// **Must be called from the N-API main thread** - same `MainThreadSync`
 /// contract as [`cookies_for_url_on_main_thread`], and the same re-entrant
 /// direct-call shape: no recv_timeout, no block_on anywhere on the path.
-/// Reuses the `COOKIE_SYNC_APP` app handle — the sync bridge addresses the
+/// Reuses the `COOKIE_SYNC_APP` app handle - the sync bridge addresses the
 /// plugin by [`WebviewUrlBridgePlugin::ID`], so no second OnceLock exists.
 pub fn webview_url_on_main_thread(id: &str) -> Result<String> {
     let app = COOKIE_SYNC_APP.get().ok_or_else(|| {
@@ -2039,7 +2039,7 @@ impl WebviewHandle {
     ///
     /// The ArkTS side uses `WebviewController.webPageSnapshot()` with up to 3 retries
     /// and a 10s overall timeout. Returns the raw RGBA bytes and dimensions.
-    /// Note: `rgba` is serialized as `Array<number>` via NAPI — callers must convert
+    /// Note: `rgba` is serialized as `Array<number>` via NAPI - callers must convert
     /// to `Uint8Array` on the JS side if needed.
     pub async fn web_page_snapshot(&self) -> Result<WebviewSnapshotResponse> {
         let response = self
@@ -2331,7 +2331,7 @@ mod tests {
     fn arkweb_version_name_maps_official_enum_values() {
         // native_interface_arkweb.h: SYSTEM_DEFAULT=0, ARKWEB_M114=1,
         // ARKWEB_M132=2, ARKWEB_EVERGREEN=99999; ARKWEB_M144=3 per the API 26
-        // reference (not yet in the local sysroot header — forward-compatible).
+        // reference (not yet in the local sysroot header - forward-compatible).
         assert_eq!(arkweb_version_capi::version_name(0), "SYSTEM_DEFAULT");
         assert_eq!(arkweb_version_capi::version_name(1), "M114");
         assert_eq!(arkweb_version_capi::version_name(2), "M132");
@@ -2354,7 +2354,7 @@ mod tests {
     /// Device-side assertion (issue #116's requested test): the live query
     /// must return a known kernel-generation label, optionally suffixed with
     /// " (evergreen)". Deliberately a set-membership check, NOT a literal
-    /// "M132" — the label is firmware-scoped (an unpinned engine reports
+    /// "M132" - the label is firmware-scoped (an unpinned engine reports
     /// SYSTEM_DEFAULT; API 26 systems report M144/evergreen variants), so a
     /// literal assert would fail on exactly the devices the issue expects to
     /// pass. Runs via the ohos-rust-ut device harness (PACKAGE=
@@ -2578,7 +2578,7 @@ mod tests {
 
     // ── #192 get-url sync plugin (ohos.webview-url) ─────────────────────
 
-    /// UT for #192: the get-url sync plugin keeps the cookie-sync contract —
+    /// UT for #192: the get-url sync plugin keeps the cookie-sync contract -
     /// MainThreadSync mode, no context requirements, and its own plugin ID so
     /// the sync bridge can address it independently of the cookie plugin.
     /// # Brief: assert ID, REQUIRED_CONTEXTS parity, and the new wire type names.

@@ -294,7 +294,7 @@ impl Key {
     ];
 }
 
-/// State of a shortcut event — matches the desktop hotkey crate's `HotKeyState`.
+/// State of a shortcut event - matches the desktop hotkey crate's `HotKeyState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShortcutState {
     Pressed,

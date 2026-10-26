@@ -107,7 +107,7 @@ pub struct ClipboardReadImageRequest {}
 
 impl_bridge_napi_type!(ClipboardReadImageRequest, "ohos.clipboard.ReadImageRequest");
 
-/// The ArkTS side packs the clipboard PixelMap as a base64 PNG — a `Vec<u8>`
+/// The ArkTS side packs the clipboard PixelMap as a base64 PNG - a `Vec<u8>`
 /// napi object would cross the bridge as `Array<number>`, inflating a
 /// multi-hundred-KB PNG ~8x in memory (same contract as plugin-webview's
 /// capture response).
@@ -265,7 +265,7 @@ impl ClipboardClient {
     ///
     /// Errors when the clipboard holds no image or the PNG round-trip fails.
     /// A permission-gated read (READ_PASTEBOARD denied) observes an empty
-    /// pasteboard and surfaces as the no-image error — same degradation as
+    /// pasteboard and surfaces as the no-image error - same degradation as
     /// `read_text` returning `None`.
     pub async fn read_image(&self) -> Result<ClipboardImage> {
         let response = self
@@ -345,7 +345,7 @@ fn validate_image_dimensions(rgba: &[u8], width: u32, height: u32) -> Result<()>
 ///
 /// The output buffer is sized straight from the PNG header
 /// (`reader.output_buffer_size()`), so a lying IHDR can request an arbitrary
-/// allocation before any pixel data is validated — a ~45-byte CRC-valid
+/// allocation before any pixel data is validated - a ~45-byte CRC-valid
 /// file claiming 65535x65535 RGBA asks for a ~16 GiB zeroed buffer. Capping
 /// at 1<<26 px bounds that allocation to 256 MiB (RGBA8) while leaving
 /// headroom for every realistic clipboard image: the pasteboard itself is
@@ -360,7 +360,7 @@ const MAX_DECODE_PIXELS: u64 = 1 << 26;
 /// `width`/`height` come from the ArkTS PixelMap info and are cross-checked
 /// against the decoded PNG (the PNG is the source of truth for the payload;
 /// a mismatch means the packer produced different dimensions than it
-/// reported — treated as corruption).
+/// reported - treated as corruption).
 fn decode_png_base64(png_base64: &str, width: u32, height: u32) -> Result<ClipboardImage> {
     use base64::Engine as _;
 
@@ -376,7 +376,7 @@ fn decode_png_base64(png_base64: &str, width: u32, height: u32) -> Result<Clipbo
     let mut reader = decoder
         .read_info()
         .map_err(|e| reason(format!("PNG decode failed: {e}")))?;
-    // The IHDR is untrusted until the pixel data decodes — enforce the size
+    // The IHDR is untrusted until the pixel data decodes - enforce the size
     // cap before it drives the output-buffer allocation.
     let (header_w, header_h) = (reader.info().width, reader.info().height);
     let pixels = header_w as u64 * header_h as u64;
@@ -419,7 +419,7 @@ fn decode_png_base64(png_base64: &str, width: u32, height: u32) -> Result<Clipbo
             out
         }
         // Unreachable with normalize_to_color8 (EXPAND maps Indexed → Rgb in
-        // the output color type) — kept as a defensive arm.
+        // the output color type) - kept as a defensive arm.
         png::ColorType::Indexed => {
             return Err(reason(
                 "unexpected indexed output after normalize_to_color8".into(),
@@ -536,7 +536,7 @@ mod tests {
     }
 
     /// Minimal CRC-32 (IEEE 802.3, as the PNG spec requires) for the
-    /// hand-built PNG headers below — the png crate checks chunk CRCs during
+    /// hand-built PNG headers below - the png crate checks chunk CRCs during
     /// `read_info`, so the forged IHDR/IDAT must be self-consistent.
     fn crc32(bytes: &[u8]) -> u32 {
         let mut crc = !0u32;
@@ -564,8 +564,8 @@ mod tests {
     }
 
     /// Builds a base64 PNG whose IHDR claims `width`x`height` 8-bit RGBA but
-    /// carries no pixel data (empty IDAT). `read_info` succeeds on this — it
-    /// only needs to reach the first IDAT chunk — so the decode path runs
+    /// carries no pixel data (empty IDAT). `read_info` succeeds on this - it
+    /// only needs to reach the first IDAT chunk - so the decode path runs
     /// the pre-allocation pixel check against a lying header.
     fn lying_header_png_base64(width: u32, height: u32) -> String {
         use base64::Engine as _;
@@ -601,7 +601,7 @@ mod tests {
             .reason
             .contains("image too large"));
         // ...while a small lying header passes the cap and only fails later
-        // at decode (empty IDAT) — proving the check gates the allocation,
+        // at decode (empty IDAT) - proving the check gates the allocation,
         // not decoding itself.
         let small = lying_header_png_base64(2, 1);
         let err = decode_png_base64(&small, 2, 1).expect_err("empty IDAT fails decode");
