@@ -205,8 +205,9 @@ pub fn create_lifecycle_handle<'a>(
     let on_window_stage_destroy =
         env.create_function_from_closure("on_window_stage_destroy", move |ctx| {
             let window_id = window_id_arg(&ctx, 0);
-            let _ = on_window_stage_destroy_app
-                .dispatch_plugin_lifecycle(PluginLifecycleEvent::WindowStageDestroyed { window_id });
+            let _ = on_window_stage_destroy_app.dispatch_plugin_lifecycle(
+                PluginLifecycleEvent::WindowStageDestroyed { window_id },
+            );
             // Phase 4 (design.md D5): dispatch per-window — a spawned instance's
             // stage teardown reaches its own tao window (CloseRequested +
             // Destroyed for that id) so tauri-runtime-wry cleans the window
@@ -223,8 +224,12 @@ pub fn create_lifecycle_handle<'a>(
         env.create_function_from_closure("on_ability_create", move |ctx| {
             let restored_state = ctx.first_arg::<String>().unwrap_or_default();
             let window_id = window_id_arg(&ctx, 1);
-            let _ = on_ability_create_app
-                .dispatch_plugin_lifecycle(PluginLifecycleEvent::AbilityCreated { window_id, restored_state });
+            let _ = on_ability_create_app.dispatch_plugin_lifecycle(
+                PluginLifecycleEvent::AbilityCreated {
+                    window_id,
+                    restored_state,
+                },
+            );
             if window_id == 0 {
                 if let Some(ref mut h) = *on_ability_create_app.event_loop.borrow_mut() {
                     h(Event::Create)
@@ -331,7 +336,9 @@ pub fn create_lifecycle_handle<'a>(
             // Continuation statics are primary-instance-only (NG5 defers
             // multi-instance continuation): a spawned instance's new want must not
             // clear the primary's pending continuation payload.
-            let is_continuation = data.get_named_property::<bool>("isContinuation").unwrap_or(false);
+            let is_continuation = data
+                .get_named_property::<bool>("isContinuation")
+                .unwrap_or(false);
             crate::app::store_continuation(is_continuation, &parameters_json);
             if let Some(ref mut h) = *on_new_want_app.event_loop.borrow_mut() {
                 h(Event::NewWant { uri })
@@ -359,9 +366,12 @@ pub fn create_lifecycle_handle<'a>(
                 // failing the callback. Continuation storage stays
                 // primary-instance-only (NG5): a spawned instance's cold start must
                 // not clear the primary's pending continuation payload.
-                let is_continuation = data.get_named_property::<bool>("isContinuation").unwrap_or(false);
-                let parameters_json =
-                    data.get_named_property::<String>("parametersJson").unwrap_or_default();
+                let is_continuation = data
+                    .get_named_property::<bool>("isContinuation")
+                    .unwrap_or(false);
+                let parameters_json = data
+                    .get_named_property::<String>("parametersJson")
+                    .unwrap_or_default();
                 crate::app::store_continuation(is_continuation, &parameters_json);
             }
             Ok(())
@@ -429,7 +439,11 @@ fn make_on_configuration_updated<'a>(
         // primary-instance-driven (R10: app-level dispatch keeps WindowId(0));
         // OHOS notifies every live instance, so the primary's copy suffices.
         if window_id == 0 {
-            configuration_updated_app.inner.write().unwrap().configuration = configuration.clone();
+            configuration_updated_app
+                .inner
+                .write()
+                .unwrap()
+                .configuration = configuration.clone();
             if let Some(ref mut h) = *configuration_updated_app.event_loop.borrow_mut() {
                 h(Event::ConfigChanged(configuration))
             }
@@ -448,8 +462,12 @@ fn make_on_window_stage_event<'a>(
     env.create_function_from_closure("window_stage_event", move |ctx| {
         let event_type = ctx.first_arg::<i32>()?;
         let window_id = window_id_arg(&ctx, 1);
-        let _ = window_stage_event_app
-            .dispatch_plugin_lifecycle(PluginLifecycleEvent::WindowStageEvent { window_id, event_type });
+        let _ = window_stage_event_app.dispatch_plugin_lifecycle(
+            PluginLifecycleEvent::WindowStageEvent {
+                window_id,
+                event_type,
+            },
+        );
 
         // Phase 4 (design.md D5): focus dispatches per-window — a spawned
         // instance's ACTIVE/INACTIVE reaches its own tao window (and when it

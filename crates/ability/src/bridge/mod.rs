@@ -721,7 +721,11 @@ impl BridgePluginRegistry {
             })?;
             // Main-thread events carry no window id; they are accepted while ANY Ability
             // session in the process is live (D8) and rejected once all have ended.
-            if !state.sessions.values().any(|session| session.session_active) {
+            if !state
+                .sessions
+                .values()
+                .any(|session| session.session_active)
+            {
                 return Err(Error::from_reason(format!(
                     "Bridge plugin '{}' received a main-thread event outside an active Ability session",
                     event.plugin_id()
@@ -730,11 +734,9 @@ impl BridgePluginRegistry {
             let event_requirements = entry
                 .plugin
                 .required_contexts_for_main_thread_event(event.name());
-            if !state
-                .sessions
-                .values()
-                .any(|session| session.session_active && session.readiness.supports(event_requirements))
-            {
+            if !state.sessions.values().any(|session| {
+                session.session_active && session.readiness.supports(event_requirements)
+            }) {
                 return Err(Error::from_reason(format!(
                     "Bridge plugin '{}' received a main-thread event before its required context was ready",
                     event.plugin_id()
@@ -862,14 +864,22 @@ impl BridgePluginRegistry {
                 state.lifecycle_history.remove(&window_id);
                 // Drop the process-wide activation only when this was the last live session;
                 // a surviving sibling instance keeps receiving incremental events (D8).
-                if !state.sessions.values().any(|session| session.session_active) {
+                if !state
+                    .sessions
+                    .values()
+                    .any(|session| session.session_active)
+                {
                     for entry in state.plugins.values_mut() {
                         entry.activated = false;
                     }
                 }
                 // Post-teardown partition sizes, captured under the guard and
                 // logged after its release (lock discipline).
-                teardown_partitions = Some((window_id, state.sessions.len(), state.lifecycle_history.len()));
+                teardown_partitions = Some((
+                    window_id,
+                    state.sessions.len(),
+                    state.lifecycle_history.len(),
+                ));
             }
             deliveries
         };
@@ -1889,7 +1899,10 @@ mod tests {
             .unwrap();
         for event_type in 0_i32..32_i32 {
             registry
-                .dispatch_lifecycle(PluginLifecycleEvent::WindowStageEvent { window_id: 0, event_type })
+                .dispatch_lifecycle(PluginLifecycleEvent::WindowStageEvent {
+                    window_id: 0,
+                    event_type,
+                })
                 .unwrap();
         }
         registry
@@ -1905,7 +1918,10 @@ mod tests {
             events.get(1),
             Some(&PluginLifecycleEvent::WindowStageCreated { window_id: 0 })
         );
-        assert_eq!(events.last(), Some(&PluginLifecycleEvent::UiContextReady { window_id: 0 }));
+        assert_eq!(
+            events.last(),
+            Some(&PluginLifecycleEvent::UiContextReady { window_id: 0 })
+        );
     }
 
     #[test]
@@ -1945,7 +1961,10 @@ mod tests {
             events.first(),
             Some(PluginLifecycleEvent::AbilityCreated { restored_state, .. }) if restored_state == "bounded"
         ));
-        assert_eq!(events.last(), Some(&PluginLifecycleEvent::UiContextReady { window_id: 0 }));
+        assert_eq!(
+            events.last(),
+            Some(&PluginLifecycleEvent::UiContextReady { window_id: 0 })
+        );
     }
 
     #[test]
@@ -2190,8 +2209,14 @@ mod tests {
         readiness.observe(&PluginLifecycleEvent::UiContextReady { window_id: 0 });
         let snapshot = readiness;
         readiness.observe(&PluginLifecycleEvent::ConfigurationUpdated { window_id: 0 });
-        readiness.observe(&PluginLifecycleEvent::MemoryLevel { window_id: 0, level: 5_i32 });
-        readiness.observe(&PluginLifecycleEvent::WindowStageEvent { window_id: 0, event_type: 1_i32 });
+        readiness.observe(&PluginLifecycleEvent::MemoryLevel {
+            window_id: 0,
+            level: 5_i32,
+        });
+        readiness.observe(&PluginLifecycleEvent::WindowStageEvent {
+            window_id: 0,
+            event_type: 1_i32,
+        });
         assert_eq!(readiness.ability, snapshot.ability);
         assert_eq!(readiness.window_stage, snapshot.window_stage);
         assert_eq!(readiness.ui_context, snapshot.ui_context);

@@ -206,7 +206,10 @@ mod tests {
 
     #[test]
     fn input_source_type_from_i32_covers_all_values() {
-        assert!(matches!(InputSourceType::from(1_i32), InputSourceType::Mouse));
+        assert!(matches!(
+            InputSourceType::from(1_i32),
+            InputSourceType::Mouse
+        ));
         assert!(matches!(
             InputSourceType::from(2_i32),
             InputSourceType::TouchScreen
@@ -227,7 +230,10 @@ mod tests {
             InputSourceType::from(99_i32),
             InputSourceType::Unknown
         ));
-        assert!(matches!(InputSourceType::from(0_i32), InputSourceType::Unknown));
+        assert!(matches!(
+            InputSourceType::from(0_i32),
+            InputSourceType::Unknown
+        ));
     }
 
     #[test]

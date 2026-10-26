@@ -159,13 +159,8 @@ pub fn create_os_window(params: WindowCreateParams) -> napi_ohos::Result<i64> {
 /// `build_create_sub_window_args`.
 type CreateSubWindowPayload = (String, i64, i32, i32, i32, i32, bool, bool, Option<u32>);
 
-type CreateSubWindowTsfn = ThreadsafeFunction<
-    CreateSubWindowPayload,
-    (),
-    FnArgs<(Object<'static>,)>,
-    Status,
-    false,
->;
+type CreateSubWindowTsfn =
+    ThreadsafeFunction<CreateSubWindowPayload, (), FnArgs<(Object<'static>,)>, Status, false>;
 static TSFN_CREATE_SUB_WINDOW: OnceLock<CreateSubWindowTsfn> = OnceLock::new();
 
 /// Register the ArkTS `createSubWindow` wrapper as a ThreadsafeFunction.
@@ -188,11 +183,9 @@ pub fn register_create_sub_window_tsfn(
     let tsfn = create_fn
         .build_threadsafe_function::<CreateSubWindowPayload>()
         .callee_handled::<false>()
-        .build_callback(
-            move |ctx: ThreadsafeCallContext<CreateSubWindowPayload>| {
-                build_create_sub_window_args(ctx.env, ctx.value).map(|args| FnArgs { data: args })
-            },
-        )?;
+        .build_callback(move |ctx: ThreadsafeCallContext<CreateSubWindowPayload>| {
+            build_create_sub_window_args(ctx.env, ctx.value).map(|args| FnArgs { data: args })
+        })?;
     let _ = TSFN_CREATE_SUB_WINDOW.set(tsfn);
     crate::info!("Registered create_sub_window TSFN");
     Ok(())
@@ -292,7 +285,13 @@ fn pending_ui_abilities() -> std::sync::MutexGuard<'static, Option<HashMap<i64, 
 pub fn register_pending_ui_ability(id: i64) {
     pending_ui_abilities()
         .get_or_insert_with(HashMap::new)
-        .insert(id, PendingAbility { stage_registered: false, waker: None });
+        .insert(
+            id,
+            PendingAbility {
+                stage_registered: false,
+                waker: None,
+            },
+        );
     crate::info!(
         "register_pending_ui_ability: id={} (startAbility dispatched, awaiting stage registration)",
         id
@@ -478,8 +477,8 @@ pub fn notify_ui_ability_start_failed(window_id: i64) {
 
 static UI_ABILITY_SPAWN_REJECTIONS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
-fn ui_ability_spawn_rejections(
-) -> std::sync::MutexGuard<'static, Option<HashMap<String, String>>> {
+fn ui_ability_spawn_rejections() -> std::sync::MutexGuard<'static, Option<HashMap<String, String>>>
+{
     // Poisoned lock: same policy as the pending registry — keep serving, the
     // trace is diagnostic only.
     UI_ABILITY_SPAWN_REJECTIONS
@@ -514,10 +513,7 @@ pub fn take_ui_ability_spawn_rejection(label: &str) -> Option<String> {
         .as_mut()
         .and_then(|m| m.remove(label));
     if reason.is_some() {
-        crate::info!(
-            "take_ui_ability_spawn_rejection: label={} consumed",
-            label
-        );
+        crate::info!("take_ui_ability_spawn_rejection: label={} consumed", label);
     }
     reason
 }

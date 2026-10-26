@@ -2,10 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     fmt::Debug,
-    sync::{
-        atomic::AtomicI64,
-        Arc, LazyLock, Mutex, RwLock,
-    },
+    sync::{atomic::AtomicI64, Arc, LazyLock, Mutex, RwLock},
 };
 
 use napi_derive_ohos::napi;
@@ -21,8 +18,8 @@ use ohos_xcomponent_binding::{KeyEventData, RawWindow};
 use crate::{
     bridge::MainThreadBridgeEndpoint, AvoidArea, AvoidAreaType, BridgeMainThread,
     BridgeMainThreadEvent, BridgePlugin, BridgePluginDeclaration, BridgePluginRegistry,
-    BridgeRuntime, Configuration, Event, InputEvent, MainThreadScheduler, OpenHarmonyWaker, WakerSlot,
-    PluginLifecycleEvent, Rect,
+    BridgeRuntime, Configuration, Event, InputEvent, MainThreadScheduler, OpenHarmonyWaker,
+    PluginLifecycleEvent, Rect, WakerSlot,
 };
 
 static ID: AtomicI64 = AtomicI64::new(0);
@@ -2297,6 +2294,9 @@ mod tests {
             cursor_position_with(true, 100.5, 50.25, 1.0),
             Ok((100.5_f64, 50.25_f64))
         );
-        assert_eq!(cursor_position_with(true, 0.0, 0.0, 2.0), Ok((0.0_f64, 0.0_f64)));
+        assert_eq!(
+            cursor_position_with(true, 0.0, 0.0, 2.0),
+            Ok((0.0_f64, 0.0_f64))
+        );
     }
 }

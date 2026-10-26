@@ -72,9 +72,7 @@ impl BridgePlugin for WebviewBridgePlugin {
             SEAL_ENGINE_SCHEMES_EVENT | BEFORE_ENGINE_INIT_EVENT | ENGINE_INITIALIZED_EVENT => {
                 Self::on_engine_lifecycle_event(&event)
             }
-            CONTROLLER_ATTACHED_EVENT | "controller-removed" => {
-                Self::on_controller_event(&event)
-            }
+            CONTROLLER_ATTACHED_EVENT | "controller-removed" => Self::on_controller_event(&event),
             "navigation-request" | "new-window-request" | "download-start" | "https-intercept" => {
                 Self::on_callback_decision_event(&event)
             }

@@ -63,9 +63,7 @@ impl BridgeNapiType for DeepLinkGetUriResponse {
         <Self as napi_ohos::bindgen_prelude::ToNapiValue>::into_unknown(self, env)
     }
 
-    fn from_bridge_value(
-        value: napi_ohos::bindgen_prelude::Unknown<'_>,
-    ) -> Result<Self> {
+    fn from_bridge_value(value: napi_ohos::bindgen_prelude::Unknown<'_>) -> Result<Self> {
         use napi_ohos::bindgen_prelude::{FromNapiValue, Object};
         let obj = Object::from_unknown(value)?;
         let uri: Option<String> = obj.get::<Option<String>>("uri")?.flatten();

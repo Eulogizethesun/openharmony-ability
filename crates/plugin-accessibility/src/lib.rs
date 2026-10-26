@@ -595,7 +595,10 @@ mod tests {
         );
         assert!(matches!(
             err,
-            AccessibilityError::Unavailable { code: 9_300_001_i32, .. }
+            AccessibilityError::Unavailable {
+                code: 9_300_001_i32,
+                ..
+            }
         ));
     }
 

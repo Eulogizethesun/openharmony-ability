@@ -93,14 +93,11 @@ impl BridgeNapiType for UpdaterCheckResponse {
         <Self as napi_ohos::bindgen_prelude::ToNapiValue>::into_unknown(self, env)
     }
 
-    fn from_bridge_value(
-        value: napi_ohos::bindgen_prelude::Unknown<'_>,
-    ) -> Result<Self> {
+    fn from_bridge_value(value: napi_ohos::bindgen_prelude::Unknown<'_>) -> Result<Self> {
         use napi_ohos::bindgen_prelude::{FromNapiValue, Object};
         let obj = Object::from_unknown(value)?;
-        let missing = |name: &'static str| {
-            Error::new(Status::InvalidArg, format!("Missing field `{name}`"))
-        };
+        let missing =
+            |name: &'static str| Error::new(Status::InvalidArg, format!("Missing field `{name}`"));
         let update_available: bool = obj
             .get("updateAvailable")?
             .ok_or_else(|| missing("updateAvailable"))?;

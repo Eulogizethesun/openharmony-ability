@@ -75,7 +75,10 @@ pub(crate) fn install_app_waker_alias(tsfn: WakerTsfn) {
 /// `OpenHarmonyApp` handle. No-op when lifecycle setup has not run yet —
 /// the caller's event stays queued and is drained by a later wake.
 pub fn wake_installed_app() {
-    let tsfn = INSTALLED_APP_WAKER.read().ok().and_then(|guard| guard.clone());
+    let tsfn = INSTALLED_APP_WAKER
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone());
     if let Some(waker) = tsfn {
         waker.call((), ThreadsafeFunctionCallMode::NonBlocking);
     }
@@ -105,11 +108,7 @@ impl OpenHarmonyWaker {
         // Read the slot live rather than using a construction-time snapshot.
         // Clone the `Arc<TSFN>` out and drop the read guard before calling, so
         // we never hold the lock across the (non-blocking) TSFN call.
-        let tsfn = self
-            .slot
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone());
+        let tsfn = self.slot.read().ok().and_then(|guard| guard.clone());
         match tsfn {
             Some(waker) => {
                 // callee_handled=false call(): the raw value, no Result wrapper
