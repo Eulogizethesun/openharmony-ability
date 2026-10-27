@@ -635,6 +635,8 @@ pub fn set_float_window_waker(id: i64, waker: crate::OpenHarmonyWaker) {
 /// "settled") and wakes the attached event-loop waker so queued window ops
 /// replay. On failure the replayed ops hit the ArkTS registry and fail with
 /// today's "Unknown OS sub-window" warn — loud, never a silent hold.
+///
+/// Wire contract: this export name pairs with `SubWindowPage.ets` RouteName "FloatWindow" and is intentionally NOT renamed by #240 (renaming breaks route registration + the bridge handshake).
 #[napi]
 pub fn notify_float_window_registered(window_id: i64, registered: bool) {
     let waker = {
