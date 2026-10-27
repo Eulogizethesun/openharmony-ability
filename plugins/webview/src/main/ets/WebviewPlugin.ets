@@ -1684,10 +1684,10 @@ function BuildWebview(data: ManagedWebview) {
  * so pages see only the synthetic stream from MainPage.onKeyPreIme (see
  * native_ability helper/key_synthesis.ets, openspec ohos-webview-key-synthesis).
  *
- * Sub-window (Float) webviews are excluded: they have no key-synthesis wiring
- * (their onKeyPreIme serves other interception purposes, see FloatPage), so
- * suppressing their native key events without synthetic replacement would
- * drop ALL key events there.
+ * Sub-window (WindowKind.SubWindow) webviews are excluded: they have no
+ * key-synthesis wiring (their onKeyPreIme serves other interception purposes,
+ * see SubWindowPage), so suppressing their native key events without
+ * synthetic replacement would drop ALL key events there.
  */
 function keySynthesisScripts(data: ManagedWebview): WebviewInitializationScript[] {
   const wid = data.windowId ?? 0;
@@ -1924,7 +1924,7 @@ function handleWebviewInterceptRequest(
     headerNames = undefined;
     headerValues = undefined;
   }
-  hilog.info(
+  hilog.debug(
     0x1999,
     "WebviewSurface",
     "[https-intercept] onInterceptRequest%{public}s fired: id=%{public}s url=%{public}s protocols_size=%{public}d method=%{public}s header_count=%{public}d",
@@ -2366,8 +2366,9 @@ class WebviewSurface {
     );
     const wm = isSubWindow ? WindowManager.getInstance() : null;
 
-    // Timing guard: if sub-window's componentRoot is not yet registered (FloatPage
-    // hasn't aboutToAppear), defer the entire create until registerComponentRoot fires.
+    // Timing guard: if sub-window's componentRoot is not yet registered
+    // (SubWindowPage hasn't aboutToAppear), defer the entire create until
+    // registerComponentRoot fires.
     if (isSubWindow && wm !== null && wm.getComponentRoot(windowId) === undefined) {
       hilog.info(
         0x1999,
@@ -2394,8 +2395,8 @@ class WebviewSurface {
     const node = new BuilderNode<[ManagedWebview]>(builderUiCtx);
     const entry = new WebviewEntry(data, node);
     // Wire up close-window callback: when the webview navigates to close-window.invalid,
-    // destroy the Float sub-window via WindowManager. Notify Rust FIRST (mirrors menu.ets
-    // closeWindow and FloatPage × button) so the tauri manager drains PENDING_WINDOW_CLOSES
+    // destroy the sub-window via WindowManager. Notify Rust FIRST (mirrors menu.ets
+    // closeWindow and the SubWindowPage close button) so the tauri manager drains PENDING_WINDOW_CLOSES
     // and removes its registry entry — otherwise getByLabel returns a zombie handle and the
     // same-label window can never be rebuilt (manual_tests §二十八 close lifecycle defect).
     if (windowId > 0) {

@@ -20,6 +20,9 @@ import { WindowManager } from "../window/WindowManager";
 import { feedCursorFromMouse } from "../helper/cursor_feed";
 import { DOMAIN, NATIVE_MODULE_STORAGE_KEY } from "../helper/constants";
 
+// Wire contract: this value and notify_float_window_registered predate the
+// #240 component-page rename and are intentionally unchanged - renaming
+// either breaks @Entry route registration and the bridge handshake.
 export const RouteName = "FloatWindow";
 
 interface Position {
@@ -353,7 +356,7 @@ struct SubWindowPage {
                       // recover() switches MAXIMIZE/FULL_SCREEN → FLOATING (API11+) — the
                       // documented inverse of maximize(). restore() is main-window-only
                       // (restores a minimized MAIN window on 2in1, API14+); on a maximized
-                      // SubWindow sub-window it is the wrong API. Mirrors tao set_maximized(false)
+                      // sub-window it is the wrong API. Mirrors tao set_maximized(false)
                       // → recover_window (plugin-window bridge).
                       WindowManager.getInstance().recoverWindow(this.windowId);
                     } else {

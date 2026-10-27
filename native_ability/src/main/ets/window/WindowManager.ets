@@ -307,7 +307,8 @@ export class WindowManager {
   // 1300002 only surfaces transiently when the window state is abnormal, it is
   // not the expected outcome of these calls (see tao facade docs,
   // committer Eulogizethesun/tauri#170). Decorations are system-provided, and
-  // per-button enable flags are no-ops.
+  // setDecorationFlags throws for UIAbility main windows (#238); sub-windows
+  // honor per-button flags.
   // windowId=0 alone must NOT be used for this judgement — a subsequent UIAbility
   // instance has id>0 but is still a system-managed main window.
   isUIAbilityMainWindow(windowId: number): boolean {
@@ -1090,7 +1091,7 @@ export class WindowManager {
     });
   }
   // Group D decoration button bitfield: bit0 closable, bit1 maximizable, bit2 minimizable, bit3 resizable.
-  // Only applies to SubWindow sub-windows (writes LocalStorage). The UIAbility main window's
+  // Only applies to sub-windows (writes LocalStorage). The UIAbility main window's
   // three decoration buttons are OS-managed: no API maps to the enable/disable flag
   // semantics (@ohos.window offers style injection via setDecorButtonStyle, whole-bar
   // visibility via setWindowDecorVisible, and per-button visibility via
@@ -1849,7 +1850,7 @@ export class WindowManager {
           windowId,
         );
         await win.setWindowBackgroundColor("#00000000");
-        // SubWindow sub-windows ALSO have a window container layer. Without setting
+        // Sub-windows ALSO have a window container layer. Without setting
         // it transparent, an opaque container sits between the window background
         // and ArkUI content — blocking backdropBlur from sampling through the
         // transparent window to content behind it (vibrancy/frosted glass effect).

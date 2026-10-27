@@ -627,14 +627,15 @@ export class WindowPlugin extends AsyncPluginBase {
       this.requireWindow(request.windowId, context);
       // Delegate to WindowManager.setDecorations: dual-path by window kind —
       // UIAbility main windows call setWindowDecorVisible (system title bar),
-      // Float sub-windows write LocalStorage('decorations') so FloatPage's
-      // @LocalStorageProp reactively shows/hides its self-drawn title bar.
+      // SubWindow-kind sub-windows write LocalStorage('decorations') so
+      // SubWindowPage's @LocalStorageProp reactively shows/hides its
+      // self-drawn title bar.
       // The inline win.setWindowDecorVisible call below was the pluginize-era
       // migration of the legacy NAPI path and only implemented the UIAbility
-      // half: Float sub-windows are created with decorEnabled:false (system
+      // half: sub-windows are created with decorEnabled:false (system
       // decoration permanently off), so the direct call was a silent no-op and
-      // the FloatPage title bar never reacted to setDecorations().
-      // setDecorations returns whether the window kind was handled (Float
+      // the SubWindowPage title bar never reacted to setDecorations().
+      // setDecorations returns whether the window kind was handled (SubWindow
       // LocalStorage write / UIAbility setWindowDecorVisible); false means the
       // window is unknown or the system call threw — surface it to the Rust
       // caller instead of acking success (the pre-pluginize handler threw on
@@ -1263,10 +1264,11 @@ export class WindowPlugin extends AsyncPluginBase {
 
     if (action === "set-decoration-flags") {
       // Applies the decoration flag bit-field (closable/maximizable/minimizable/
-      // resizable) to a Float sub-window's LocalStorage. The UIAbility main
-      // window is a no-op (its decorations are system-managed) — WindowManager
-      // logs and returns, still acknowledged. #219: an unknown/destroyed
-      // window throws out of WindowManager and rejects the invoke.
+      // resizable) to a sub-window's LocalStorage. The UIAbility main window
+      // throws per #238 (platform cannot honor per-button flags; the bridge arm
+      // rejects the invoke) - sub-windows honor the flags via LocalStorage.
+      // #219: an unknown/destroyed window throws out of WindowManager and
+      // rejects the invoke.
       const request = parseDecorationFlagsRequest(payload);
       try {
         WindowManager.getInstance().setDecorationFlags(request.windowId, request.flags);
@@ -1287,7 +1289,7 @@ export class WindowPlugin extends AsyncPluginBase {
     const request = parseWindowIdRequest(payload);
 
     // destroy-window is idempotent: a window closed via the notify_window_close
-    // path (FloatPage ✕ button: removeWindow + destroyWindow; or system X:
+    // path (SubWindowPage close button: removeWindow + destroyWindow; or system X:
     // aboutToDisappear) is already destroyed by the time the Rust drain's
     // on_window_close spawns its safety destroy_window bridge call. requireWindow
     // would throw "Unknown OS sub-window" for those — instead soft-lookup and
