@@ -9,11 +9,17 @@
 # (cfg(target_env = "ohos")) sends i32::MIN for the bounds components a call
 # does not set, and -1 would collide with real multi-monitor coordinates. No
 # host UT can observe the ArkTS-only wire, so the value is pinned three ways
-# (full contract: the WebviewPlugin.ets sentinel-contract comment):
-#   1. this drift check;
-#   2. the device e2e case-b +-2px set-bounds readback (behavioral
-#      discriminator: a wrong sentinel value would be applied as real
-#      geometry, move the webview, and fail that assertion);
+# (full contract: the WebviewPlugin.ets sentinel-contract comment), with an
+# honest grading of what each pin actually covers:
+#   1. this drift check - pins the ArkTS literal itself;
+#   2. the device e2e case-b +-2px set-bounds readback - the SIZE pair pins
+#      real rendered geometry (a wrong sentinel size applied as real
+#      geometry fails the probe assertion); the POSITION pair does NOT pin
+#      ArkTS rendering (the e2e reads wry bounds(), which returns the Rust
+#      bounds cache, so a wrong rendered position would still pass);
 #   3. the wry-side UT pinning that sentinel components never enter the Rust
-#      bounds cache.
+#      bounds cache - uses a local i32::MIN literal, pinning the
+#      cache-merge formula, not this production constant.
+# The position pair is un-pinnable today: the webview exposes no rendered
+# position read-back on OHOS.
 plugins/webview/src/main/ets/WebviewPlugin.ets WEBVIEW_BOUNDS_SENTINEL -2147483648

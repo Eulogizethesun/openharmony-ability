@@ -114,12 +114,26 @@ function enableWebDebuggingIfAvailable(): void {
  * i32::MIN marks "leave the current value untouched".
  *
  * The literal is pinned three ways (PR#55 review gate F12), because no host
- * UT can observe the ArkTS-only wire: (1) host-stubs/generate.ps1 drift-checks
- * this constant against host-stubs/sentinel_constants.txt and fails on drift;
- * (2) the device e2e case-b +-2px set-bounds readback is the behavioral
- * discriminator - a wrong sentinel value would be applied as real geometry,
- * move the webview, and fail that assertion; (3) the wry-side UT pins that
- * sentinel components never enter the Rust bounds cache.
+ * UT can observe the ArkTS-only wire. Honest grading of what each pin
+ * actually covers:
+ * (1) host-stubs/generate.ps1 drift-checks this constant against
+ *     host-stubs/sentinel_constants.txt and fails on drift - this pins the
+ *     ArkTS literal itself (the only pin that reads the production
+ *     constant).
+ * (2) the device e2e case-b +-2px set-bounds readback: the SIZE pair pins
+ *     real rendered geometry (the probe measures the rendered webview), so
+ *     a wrong sentinel size applied as real geometry fails that assertion.
+ *     The POSITION pair does NOT pin ArkTS rendering: the e2e reads wry
+ *     bounds(), which returns the Rust bounds cache (ohos bounds() ->
+ *     *bounds_cache) rather than the rendered frame - if a wrong sentinel
+ *     position were applied by ArkTS as real geometry, the position
+ *     assertion would still read the correct cached value and pass.
+ * (3) the wry-side UT pins that sentinel components never enter the Rust
+ *     bounds cache using a LOCAL i32::MIN literal - it pins the
+ *     merge_bounds_into_cache formula, not this production constant.
+ * The position pair is un-pinnable today: the webview exposes no rendered
+ * position read-back on OHOS (only the size is measurable by the e2e
+ * probe), so nothing downstream can observe the ArkTS-rendered position.
  */
 const WEBVIEW_BOUNDS_SENTINEL: number = -2147483648;
 

@@ -880,8 +880,9 @@ impl WindowClient {
     /// Allows/forbids USER-initiated resizing (issue Eulogizethesun/tauri#104):
     /// the real "resizable" switch, as opposed to the decoration-flag bit that
     /// only toggles title-bar button visibility. The ArkTS side routes by
-    /// window kind — main (UIAbility) window → `setResizeByDragEnabled`
-    /// (API 14+, effective in free-window state), sub-window →
+    /// windowId (id 0 = the main window), not by window kind: id 0 ->
+    /// `setResizeByDragEnabled` (API 14+, effective in free-window state),
+    /// any non-zero id (sub-window or spawned UIAbility instance) ->
     /// `enableDrag` (API 20+). Programmatic resizes are gated separately by
     /// the FLAG_RESIZABLE decoration bit on the Rust side.
     pub async fn set_resize_by_drag(&self, window_id: i64, enable: bool) -> Result<()> {

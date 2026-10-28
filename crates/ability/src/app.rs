@@ -275,12 +275,17 @@ impl OpenHarmonyAppInner {
         self.xcomponent = None;
         self.rect = Rect::default();
         // Clear only the main-window (key 0) rects: release_render_owner tears down the
-        // main window's DefaultXComponent render surface. Sub-window rect entries (key >0)
-        // are NOT cleared by any path here - no separate destroy path exists in this
-        // registry, so they persist after the sub-window is gone. That is the known
-        // cross-repo limitation that a sub-window destroy on the ArkTS side does not
-        // notify the Rust registry family; the stale entries stay until the owning
-        // module's host is disposed.
+        // main window's DefaultXComponent render surface. Two families share the
+        // key >0 space, with different lifecycles:
+        // - Spawned UIAbility instances (NativeAbility onCreate reads a non-zero
+        //   tauri_window_id from want.parameters) ARE cleaned up: their
+        //   onAbilityDestroy path reaches unregister_ui_ability_state, which
+        //   removes this id's entry from window_rects.
+        // - True sub-window entries (key >0, WindowKind.SubWindow) persist: no
+        //   destroy-notification path exists for them in this registry - a
+        //   sub-window destroy on the ArkTS side does not notify the Rust
+        //   registry family. That is the known cross-repo limitation; the
+        //   stale entries stay until the owning module's host is disposed.
         // NOTE: deactivate_surface intentionally does NOT reset window_rects — that
         // preserves the asymmetric semantics (only full release clears the rect cache).
         self.window_rects.remove(&0);
