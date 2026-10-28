@@ -183,11 +183,11 @@ export class ProcessInitializer {
     // module.init → bridge session creation is now performed by NativeAbility.onCreate,
     // which owns the per-Ability lifecycle and constructs BridgeHostRegistry sessions.
 
-    // Publish the primary native module to AppStorage so ArkUI components (SubWindowPage ×
+    // Publish the primary native module to AppStorage so ArkUI components (SubWindowPage x
     // button / aboutToDisappear, menu.ets closeWindow, NativeAbility windowStatusChange)
     // can call NAPI fns (notifyWindowClose / notifyWindowStatus). Without this, every
     // AppStorage.get(NATIVE_MODULE_STORAGE_KEY) returns undefined → notifyWindowClose is
-    // never invoked → ArkTS destroys the sub-window but the Rust tauri manager keeps a
+    // never invoked -> ArkTS destroys the sub-window but the Rust tauri manager keeps a
     // zombie entry → getByLabel returns a dead handle → same-label windows can't rebuild
     // (manual_tests §二十八 close lifecycle defect).
     if (this.nativeModules.length > 0) {

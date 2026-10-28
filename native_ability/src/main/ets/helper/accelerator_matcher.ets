@@ -3,7 +3,7 @@ import { hilog } from "@kit.PerformanceAnalysisKit";
 import { DOMAIN } from "./constants";
 import { MenuItemData } from "./menu_types";
 
-// #231: these lookup traces fire on EVERY keystroke while a menu is open —
+// #231: these lookup traces fire on EVERY keystroke while a menu is open --
 // info level flooded the log band. Demoted to hilog.debug; message text is
 // preserved verbatim (accel-inject-diag.sh greps `Accelerator|combo=`).
 const TAG = "AcceleratorMatcher";

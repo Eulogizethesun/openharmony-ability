@@ -150,7 +150,7 @@ interface WebviewStyle {
   blurRadius?: number | null;
   /**
    * #188: run the Web component in incognito mode (`WebOptions.incognitoMode`,
-   * local SDK web.d.ts:4639 — the options member, @since 11/18; there is no
+   * local SDK web.d.ts:4639 -- the options member, @since 11/18; there is no
    * `.incognitoMode()` attribute method). Absent/false keeps the default
    * non-incognito behavior byte-identical to the previous wire. Also feeds the
    * WebCookieManager fetch/config call sites (per-store selection).
@@ -272,7 +272,7 @@ interface ManagedWebview extends WebviewCreatePayload {
   httpsInterceptProtocols: Set<string>;
   /**
    * Synchronous https intercept handler. Receives the full request URL plus the
-   * intercepted request's method and headers (#186, parallel same-order arrays —
+   * intercepted request's method and headers (#186, parallel same-order arrays --
    * both optional so callers without the capture stay compatible), dispatches
    * through the `https-intercept` bridge event, and constructs a
    * `WebResourceResponse` (or returns null to let ArkWeb continue with its
@@ -289,7 +289,7 @@ interface ManagedWebview extends WebviewCreatePayload {
   resizeDebounceTimer: number;
   /**
    * Frozen at create (decision D2): true when the create request carried no
-   * explicit style.width AND no style.height — the webview follows its parent
+   * explicit style.width AND no style.height -- the webview follows its parent
    * container (100% natural layout) until a runtime set_bounds carries an
    * explicit width/height and flips it to explicit sizing. Diagnostic anchor
    * only: setBounds applies whatever components the request carries
@@ -311,11 +311,11 @@ interface ControllerWaiter {
  * (openspec ohos-webview-sizing, decision D1).
  *
  * BuilderNode.update re-runs the builder but does not refresh chained component
- * attributes (ohos-constraints §4.1 — the vibrancy backdropBlur counterexample),
+ * attributes (ohos-constraints section4.1 -- the vibrancy backdropBlur counterexample),
  * so the set-bounds bridge action drives the wrapper geometry through this
  * AttributeUpdater: `attribute?.position/width/height` writes go straight to the
  * native attribute instead of waiting for a builder re-run. `initializeModifier`
- * stays empty on purpose — the build-time chained attributes (style-driven,
+ * stays empty on purpose -- the build-time chained attributes (style-driven,
  * see BuildWebview) must keep their values (p1-window-vibrancy BlurModifier
  * precedent).
  */
@@ -324,10 +324,10 @@ class WebviewGeometryModifier extends AttributeUpdater<CommonAttribute> {
 
   /**
    * Applies a geometry (position + size) to the mounted Stack wrapper.
-   * Values arrive from the set-bounds bridge action as vp numbers — the unit
+   * Values arrive from the set-bounds bridge action as vp numbers -- the unit
    * contract is vp end to end (wry bounds() unit doc, which carries its own
-   * DPI≠1 caveat: physical px equal vp only at density 1, and device-measured
-   * window scale factors can differ — ohos-webview-sizing green calibration 2).
+   * DPI!=1 caveat: physical px equal vp only at density 1, and device-measured
+   * window scale factors can differ -- ohos-webview-sizing green calibration 2).
    * Per-component skip (WEBVIEW_BOUNDS_SENTINEL contract): a null width/height
    * leaves that attribute untouched (a natural-layout webview keeps "100%"
    * instead of being forced to an invented px size); x/y are either both null
@@ -688,7 +688,7 @@ class WebviewHttpsInterceptRequestPayload {
   // #186: the intercepted request's method + headers, captured by the
   // onInterceptRequest handler (WebResourceRequest.getRequestMethod() /
   // getRequestHeader()). Header names and values travel as PARALLEL same-
-  // order arrays — the NAPI wire has no nested-map form (the Rust side
+  // order arrays -- the NAPI wire has no nested-map form (the Rust side
   // re-zips them; older Rust plugins that don't know the fields ignore
   // them, and absent fields keep the GET/no-headers default shape).
   readonly method?: string;
@@ -719,7 +719,7 @@ interface WebviewHttpsInterceptResponse {
   body: Uint8Array;
   // #186 (fix-variant M1): response headers the Rust protocol handler attached,
   // parallel same-order arrays (request-side precedent). Absent in payloads from
-  // older native modules — the build site skips setResponseHeader then, which
+  // older native modules -- the build site skips setResponseHeader then, which
   // keeps the pre-M1 behavior byte-identical.
   headerNames?: string[];
   headerValues?: string[];
@@ -1034,7 +1034,7 @@ function styleLength(
  * Normalizes the create-request style (openspec ohos-webview-sizing). The
  * width/height fields are real geometry: when present they drive the wrapper
  * Stack's rendered size (BuildWebview D1 migration); when BOTH are absent the
- * webview is natural layout and fills its container — create() freezes that
+ * webview is natural layout and fills its container -- create() freezes that
  * decision in `naturalLayout`. All fields feed the build-time chained
  * attributes; runtime geometry refreshes go through WebviewGeometryModifier.
  */
@@ -1509,13 +1509,13 @@ function BuildWebview(data: ManagedWebview) {
         src: "",
         controller: data.controller as webview.WebviewController,
         renderMode: data.transparent === true ? RenderMode.SYNC_RENDER : RenderMode.ASYNC_RENDER,
-        // #188: incognito create flag (WebOptions.incognitoMode — options
+        // #188: incognito create flag (WebOptions.incognitoMode -- options
         // member, both branches symmetric). Absent style.incognito stays
         // false = the default non-incognito store, zero behavior change.
         incognitoMode: data.style.incognito === true,
       })
         // Always "100%": the Web fills its wrapper Stack, and the ArkWeb viewport
-        // tracks the wrapper size through container layout — the same mechanism
+        // tracks the wrapper size through container layout -- the same mechanism
         // natural layout uses on window resize (fixed px directly on the Web
         // component historically broke that tracking: bottom cutoff). The wrapper
         // Stack below carries the requested geometry (decision D1).
@@ -1612,8 +1612,8 @@ function BuildWebview(data: ManagedWebview) {
     // so hit-testing and drag coverage == the web area. Explicit bounds render at
     // the requested size; a natural-layout webview (no explicit width/height at
     // create, D2) keeps "100%" and follows its container. Runtime set_bounds
-    // refreshes through the modifier — BuilderNode.update re-runs the builder but
-    // does not refresh chained attributes (ohos-constraints §4.1).
+    // refreshes through the modifier -- BuilderNode.update re-runs the builder but
+    // does not refresh chained attributes (ohos-constraints section4.1).
     .width(data.style.width ?? "100%")
     .height(data.style.height ?? "100%")
     .position({ x: data.style.x ?? 0, y: data.style.y ?? 0 })
@@ -1649,13 +1649,13 @@ function BuildWebview(data: ManagedWebview) {
         src: "",
         controller: data.controller as webview.WebviewController,
         renderMode: data.transparent === true ? RenderMode.SYNC_RENDER : RenderMode.ASYNC_RENDER,
-        // #188: incognito create flag (WebOptions.incognitoMode — options
+        // #188: incognito create flag (WebOptions.incognitoMode -- options
         // member, both branches symmetric). Absent style.incognito stays
         // false = the default non-incognito store, zero behavior change.
         incognitoMode: data.style.incognito === true,
       })
         // Always "100%": the Web fills its wrapper Stack, and the ArkWeb viewport
-        // tracks the wrapper size through container layout — the same mechanism
+        // tracks the wrapper size through container layout -- the same mechanism
         // natural layout uses on window resize (fixed px directly on the Web
         // component historically broke that tracking: bottom cutoff). The wrapper
         // Stack below carries the requested geometry (decision D1).
@@ -1744,8 +1744,8 @@ function BuildWebview(data: ManagedWebview) {
         })
     }
     // Geometry carrier (same as the overlay branch, decision D1): the wrapper
-    // takes the requested bounds — explicit bounds render at the requested size,
-    // a natural-layout webview (D2) keeps "100%" and follows its container — and
+    // takes the requested bounds -- explicit bounds render at the requested size,
+    // a natural-layout webview (D2) keeps "100%" and follows its container -- and
     // the mouse focus gate below covers exactly that area (presses over the web
     // hit-test inside this Stack; menubar presses hit-test outside). Runtime
     // set_bounds refreshes through the modifier (BuilderNode.update does not
@@ -1807,14 +1807,14 @@ function keySynthesisScripts(data: ManagedWebview): WebviewInitializationScript[
   return base.concat([shim]);
 }
 
-// ─── Live controller index for the main-thread sync bridge (#192) ─────────────
+// --- Live controller index for the main-thread sync bridge (#192) -------------
 // `WebviewController.getUrl()` is a synchronous ArkTS API, but the async bridge
 // cannot serve it to a main-thread caller (the TSFN round-trip needs that same
-// thread to pump — deadlock). The dedicated `WebviewUrlPlugin` (sync-main-
+// thread to pump -- deadlock). The dedicated `WebviewUrlPlugin` (sync-main-
 // thread) serves it instead; the per-session `WebviewSurface` instance is not
 // reachable from another plugin class, so attached controllers are indexed here
 // at module scope, keyed by the public webview id. Register on attach, unregister
-// on remove (which `dispose()` funnels through) — the map never outlives a
+// on remove (which `dispose()` funnels through) -- the map never outlives a
 // controller.
 const liveWebviewControllers = new Map<string, webview.WebviewController>();
 
@@ -1902,7 +1902,7 @@ function handleControllerAttached(data: ManagedWebview): void {
     }
     data.markControllerReady();
     // #192: index the attached controller for the main-thread sync bridge
-    // (WebviewUrlPlugin.get-url). Only the success path registers — a failed
+    // (WebviewUrlPlugin.get-url). Only the success path registers -- a failed
     // attach leaves no controller to resolve.
     registerLiveWebviewController(data.id, data.controller as webview.WebviewController);
   } catch (error) {
@@ -1974,7 +1974,7 @@ function handleWebviewAreaChange(data: ManagedWebview, oldArea: Area, newArea: A
  *  inline copies. #186: the intercepted request's method and headers are
  *  captured from the `WebResourceRequest` here (the only handler that holds
  *  the event object) and threaded through to the bridge payload. Both reads
- *  are guarded: a capture failure must not sink the intercept — the payload
+ *  are guarded: a capture failure must not sink the intercept -- the payload
  *  simply stays without the optional fields (older-plugin shape). */
 function handleWebviewInterceptRequest(
   data: ManagedWebview,
@@ -1989,7 +1989,7 @@ function handleWebviewInterceptRequest(
     method = event.request.getRequestMethod() || undefined;
     // Parallel same-order arrays via the SDK Header[] shape (web.d.ts:3945
     // `getRequestHeader(): Array<Header>`, Header = {headerKey, headerValue};
-    // the NAPI wire has no nested-map form — design D2, Context fix 4). A
+    // the NAPI wire has no nested-map form -- design D2, Context fix 4). A
     // `?? {}` fallback would union `Header[]` with `{}` and fail the
     // Record<string,string> assignment (ArkTS 10505001, stage-A build).
     const rawHeaders = event.request.getRequestHeader();
@@ -2131,7 +2131,7 @@ class WebviewSurface {
     this.remove(payload.id);
     const style = normalizeStyle(payload.style, payload.transparent);
     // Freeze the layout mode at create time (decision D2): no explicit width AND
-    // height in the create request → natural layout (the wrapper Stack renders
+    // height in the create request -> natural layout (the wrapper Stack renders
     // "100%" and follows its container); any explicit dimension renders as
     // requested. A runtime set_bounds with explicit width/height flips a
     // natural webview to explicit sizing (sentinel components keep the current
@@ -2241,7 +2241,7 @@ class WebviewSurface {
           // #186 (fix-variant M1): apply the protocol handler's response headers.
           // Content-Type is excluded by the Rust extractor (carried via
           // mimeType); parallel arrays must be present, non-empty, and
-          // length-matched — anything else keeps the pre-M1 behavior.
+          // length-matched -- anything else keeps the pre-M1 behavior.
           const respHeaderNames = response.headerNames;
           const respHeaderValues = response.headerValues;
           if (
@@ -2253,7 +2253,7 @@ class WebviewSurface {
             respHeaderNames.length === respHeaderValues.length
           ) {
             // `Header` is a TOP-LEVEL declare interface in the component
-            // web.d.ts (not a webview-namespace member) — same global type the
+            // web.d.ts (not a webview-namespace member) -- same global type the
             // SDK's `setResponseHeader(header: Array<Header>)` names.
             const responseHeaders: Array<Header> = [];
             for (let h = 0; h < respHeaderNames.length; h++) {
@@ -2687,7 +2687,7 @@ class WebviewSurface {
     try {
       // #188: read from the source webview's cookie store (fetchCookieSync's
       // optional incognito selector, local SDK @ohos.web.webview.d.ts:1642).
-      // Absent style.incognito → false = the default non-incognito store.
+      // Absent style.incognito -> false = the default non-incognito store.
       const incognito = entry.data.style.incognito === true;
       return webview.WebCookieManager.fetchCookieSync(url, incognito);
     } catch (error) {
@@ -2698,20 +2698,20 @@ class WebviewSurface {
   async clearAllBrowsingData(id: string, callContext: BridgeCallContext): Promise<void> {
     const entry = await this.controllerEntry(id, callContext);
     // #191: the wipes below (WebStorage.deleteAllData, HttpAuthCredentials,
-    // removeCache, clearHistory) do not cover the cookie store —
+    // removeCache, clearHistory) do not cover the cookie store --
     // WebCookieManager is process-global, so wipe it first (false = the
     // non-incognito store; both persistent and session cookies). Defensive
     // typeof probe + try/catch (#222 precedent): the SDK-family d.ts marks
     // these @since 20 but real-device evidence contradicts the annotation,
     // so the declaration cannot be trusted literally. Unavailable or
-    // throwing: disclose via warn and continue the existing cleanup —
+    // throwing: disclose via warn and continue the existing cleanup --
     // zero blocking, zero panic (design D4/R10).
     try {
       if (typeof webview?.WebCookieManager?.clearAllCookiesSync === "function") {
         webview.WebCookieManager.clearAllCookiesSync(false);
       } else {
         console.warn(
-          "[WebviewPlugin] clearAllBrowsingData: WebCookieManager.clearAllCookiesSync unavailable on this SDK — cookies not wiped",
+          "[WebviewPlugin] clearAllBrowsingData: WebCookieManager.clearAllCookiesSync unavailable on this SDK - cookies not wiped",
         );
       }
     } catch (cookieError) {
@@ -2822,7 +2822,7 @@ class WebviewSurface {
           }
         : DEFAULT_PDF_CONFIG;
       // #233: forward the caller-supplied print scale into the system
-      // PdfConfiguration — it was declared on WebviewPdfConfig but silently
+      // PdfConfiguration -- it was declared on WebviewPdfConfig but silently
       // dropped here, so the rendered PDF always used the system default.
       if (pdfConfig?.scale !== undefined) {
         cfg.scale = pdfConfig.scale;
@@ -3113,7 +3113,7 @@ class WebviewSurface {
       style.height = height;
     }
     // The modifier is the actual refresh driver (BuilderNode.update does not
-    // refresh chained attributes, ohos-constraints §4.1); node.update stays for
+    // refresh chained attributes, ohos-constraints section4.1); node.update stays for
     // the non-geometry attributes the builder re-run owns (visibility, colors).
     entry.node.update(entry.data);
     entry.data.geometryModifier.applyGeometry(
@@ -3137,9 +3137,9 @@ class WebviewSurface {
   }
 
   setCookie(id: string, url: string, value: string): boolean {
-    // #188: cookies are per-store — write into the source webview's store via
+    // #188: cookies are per-store -- write into the source webview's store via
     // configCookieSync's incognito third param (local SDK
-    // @ohos.web.webview.d.ts:1717). Unknown id or absent style.incognito →
+    // @ohos.web.webview.d.ts:1717). Unknown id or absent style.incognito ->
     // false = the default non-incognito store (previous behavior preserved).
     const entry = this.entries.get(id);
     const incognito = entry?.data.style.incognito === true;

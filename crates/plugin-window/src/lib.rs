@@ -1112,7 +1112,7 @@ mod tests {
         assert!(validate_platform_integer("x", MAX_SAFE_JAVASCRIPT_INTEGER + 1).is_err());
     }
 
-    // Issue #238: the main window's decoration buttons are OS-managed — the
+    // Issue #238: the main window's decoration buttons are OS-managed -- the
     // ArkTS WindowManager.setDecorationFlags main-window branch now THROWS
     // (former hilog no-op acked a fake success), so the set-decoration-flags
     // bridge invoke rejects and the facade surfaces the ArkTS error text
@@ -1127,11 +1127,11 @@ mod tests {
     #[test]
     fn ut_decoration_flags_main_window_error_is_surfaced_from_the_arkts_throw() {
         // Brief:
-        // 1. Main-window id 0 passes validate_window_id — the facade dispatches
+        // 1. Main-window id 0 passes validate_window_id -- the facade dispatches
         //    it (no Rust-side gate); the rejection is the ArkTS throw.
         // 2. The DecorationFlagsRequest wire contract name is the frozen string
         //    the ArkTS bridge arm + isUIAbilityMainWindow branch consume.
-        // 3. Negative ids are still rejected Rust-side — the only error the
+        // 3. Negative ids are still rejected Rust-side -- the only error the
         //    facade itself produces for this call.
         assert!(validate_window_id(0).is_ok());
         assert_eq!(

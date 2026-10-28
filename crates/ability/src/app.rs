@@ -284,11 +284,11 @@ impl OpenHarmonyAppInner {
         // - True sub-window entries (key >0, WindowKind.SubWindow)
         //   persist: no destroy-notification path exists for them in
         //   this registry. The ArkTS side does notify the tao side
-        //   (`notify_window_close` -> `Destroyed`), but that path has
-        //   no hook into this registry's rect cleanup, so these
-        //   entries persist. That is the known cross-repo limitation;
-        //   the stale entries stay until the owning module's host is
-        //   disposed.
+        //   (`notify_window_close` -> the downstream runtime's
+        //   `Destroyed`), but that path has no hook into this
+        //   registry's rect cleanup, so these entries persist. That is
+        //   the known cross-repo limitation; the stale entries stay
+        //   until the owning module's host is disposed.
         // NOTE: deactivate_surface intentionally does NOT reset either rect table
         // (neither window_rects nor inner_rects). That preserves the asymmetric
         // teardown semantics: surface deactivation clears no entries - the rect
@@ -883,11 +883,11 @@ impl OpenHarmonyApp {
     /// the session partition themselves).
     ///
     /// Sub-windows never reach this path -- they are torn down through
-    /// `notify_window_close` -> tao `Destroyed` -- and window ids are monotonic
-    /// (never reused), so removing by id cannot touch a live window. The
-    /// primary (id 0) also passes through on process exit: harmless, its
-    /// handshake entry never existed and `release_render_owner` already
-    /// cleared its rect.
+    /// `notify_window_close` -> the downstream runtime's `Destroyed` --
+    /// and window ids are monotonic (never reused), so removing by id
+    /// cannot touch a live window. The primary (id 0) also passes
+    /// through on process exit: harmless, its handshake entry never
+    /// existed and `release_render_owner` already cleared its rect.
     ///
     /// The rect teardown is symmetric with `set_window_rects`' pair-in: the
     /// outer (`window_rects`) and drawable (`inner_rects`) snapshots for this
@@ -1542,7 +1542,7 @@ pub fn notify_window_focus(window_id: i64, focused: bool) {
 
 /// Drain all pending window focus transitions.
 /// Called by the tao OHOS event loop (alongside `drain_pending_window_status`)
-/// so Float sub-window focus edges reach the same mirror bits the stage path
+/// so sub-window focus edges reach the same mirror bits the stage path
 /// uses (spec ohos-window-focus-state: both paths share one de-dup guard).
 pub fn drain_pending_window_focus() -> Vec<(i64, bool)> {
     PENDING_WINDOW_FOCUS

@@ -178,10 +178,10 @@ fn position_of(display_id: u32) -> Option<(i32, i32)> {
     })
 }
 
-// ─── Virtual pixel ratio (openspec ohos-webview-bounds, #198) ───────────────
+// --- Virtual pixel ratio (openspec ohos-webview-bounds, #198) ---------------
 
 /// Ratio returned when the display binding is unavailable or reports nothing
-/// usable — the "physical px == vp" identity the desktop baseline and the
+/// usable -- the "physical px == vp" identity the desktop baseline and the
 /// previous `to_logical::<f64>(1.0)` behavior are calibrated against.
 const FALLBACK_VIRTUAL_PIXEL_RATIO: f32 = 1.0;
 
@@ -199,12 +199,12 @@ fn sanitize_vp(vp: f32) -> f32 {
 }
 
 /// The default display's virtual pixel ratio (physical px per logical vp) for
-/// the bounds logical↔physical conversion (openspec ohos-webview-bounds, #198).
+/// the bounds logical<->physical conversion (openspec ohos-webview-bounds, #198).
 ///
 /// Thin wrapper over the existing `ohos_display_binding` C-API binding
 /// `default_display_virtual_pixel_ratio() -> f32` (same family as
 /// [`default_display_scaled_density`], no new NAPI wire, no ArkTS surface).
-/// A binding value ≤ 0 (early calls / unsupported device) degrades to the 1.0
+/// A binding value <= 0 (early calls / unsupported device) degrades to the 1.0
 /// identity fallback via `sanitize_vp`. Never blocks; the binding's own
 /// error signaling is a non-zero return code, not a blocking call.
 pub fn virtual_pixel_ratio() -> f32 {
@@ -331,10 +331,10 @@ mod tests {
         assert_eq!(sanitize_vp(2.5), 2.5);
     }
 
-    /// UT for #198: a binding value ≤ 0 (early call / unsupported device)
+    /// UT for #198: a binding value <= 0 (early call / unsupported device)
     /// degrades to the 1.0 identity fallback, per the spec's fallback
     /// scenario ("virtual_pixel_ratio() SHALL return 1.0, no panic").
-    /// # Brief: sanitize 0.0, negative, NaN and ±inf and assert 1.0.
+    /// # Brief: sanitize 0.0, negative, NaN and +/-inf and assert 1.0.
     #[test]
     fn ut_sanitize_vp_falls_back_to_one() {
         assert_eq!(sanitize_vp(0.0), 1.0);

@@ -228,8 +228,8 @@ struct MainPage {
     // so we use ArkTS onMouse which bubbles from all children.
     // ohos-cursor-passthrough 3.2: the feed goes through the shared helper
     // (single source of truth for the screen-global coordinate extraction
-    // and guards — D2). The module reference passed here is this page's OWN
-    // `this.nativeModule` (declared :41, loaded :61) — deliberately NOT an
+    // and guards -- D2). The module reference passed here is this page's OWN
+    // `this.nativeModule` (declared :41, loaded :61) -- deliberately NOT an
     // AppStorage read: AppStorage is a process-global single value a spawned
     // instance would overwrite mid-attachment (admonition at :34).
     .onMouse((event: MouseEvent) => {

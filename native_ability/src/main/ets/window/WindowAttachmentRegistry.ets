@@ -85,7 +85,7 @@ export class WindowAttachmentRegistry {
     hilog.info(DOMAIN, 'WindowManager', `Component root registered for window: %{public}d`, windowId);
     this.componentRoots.set(windowId, root);
     // Flush any pending callbacks registered by plugins (e.g. webview create deferred
-    // due to timing race — webview bridge create arriving before SubWindowPage.aboutToAppear).
+    // due to timing race -- webview bridge create arriving before SubWindowPage.aboutToAppear).
     this.flushPendingComponentRootCallbacks(windowId);
   }
 

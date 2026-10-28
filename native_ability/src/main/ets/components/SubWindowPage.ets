@@ -67,7 +67,7 @@ struct SubWindowPage {
 
   aboutToDisappear(): void {
     // When the OHOS system close button destroys the sub-window,
-    // neither the SubWindowPage × onClick nor the webview onCloseWindow fires.
+    // neither the SubWindowPage x onClick nor the webview onCloseWindow fires.
     // aboutToDisappear is our last chance to notify Rust.
     if (this.closeNotified) {
       return;
@@ -185,8 +185,8 @@ struct SubWindowPage {
               String(e),
             );
           }
-          // #180①: sub-window focus transitions reach tao through the
-          // PENDING_WINDOW_FOCUS queue (notifyWindowFocus → event-loop drain
+          // #180(1): sub-window focus transitions reach tao through the
+          // PENDING_WINDOW_FOCUS queue (notifyWindowFocus -> event-loop drain
           // with edge dedup + paired-blur synthesis). `windowFocusChange` is
           // absent from the local SDK20 @ohos.window.d.ets; `windowEvent`
           // (@since 20, WINDOW_ACTIVE=2 / WINDOW_INACTIVE=3) is the equivalent
@@ -701,24 +701,24 @@ struct SubWindowPage {
     // snapshot from sub-windows too. This root-Stack onMouse sits at
     // the same layer as onKeyPreIme/onTouch above; ArkUI onMouse bubbles from
     // the whole subtree (MenuBarComponent + DefaultXComponent/webview + drag
-    // bar + resize handles) — the same mechanism MainPage relies on in
+    // bar + resize handles) -- the same mechanism MainPage relies on in
     // production ("NDK DispatchMouseEvent doesn't fire over the WebView,
     // ArkTS onMouse bubbling works", tao event_loop.rs CURSOR_POSITION note).
     // Without this, a cursor over a sub-window left the snapshot at the
     // last main-window coordinate and the consumer's hit-test never matched
-    // (ignore stayed true → the toolbar was unclickable). R2 fallback bit:
+    // (ignore stayed true -> the toolbar was unclickable). R2 fallback bit:
     // if the webview ever stops bubbling mouse moves, add onMouse to
     // DefaultXComponent (same reserved-fallback shape as the onTouch note).
-    // Move/Press guard mirrors MainPage (Release is never fed — release-
+    // Move/Press guard mirrors MainPage (Release is never fed -- release-
     // instant coordinates are noise).
     .onMouse((event: MouseEvent) => {
       if (event.action === MouseAction.Move || event.action === MouseAction.Press) {
         // Module reference taken the same way as this page's other NAPI
-        // calls (notifyWindowClose/notifyWindowStatus — SubWindowPage.ets:82/161/
+        // calls (notifyWindowClose/notifyWindowStatus -- SubWindowPage.ets:82/161/
         // 170/352 pattern): AppStorage is safe here because
         // ProcessInitializer.ets:193-195 seeds NATIVE_MODULE_STORAGE_KEY
         // during process init, before any page feed point can fire. The
-        // helper deliberately takes the reference as a parameter — it never
+        // helper deliberately takes the reference as a parameter -- it never
         // reads AppStorage itself (D2).
         const nativeModule: Module | undefined =
           AppStorage.get<Module>(NATIVE_MODULE_STORAGE_KEY);

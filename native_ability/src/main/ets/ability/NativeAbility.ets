@@ -183,7 +183,7 @@ export class NativeAbility extends UIAbility {
       }
       // Raise the primary window (restore from minimize, or raise to top —
       // WindowManager.showWindowMethod handles both for main windows).
-      // #219: showWindowMethod is async now — this duplicate-termination
+      // #219: showWindowMethod is async now -- this duplicate-termination
       // caller is fire-and-forget; keep the rejection handled so onNewWant
       // continues into terminateSelf even if the raise fails.
       WindowManager
@@ -509,36 +509,36 @@ export class NativeAbility extends UIAbility {
     // acceptingLifecycle is now true, so the guard at the top of
     // onConfigurationUpdate passes: synthesize a Configuration from the
     // resource manager and feed it through the SAME entry point the system
-    // callback uses — the Rust on_configuration_updated closure writes
+    // callback uses -- the Rust on_configuration_updated closure writes
     // app.configuration and dispatches Event::ConfigChanged before any window
     // queries the theme. Joined-instance early-return path above does NOT
-    // inject (bridge closure registration is equally restricted there — known
+    // inject (bridge closure registration is equally restricted there -- known
     // limitation, same boundary as the pre-existing event-forwarding face).
-    // Nested try/catch: a failure here must never fail onCreate — the app
+    // Nested try/catch: a failure here must never fail onCreate -- the app
     // simply keeps the pre-injection default, as before this change.
     try {
       const abilityContext = this.context as common.UIAbilityContext;
       const resCfg = abilityContext.resourceManager.getConfigurationSync();
       const injectedConfig: Configuration = {
-        // resmgr direct reads (6 keys): locale → language, colorMode,
+        // resmgr direct reads (6 keys): locale -> language, colorMode,
         // direction, screenDensity, mcc, mnc. resmgr types mcc/mnc as number
-        // while the app Configuration and the Rust closure read strings —
+        // while the app Configuration and the Rust closure read strings --
         // String() them to prevent a type mismatch on the bridge.
         // resmgr and ConfigurationConstant declare distinct-but-value-equal
         // numeric enums for colorMode (DARK=0/LIGHT=1) and screenDensity
-        // (SDPI=120…XXXLDPI=640), and direction (VERTICAL=0/HORIZONTAL=1):
+        // (SDPI=120...XXXLDPI=640), and direction (VERTICAL=0/HORIZONTAL=1):
         // hop through number to re-key the value into the app-side enum type
         // the app Configuration declares.
         language: resCfg.locale,
         colorMode: resCfg.colorMode as number as ConfigurationConstant.ColorMode,
         direction: resCfg.direction as number as ConfigurationConstant.Direction,
         screenDensity: resCfg.screenDensity as number as ConfigurationConstant.ScreenDensity,
-        // mcc/mnc are absent when the host does not report them — String()
+        // mcc/mnc are absent when the host does not report them -- String()
         // would inject the literal "undefined" into the app Configuration.
         // Guard to the empty string (the neutral "unknown" form).
         mcc: typeof resCfg.mcc === "number" ? String(resCfg.mcc) : "",
         mnc: typeof resCfg.mnc === "number" ? String(resCfg.mnc) : "",
-        // SDK 20 resmgr exposes no such fields — neutral defaults (sources:
+        // SDK 20 resmgr exposes no such fields -- neutral defaults (sources:
         // app-side defaults the system would report for a fresh UIAbility).
         fontSizeScale: 1.0,
         fontWeightScale: 1.0,
@@ -746,7 +746,7 @@ export class NativeAbility extends UIAbility {
       // Dock hover hidden on entry (WindowManager.setFullscreen desktop path)
       // are restored too. The internal recover() triggers
       // windowRectChange(RECOVER) → menubar restore (see on("windowRectChange")).
-      // #219: setFullscreen is tracked now — this Esc fire-and-forget caller
+      // #219: setFullscreen is tracked now -- this Esc fire-and-forget caller
       // keeps the rejection handled (log) instead of an unhandled rejection.
       WindowManager
         .getInstance()

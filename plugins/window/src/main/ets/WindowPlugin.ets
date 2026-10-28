@@ -655,7 +655,7 @@ export class WindowPlugin extends AsyncPluginBase {
       // setWindowLayoutFullScreen calls below were the pluginize-era migration
       // of the legacy NAPI path and only implemented the mobile path — a silent
       // visual no-op on desktop (ack OK, no window change).
-      // #219: the full multi-step chain is now awaited (serializeOpTracked) —
+      // #219: the full multi-step chain is now awaited (serializeOpTracked) --
       // a failed maximize/recover/system-bar step rejects the invoke instead of
       // acking success.
       try {
@@ -843,7 +843,7 @@ export class WindowPlugin extends AsyncPluginBase {
           // drawableRect (content not loaded yet, abnormal state) — no precise
           // value: explicit failure, never resize to a guessed size.
           // NOTE: the sub-window branch below is keyed on windowId, not
-          // WindowProperties.type — this app's sub-windows are created
+          // WindowProperties.type -- this app's sub-windows are created
           // via createSubWindow(WithOptions), which the framework reports as
           // an APP SUB window (not TYPE_FLOAT), so a type check would never
           // match (issue #97 review finding).
@@ -920,9 +920,9 @@ export class WindowPlugin extends AsyncPluginBase {
     if (action === "set-topmost") {
       // Delegates to WindowManager.setWindowTopmost (API14 guard + WINDOW_TOPMOST
       // permission handling live there, ported from upstream PR#45).
-      // #219: the platform promise is awaited — a failed setWindowTopmost
+      // #219: the platform promise is awaited -- a failed setWindowTopmost
       // (801 non-freeform / 1300002 abnormal state / unknown window) rejects
-      // the invoke (Rust Err → tao warn) instead of acking success.
+      // the invoke (Rust Err -> tao warn) instead of acking success.
       const request = parseTopmostRequest(payload);
       try {
         await WindowManager.getInstance().setWindowTopmost(request.windowId, request.topmost);
@@ -934,7 +934,7 @@ export class WindowPlugin extends AsyncPluginBase {
 
     if (action === "set-title") {
       // Delegates to WindowManager.setWindowTitle (API9+, main window + sub-windows).
-      // #219: the platform promise is awaited — a failed setWindowTitle (or an
+      // #219: the platform promise is awaited -- a failed setWindowTitle (or an
       // unknown/destroyed window) rejects the invoke instead of acking success.
       const request = parseTitleRequest(payload);
       try {
@@ -1250,7 +1250,7 @@ export class WindowPlugin extends AsyncPluginBase {
       // Delegates to WindowManager.setPointerStyle, which resolves the real OHOS
       // window id internally (pointer.setPointerStyleSync). #219: failures
       // propagate from the setPointerStyle chain (unknown window / sync throw)
-      // and reject the invoke — the ack only lands when the style actually
+      // and reject the invoke -- the ack only lands when the style actually
       // applied.
       const request = parseCursorIconRequest(payload);
       try {
@@ -1357,7 +1357,7 @@ export class WindowPlugin extends AsyncPluginBase {
         // showWindow() — only restore() can (upstream PR#45). Delegate to
         // WindowManager.showWindowMethod, which picks restore() for a minimized
         // main window and showWindow() for sub-windows. #219: the promise is
-        // awaited — a failed restore/show (or an unknown window, thrown by
+        // awaited -- a failed restore/show (or an unknown window, thrown by
         // showWindowMethod itself) rejects into the ack chain instead of a
         // fake success ack.
         await WindowManager.getInstance().showWindowMethod(request.windowId);

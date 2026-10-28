@@ -1525,7 +1525,7 @@ pub fn cookies_for_url_on_main_thread(url: &str, incognito: bool) -> Result<Stri
     app.fetch_cookies_sync(env, url, incognito_wire)
 }
 
-// ── Synchronous URL read (ohos.webview-url, #192) ──────────────────────────────
+// -- Synchronous URL read (ohos.webview-url, #192) ------------------------------
 
 /// `MainThreadSync` companion plugin for reading a webview's live URL.
 ///
@@ -1602,7 +1602,7 @@ impl WebviewUrlSyncExt for OpenHarmonyApp {
 pub fn webview_url_on_main_thread(id: &str) -> Result<String> {
     let app = COOKIE_SYNC_APP.get().ok_or_else(|| {
         Error::from_reason(
-            "webview url sync app not set — the embedding runtime must call \
+            "webview url sync app not set - the embedding runtime must call \
              wry::set_ohos_app during setup",
         )
     })?;
@@ -2576,7 +2576,7 @@ mod tests {
         assert!(engine_scheme_pairs(&event).is_empty());
     }
 
-    // ── #192 get-url sync plugin (ohos.webview-url) ─────────────────────
+    // -- #192 get-url sync plugin (ohos.webview-url) ---------------------
 
     /// UT for #192: the get-url sync plugin keeps the cookie-sync contract -
     /// MainThreadSync mode, no context requirements, and its own plugin ID so
