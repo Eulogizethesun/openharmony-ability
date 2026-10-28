@@ -2273,8 +2273,12 @@ mod tests {
             .insert(AvoidAreaType::Keyboard, AvoidArea::default());
 
         assert_eq!(inner.release_render_owner("owner"), Some(false));
-        // release_render_owner clears key 0 (main window); sub-window rects would persist
-        // until their own destruction path runs. Assert key 0 is gone.
+        // release_render_owner clears key 0 (main window) only; sub-window
+        // entries are not touched by it - spawned UIAbility ids are removed
+        // only by unregister_ui_ability_state (their onAbilityDestroy path),
+        // and true sub-window entries have no destroy-notification path in
+        // this registry at all (see the NOTE above release_render_owner).
+        // Assert key 0 is gone.
         assert!(inner.window_rects.get(&0).is_none());
         assert!(inner.avoid_areas.is_empty());
     }
