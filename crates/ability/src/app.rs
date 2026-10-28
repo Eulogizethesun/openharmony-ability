@@ -280,7 +280,7 @@ impl OpenHarmonyAppInner {
         // - Spawned UIAbility instances (NativeAbility onCreate reads a non-zero
         //   tauri_window_id from want.parameters) ARE cleaned up: their
         //   onAbilityDestroy path reaches unregister_ui_ability_state, which
-        //   removes this id's entry from window_rects.
+        //   removes this id's entries from window_rects and inner_rects.
         // - True sub-window entries (key >0, WindowKind.SubWindow) persist: no
         //   destroy-notification path exists for them in this registry - a
         //   sub-window destroy on the ArkTS side does not notify the Rust
@@ -2001,7 +2001,7 @@ mod tests {
     }
 
     #[test]
-    fn ui_ability_teardown_removes_its_window_rects_entry() {
+    fn ui_ability_teardown_pair_out_removes_both_rect_table_entries() {
         // Contract (release_render_owner note + unregister_ui_ability_state doc):
         // a spawned UIAbility instance's onAbilityDestroy path reaches
         // unregister_ui_ability_state, which removes that id's entries from the
