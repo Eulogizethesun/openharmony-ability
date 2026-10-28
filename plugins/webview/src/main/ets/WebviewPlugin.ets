@@ -278,8 +278,12 @@ interface ManagedWebview extends WebviewCreatePayload {
    * `WebResourceResponse` (or returns null to let ArkWeb continue with its
    * default network stack).
    */
-  onHttpsInterceptRequest: (url: string, method?: string,
-    headerNames?: string[], headerValues?: string[]) => WebResourceResponse | null;
+  onHttpsInterceptRequest: (
+    url: string,
+    method?: string,
+    headerNames?: string[],
+    headerValues?: string[],
+  ) => WebResourceResponse | null;
   /** Trailing debounce timer for onAreaChange → resize dispatch. Prevents flooding
    *  ArkWeb with rapid JS dispatches during drag-resize. */
   resizeDebounceTimer: number;
@@ -333,8 +337,12 @@ class WebviewGeometryModifier extends AttributeUpdater<CommonAttribute> {
    * fields the builder reads are written alongside by the caller, so a later
    * builder re-run converges to the same geometry.
    */
-  applyGeometry(x: number | null, y: number | null,
-    width: number | string | null, height: number | string | null): void {
+  applyGeometry(
+    x: number | null,
+    y: number | null,
+    width: number | string | null,
+    height: number | string | null,
+  ): void {
     const attribute = this.attribute;
     if (!attribute) {
       return;
@@ -687,8 +695,14 @@ class WebviewHttpsInterceptRequestPayload {
   readonly headerNames?: string[];
   readonly headerValues?: string[];
 
-  constructor(id: string, nativeTag: string, url: string, method?: string,
-    headerNames?: string[], headerValues?: string[]) {
+  constructor(
+    id: string,
+    nativeTag: string,
+    url: string,
+    method?: string,
+    headerNames?: string[],
+    headerValues?: string[],
+  ) {
     this.id = id;
     this.nativeTag = nativeTag;
     this.url = url;
@@ -1201,8 +1215,13 @@ const activePrintTasks = new Map<string, ESObject>();
  * `WebResourceResponse` from the returned body bytes, and returns it. On no match, handler
  * decline, or bridge dispatch failure: returns null so ArkWeb uses its default network stack.
  */
-function handleHttpsIntercept(data: ManagedWebview, url: string, method?: string,
-  headerNames?: string[], headerValues?: string[]): WebResourceResponse | null {
+function handleHttpsIntercept(
+  data: ManagedWebview,
+  url: string,
+  method?: string,
+  headerNames?: string[],
+  headerValues?: string[],
+): WebResourceResponse | null {
   if (!url || !url.startsWith("https://")) {
     if (url) {
       hilog.info(
@@ -1507,7 +1526,9 @@ function BuildWebview(data: ManagedWebview) {
         // vibrancy/blur stays visible. The old form (transparent ? Color.Transparent
         // : style.backgroundColor) short-circuited runtime set_background_color into
         // a visual no-op on transparent windows (tao skips the window layer for them).
-        .backgroundColor(data.style.backgroundColor ?? (data.transparent === true ? Color.Transparent : undefined))
+        .backgroundColor(
+          data.style.backgroundColor ?? (data.transparent === true ? Color.Transparent : undefined),
+        )
         .visibility(data.style.visible === false ? Visibility.Hidden : Visibility.Visible)
         // Vibrancy: backdropBlur for opaque sub-windows (see Direct mode comment)
         .backdropBlur(data.style.blurRadius ?? 0)
@@ -1644,7 +1665,9 @@ function BuildWebview(data: ManagedWebview) {
         // same precedence flip as the overlay branch above (runtime set_background_color
         // must stay visible on transparent windows). Unset + transparent →
         // Color.Transparent so vibrancy/blur remains visible through the Web component.
-        .backgroundColor(data.style.backgroundColor ?? (data.transparent === true ? Color.Transparent : undefined))
+        .backgroundColor(
+          data.style.backgroundColor ?? (data.transparent === true ? Color.Transparent : undefined),
+        )
         .visibility(data.style.visible === false ? Visibility.Hidden : Visibility.Visible)
         // Vibrancy/frosted glass: backdropBlur blurs in-surface pixels of the Web component.
         // Works on opaque containers (sub-windows where setWindowContainerColor returns 1300004).
@@ -2161,8 +2184,12 @@ class WebviewSurface {
       nativeTag,
       httpsInterceptProtocols: new Set<string>(payload.httpsInterceptProtocolList ?? []),
       resizeDebounceTimer: 0,
-      onHttpsInterceptRequest: (url: string, method?: string,
-        headerNames?: string[], headerValues?: string[]): WebResourceResponse | null => {
+      onHttpsInterceptRequest: (
+        url: string,
+        method?: string,
+        headerNames?: string[],
+        headerValues?: string[],
+      ): WebResourceResponse | null => {
         hilog.info(
           0x1999,
           "WebviewSurface",
@@ -2217,10 +2244,14 @@ class WebviewSurface {
           // length-matched — anything else keeps the pre-M1 behavior.
           const respHeaderNames = response.headerNames;
           const respHeaderValues = response.headerValues;
-          if (respHeaderNames !== undefined && respHeaderNames !== null &&
-            respHeaderValues !== undefined && respHeaderValues !== null &&
+          if (
+            respHeaderNames !== undefined &&
+            respHeaderNames !== null &&
+            respHeaderValues !== undefined &&
+            respHeaderValues !== null &&
             respHeaderNames.length > 0 &&
-            respHeaderNames.length === respHeaderValues.length) {
+            respHeaderNames.length === respHeaderValues.length
+          ) {
             // `Header` is a TOP-LEVEL declare interface in the component
             // web.d.ts (not a webview-namespace member) — same global type the
             // SDK's `setResponseHeader(header: Array<Header>)` names.
@@ -3062,8 +3093,8 @@ class WebviewSurface {
     // The Rust wire always sends numbers for real components and sentinels
     // for unset ones, so the asymmetry is only reachable through a
     // hand-crafted invoke.
-    const effectiveX = applyX ? x : (typeof style.x === "number" ? style.x : 0);
-    const effectiveY = applyY ? y : (typeof style.y === "number" ? style.y : 0);
+    const effectiveX = applyX ? x : typeof style.x === "number" ? style.x : 0;
+    const effectiveY = applyY ? y : typeof style.y === "number" ? style.y : 0;
     const effectiveWidth = applyWidth ? width : (style.width ?? null);
     const effectiveHeight = applyHeight ? height : (style.height ?? null);
     // Only applied components persist into the style fields, so a later builder
