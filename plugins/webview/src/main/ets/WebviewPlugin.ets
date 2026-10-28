@@ -89,6 +89,20 @@ function enableWebDebuggingIfAvailable(): void {
   setWebDebuggingAccessIfAvailable(true);
 }
 
+/**
+ * Per-component "unspecified" marker for the set-bounds wire contract
+ * (cross-repo: tauri-runtime-wry sends i32::MIN for any bounds component it
+ * does not own (auto-resize re-application included). A component equal to
+ * this value keeps the webview's current ArkTS-side geometry instead of being
+ * applied. The value is i32::MIN (-2147483648), NOT -1: multi-screen setups
+ * legitimately produce -1 window coordinates, which would collide with a -1
+ * sentinel and silently drop real geometry. Where the Rust side has no real
+ * geometry for a component it may instead send its 200x200 default placeholder
+ * (wry's bounds-cache default for a natural-layout webview, never 0x0); only
+ * i32::MIN marks "leave the current value untouched".
+ */
+const WEBVIEW_BOUNDS_SENTINEL: number = -2147483648;
+
 interface WebviewStyle {
   x?: number | string | null;
   y?: number | string | null;
@@ -238,9 +252,11 @@ interface ManagedWebview extends WebviewCreatePayload {
   /**
    * Frozen at create (decision D2): true when the create request carried no
    * explicit style.width AND no style.height — the webview follows its parent
-   * container (100% natural layout) until the first runtime set_bounds flips
-   * it to explicit sizing. Diagnostic anchor only: setBounds applies the full
-   * geometry regardless of this flag.
+   * container (100% natural layout) until a runtime set_bounds carries an
+   * explicit width/height and flips it to explicit sizing. Diagnostic anchor
+   * only: setBounds applies whatever components the request carries
+   * (WEBVIEW_BOUNDS_SENTINEL components keep the current geometry, so a
+   * sentinel width/height leaves natural layout intact).
    */
   naturalLayout: boolean;
   /** Runtime geometry refresher bound to the outer Stack wrapper (D1). */
@@ -269,19 +285,37 @@ class WebviewGeometryModifier extends AttributeUpdater<CommonAttribute> {
   initializeModifier(_instance: CommonAttribute): void {}
 
   /**
-   * Applies a full geometry (position + size) to the mounted Stack wrapper.
+   * Applies a geometry (position + size) to the mounted Stack wrapper.
    * Values arrive from the set-bounds bridge action as vp numbers — the unit
    * contract is vp end to end (wry bounds() unit doc, which carries its own
    * DPI≠1 caveat: physical px equal vp only at density 1, and device-measured
    * window scale factors can differ — ohos-webview-sizing green calibration 2).
-   * No-op until the modifier is attached to a built component (the `attribute`
-   * proxy appears on attach); the style fields the builder reads are written
-   * alongside, so a later builder re-run converges to the same geometry.
+   * Per-component skip (WEBVIEW_BOUNDS_SENTINEL contract): a null width/height
+   * leaves that attribute untouched (a natural-layout webview keeps "100%"
+   * instead of being forced to an invented px size); x/y are either both null
+   * (position untouched) or both concrete numbers with a skipped axis resolved
+   * to its current value by the caller. No-op until the modifier is attached
+   * to a built component (the `attribute` proxy appears on attach); the style
+   * fields the builder reads are written alongside by the caller, so a later
+   * builder re-run converges to the same geometry.
    */
-  applyGeometry(x: number, y: number, width: number, height: number): void {
-    this.attribute?.position({ x: x, y: y });
-    this.attribute?.width(width);
-    this.attribute?.height(height);
+  applyGeometry(x: number | null, y: number | null,
+    width: number | string | null, height: number | string | null): void {
+    const attribute = this.attribute;
+    if (!attribute) {
+      return;
+    }
+    if (x !== null || y !== null) {
+      // position() takes both axes at once; a skipped axis arrives pre-resolved
+      // to its current value (style.x ?? 0, the build-time default).
+      attribute.position({ x: x ?? 0, y: y ?? 0 });
+    }
+    if (width !== null) {
+      attribute.width(width);
+    }
+    if (height !== null) {
+      attribute.height(height);
+    }
   }
 }
 
@@ -1579,7 +1613,7 @@ function BuildWebview(data: ManagedWebview) {
         .backgroundColor(data.style.backgroundColor ?? (data.transparent === true ? Color.Transparent : undefined))
         .visibility(data.style.visible === false ? Visibility.Hidden : Visibility.Visible)
         // Vibrancy/frosted glass: backdropBlur blurs in-surface pixels of the Web component.
-        // Works on opaque containers (Float sub-windows where setWindowContainerColor returns 1300004).
+        // Works on opaque containers (sub-windows where setWindowContainerColor returns 1300004).
         // The blur radius is read from WindowManager.getPendingBlur() at webview creation time.
         .backdropBlur(data.style.blurRadius ?? 0)
         // Debounce resize JS dispatch (handleWebviewAreaChange — shared with the
@@ -2042,8 +2076,9 @@ class WebviewSurface {
     // Freeze the layout mode at create time (decision D2): no explicit width AND
     // height in the create request → natural layout (the wrapper Stack renders
     // "100%" and follows its container); any explicit dimension renders as
-    // requested. The first runtime set_bounds flips a natural webview to
-    // explicit sizing regardless of this flag (setBounds is full-geometry).
+    // requested. A runtime set_bounds with explicit width/height flips a
+    // natural webview to explicit sizing (sentinel components keep the current
+    // geometry instead; setBounds is per-component).
     const naturalLayout = style.width === undefined && style.height === undefined;
     // Read pending blur radius from WindowManager (set by window set-blur command).
     // Injected at build time here; runtime refresh goes through blurRefreshCallbacks.
@@ -2453,7 +2488,7 @@ class WebviewSurface {
           parentHandle,
         );
       } else if (isSubWindow && subRoot) {
-        // Mount into the Float sub-window's component root
+        // Mount into the sub-window's component root
         subRoot.appendChild(frameNode);
         hilog.info(
           0x1999,
@@ -2957,31 +2992,70 @@ class WebviewSurface {
     if (!entry) {
       return false;
     }
-    // Full-geometry semantics (decision D2, ohos-webview-sizing): width/height
-    // are applied just like x/y — the previous behavior intentionally ignored
-    // them, which inflated every child webview to the full container. A
-    // natural-layout webview (created without explicit style.width/height)
-    // flips to explicit sizing on this first set_bounds and stops following its
-    // parent container on window resize — matching the desktop "set_bounds
-    // breaks auto-dock" semantics.
-    entry.data.style.x = x;
-    entry.data.style.y = y;
-    entry.data.style.width = width;
-    entry.data.style.height = height;
+    // Per-component semantics (decision D2 full-geometry origin + the 200x200
+    // cross-repo sentinel contract): width/height are applied just like x/y;
+    // the pre-D2 behavior intentionally ignored them, which inflated every
+    // child webview to the full container. A natural-layout webview (created
+    // without explicit style.width/height) flips to explicit sizing when an
+    // explicit width/height arrives, and stops following its parent container
+    // on window resize, matching the desktop "set_bounds breaks auto-dock"
+    // semantics.
+    //
+    // A component equal to WEBVIEW_BOUNDS_SENTINEL (i32::MIN) is "unspecified"
+    // and keeps the webview's CURRENT geometry: the baseline is read from the
+    // ArkTS-side actual layout: the style fields the builder chained (with the
+    // build-time defaults: position 0, natural "100%"), never from a Rust-side
+    // cached rect. tauri-runtime-wry sends sentinel components for anything it
+    // does not own (auto-resize re-application included), so a resize-driven
+    // refresh can move/resize the webview without clobbering the position or
+    // forcing an explicit size the Rust side never set; where it has no real
+    // geometry it may send its 200x200 default placeholder for a component, and
+    // that still applies (only i32::MIN marks "leave the current value
+    // untouched").
+    const style = entry.data.style;
+    const applyX = x !== WEBVIEW_BOUNDS_SENTINEL;
+    const applyY = y !== WEBVIEW_BOUNDS_SENTINEL;
+    const applyWidth = width !== WEBVIEW_BOUNDS_SENTINEL;
+    const applyHeight = height !== WEBVIEW_BOUNDS_SENTINEL;
+    const effectiveX = applyX ? x : (typeof style.x === "number" ? style.x : 0);
+    const effectiveY = applyY ? y : (typeof style.y === "number" ? style.y : 0);
+    const effectiveWidth = applyWidth ? width : (style.width ?? null);
+    const effectiveHeight = applyHeight ? height : (style.height ?? null);
+    // Only applied components persist into the style fields, so a later builder
+    // re-run converges to the same geometry and a skipped natural-layout size
+    // stays absent (no invented explicit px).
+    if (applyX) {
+      style.x = x;
+    }
+    if (applyY) {
+      style.y = y;
+    }
+    if (applyWidth) {
+      style.width = width;
+    }
+    if (applyHeight) {
+      style.height = height;
+    }
     // The modifier is the actual refresh driver (BuilderNode.update does not
     // refresh chained attributes, ohos-constraints §4.1); node.update stays for
     // the non-geometry attributes the builder re-run owns (visibility, colors).
     entry.node.update(entry.data);
-    entry.data.geometryModifier.applyGeometry(x, y, width, height);
+    entry.data.geometryModifier.applyGeometry(
+      applyX || applyY ? effectiveX : null,
+      applyX || applyY ? effectiveY : null,
+      effectiveWidth,
+      effectiveHeight,
+    );
     hilog.info(
       0x1999,
       "WebviewSurface",
-      "setBounds: id=%{public}s x=%{public}d y=%{public}d w=%{public}d h=%{public}d (full geometry, D2)",
+      "setBounds: id=%{public}s x=%{public}s y=%{public}s w=%{public}s h=%{public}s " +
+        "(per-component; keep = sentinel i32::MIN)",
       id,
-      x,
-      y,
-      width,
-      height,
+      applyX ? String(x) : "keep",
+      applyY ? String(y) : "keep",
+      applyWidth ? String(width) : "keep",
+      applyHeight ? String(height) : "keep",
     );
     return true;
   }
@@ -3436,6 +3510,10 @@ export class WebviewPlugin extends AsyncPluginBase {
       }
       accepted = surface.setBackgroundColor(controllerPayload.id, controllerPayload.color);
     } else if (action === "set-bounds") {
+      // All four components stay required on the wire; an unspecified component
+      // arrives as WEBVIEW_BOUNDS_SENTINEL (i32::MIN), a normal number that the
+      // per-component skip logic in setBounds consumes (200x200 cross-repo
+      // sentinel contract with tauri-runtime-wry).
       if (
         typeof controllerPayload.x !== "number" ||
         typeof controllerPayload.y !== "number" ||
