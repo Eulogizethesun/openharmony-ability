@@ -79,7 +79,7 @@ pub struct OpenHarmonyAppInner {
     id: i64,
     pub(crate) configuration: Configuration,
     pub(crate) rect: Rect,
-    /// Per-window rect cache keyed by windowId (0 = main window, >0 = Float sub-window).
+    /// Per-window rect cache keyed by windowId (0 = main window, >0 = sub-window).
     /// Written by the `window_rect_change` lifecycle closure (lifecycle.rs) from ArkTS
     /// windowRectChange callbacks; read by tao's inner_size/outer_position/etc via
     /// `window_rect_for(window_id)`. See design.md D1/D4 (openspec change
@@ -276,7 +276,7 @@ impl OpenHarmonyAppInner {
         self.rect = Rect::default();
         // Clear only the main-window (key 0) rects: release_render_owner tears down the
         // main window's DefaultXComponent render surface. Sub-window rects (key >0) are
-        // owned by their own Float sub-window lifetimes and cleared via separate paths.
+        // owned by their own sub-window lifetimes and cleared via separate paths.
         // NOTE: deactivate_surface intentionally does NOT reset window_rects — that
         // preserves the asymmetric semantics (only full release clears the rect cache).
         self.window_rects.remove(&0);
@@ -864,7 +864,7 @@ impl OpenHarmonyApp {
     /// `AbilityDestroyed` has been dispatched to bridge plugins (which drop
     /// the session partition themselves).
     ///
-    /// Float sub-windows never reach this path — they are torn down through
+    /// Sub-windows never reach this path — they are torn down through
     /// `notify_window_close` → tao `Destroyed` — and window ids are monotonic
     /// (never reused), so removing by id cannot touch a live window. The
     /// primary (id 0) also passes through on process exit: harmless, its
@@ -1058,7 +1058,7 @@ impl OpenHarmonyApp {
     ///
     /// Semantics:
     /// - `left/top` = window position + drawable offset (below the title bar on
-    ///   decorated windows; (0,0) for Float sub-windows)
+    ///   decorated windows; (0,0) for sub-windows)
     /// - `width`/`height` = drawable (content) area size
     ///
     /// Fallback: the two snapshot tables are only written in pairs

@@ -559,7 +559,7 @@ struct PendingFloat {
 static PENDING_FLOAT_WINDOWS: Mutex<Option<HashMap<i64, PendingFloat>>> = Mutex::new(None);
 
 /// Set by the ArkTS ProcessInitializer via `enable_float_pending_tracking`
-/// before any Float window can be created (capability handshake, review V1).
+/// before any sub-window can be created (capability handshake, review V1).
 static FLOAT_PENDING_TRACKING: AtomicBool = AtomicBool::new(false);
 
 fn pending_float_windows() -> std::sync::MutexGuard<'static, Option<HashMap<i64, PendingFloat>>> {
@@ -568,7 +568,7 @@ fn pending_float_windows() -> std::sync::MutexGuard<'static, Option<HashMap<i64,
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Opens the pending entry for a Float window id pre-allocated inside
+/// Opens the pending entry for a sub-window id pre-allocated inside
 /// `create_os_window`. Only called when the capability handshake is on.
 pub fn register_pending_float(id: i64) {
     pending_float_windows()
@@ -580,7 +580,7 @@ pub fn register_pending_float(id: i64) {
     );
 }
 
-/// Whether the ArkTS creation chain for Float window `id` has settled.
+/// Whether the ArkTS creation chain for sub-window `id` has settled.
 /// Unknown ids read as `true`: only creations opened by
 /// `register_pending_float` (capability handshake on) are tracked.
 pub fn is_float_window_ready(id: i64) -> bool {
@@ -683,9 +683,9 @@ pub fn enable_float_pending_tracking() {
     }
 }
 
-/// Removes the pending entry for a destroyed Float window (tao `Window::drop`).
+/// Removes the pending entry for a destroyed sub-window (tao `Window::drop`).
 /// Idempotent; window ids are never reused (NEXT_WINDOW_ID is monotonic), so a
-/// removed entry can never collide with a future Float.
+/// removed entry can never collide with a future sub-window.
 pub fn unregister_pending_float(id: i64) {
     if let Some(map) = pending_float_windows().as_mut() {
         map.remove(&id);
