@@ -714,8 +714,9 @@ struct SubWindowPage {
     .onMouse((event: MouseEvent) => {
       if (event.action === MouseAction.Move || event.action === MouseAction.Press) {
         // Module reference taken the same way as this page's other NAPI
-        // calls (notifyWindowClose/notifyWindowStatus -- SubWindowPage.ets:82/161/
-        // 170/352 pattern): AppStorage is safe here because
+        // calls (notifyWindowClose/notifyWindowStatus/notifyWindowFocus --
+        // SubWindowPage.ets:88/166/175/216/418 pattern): AppStorage is safe
+        // here because
         // ProcessInitializer.ets:193-195 seeds NATIVE_MODULE_STORAGE_KEY
         // during process init, before any page feed point can fire. The
         // helper deliberately takes the reference as a parameter -- it never

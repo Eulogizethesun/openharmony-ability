@@ -24,10 +24,10 @@ if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
 # path, failing Test-Path with ItemExistsArgumentError).
 $ScriptDir = $ScriptDir.Trim('"\')
 
-# (plugin-dir, exported-class) — the 18 core bridge plugins. The webview dir
+# (plugin-dir, exported-class) -- the 18 core bridge plugins. The webview dir
 # ships two classes: the async surface plugin and the #192 main-thread sync
 # URL reader (WebviewUrlPlugin.ets, resolved from WebviewPlugin.ets's live
-# controller index) — both ride the same copy pass.
+# controller index) -- both ride the same copy pass.
 $plugins = @(
   @{ name = 'accessibility';   cls = 'AccessibilityPlugin' },
   @{ name = 'app-control';     cls = 'AppControlPlugin' },
