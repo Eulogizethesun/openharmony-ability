@@ -1176,11 +1176,16 @@ export class WindowPlugin extends AsyncPluginBase {
     if (action === "set-resize-by-drag") {
       // The real "resizable" switch (issue Eulogizethesun/tauri#104), distinct
       // from the decoration-flag bit that only toggles title-bar button
-      // visibility. Routed by window kind:
-      // - Main (UIAbility) window: setResizeByDragEnabled (API 14+) — only
+      // visibility. Routed by windowId, not by window kind: id 0 is the
+      // main (UIAbility) window, any non-zero id is a sub-window.
+      // Capability face (each arm guards the API level and throws an explicit
+      // Error before the platform call, so nothing is silently skipped):
+      // - Main window (id 0): setResizeByDragEnabled (API 14+) - only
       //   effective in free-window state on PC/2in1 (silently ignored
       //   otherwise, no error per official docs).
-      // - Sub-window: enableDrag (API 20+, same as set-draggable).
+      // - Sub-window (non-zero id): enableDrag (API 20+, same capability as
+      //   set-draggable). On API 14-19 a spawned sub-window call is rejected
+      //   by the explicit API20+ guard below, before enableDrag is reached.
       const request = parseDraggableRequest(payload);
       const win = WindowManager.getInstance().getWindow(request.windowId);
       if (!win) {
