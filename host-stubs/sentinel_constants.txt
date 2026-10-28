@@ -8,9 +8,9 @@
 # The ArkTS sentinel must stay i32::MIN (-2147483648): tauri-runtime-wry
 # (cfg(target_env = "ohos")) sends i32::MIN for the bounds components a call
 # does not set, and -1 would collide with real multi-monitor coordinates. No
-# host UT can observe the ArkTS-only wire, so the value is pinned three ways
-# (full contract: the WebviewPlugin.ets sentinel-contract comment), with an
-# honest grading of what each pin actually covers:
+# host UT can observe the ArkTS-only wire, so the value is guarded by three
+# mechanisms (full contract: the WebviewPlugin.ets sentinel-contract comment),
+# with an honest grading of what each mechanism actually covers:
 #   1. this drift check - pins the ArkTS literal itself;
 #   2. the device e2e case-b +-2px set-bounds readback - the SIZE pair pins
 #      real rendered geometry (a wrong sentinel size applied as real

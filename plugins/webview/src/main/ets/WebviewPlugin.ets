@@ -113,9 +113,9 @@ function enableWebDebuggingIfAvailable(): void {
  * (wry's bounds-cache default for a natural-layout webview, never 0x0); only
  * i32::MIN marks "leave the current value untouched".
  *
- * The literal is pinned three ways (PR#55 review gate F12), because no host
- * UT can observe the ArkTS-only wire. Honest grading of what each pin
- * actually covers:
+ * The sentinel is guarded by three mechanisms (PR#55 review gate F12),
+ * because no host UT can observe the ArkTS-only wire. Honest grading of what
+ * each mechanism actually covers:
  * (1) host-stubs/generate.ps1 drift-checks this constant against
  *     host-stubs/sentinel_constants.txt and fails on drift - this pins the
  *     ArkTS literal itself (the only pin that reads the production
