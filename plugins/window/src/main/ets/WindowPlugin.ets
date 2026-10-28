@@ -580,7 +580,7 @@ export class WindowPlugin extends AsyncPluginBase {
           ? "#00000000"
           : this.colorString(request.backgroundColor ?? 0xffffffff);
         created.setWindowBackgroundColor(backgroundColor);
-        // Float sub-windows also have a window container layer. Without making
+        // Sub-windows also have a window container layer. Without making
         // it transparent, an opaque container sits between the window background
         // and ArkUI content — blocking backgroundBlurStyle from sampling through
         // the transparent window (vibrancy/frosted glass effect invisible).
@@ -701,7 +701,7 @@ export class WindowPlugin extends AsyncPluginBase {
         // no-effect for the main window. Use window.shiftAppWindowFocus
         // (API 11+) — intra-app focus transfer between main/sub windows.
         // Source window: the one the user last interacted with (typically the
-        // Float sub-window holding focus); falls back to the main window
+        // sub-window holding focus); falls back to the main window
         // itself when untracked.
         try {
           const manager = WindowManager.getInstance();
@@ -842,8 +842,8 @@ export class WindowPlugin extends AsyncPluginBase {
           // Main window (tao windowId 0) with an unreadable/degenerate
           // drawableRect (content not loaded yet, abnormal state) — no precise
           // value: explicit failure, never resize to a guessed size.
-          // NOTE: the Float-subwindow branch below is keyed on windowId, not
-          // WindowProperties.type — this app's Float sub-windows are created
+          // NOTE: the sub-window branch below is keyed on windowId, not
+          // WindowProperties.type — this app's sub-windows are created
           // via createSubWindow(WithOptions), which the framework reports as
           // an APP SUB window (not TYPE_FLOAT), so a type check would never
           // match (issue #97 review finding).
@@ -851,7 +851,7 @@ export class WindowPlugin extends AsyncPluginBase {
             `no precise decor available (outer=${outer.width}x${outer.height}, drawable=${drawable.width}x${drawable.height} — content not loaded / window state abnormal)`,
           );
         }
-        // else: Float sub-window (tao windowId > 0) with degenerate drawableRect
+        // else: sub-window (tao windowId > 0) with degenerate drawableRect
         // — sub-windows are created with decorEnabled:false, so chrome 0 is
         // exact BY CONSTRUCTION (not an estimate): outer = inner directly.
         // Positive evidence for issue #97 verification: the exact chrome used.
@@ -933,7 +933,7 @@ export class WindowPlugin extends AsyncPluginBase {
     }
 
     if (action === "set-title") {
-      // Delegates to WindowManager.setWindowTitle (API9+, main window + Float sub-windows).
+      // Delegates to WindowManager.setWindowTitle (API9+, main window + sub-windows).
       // #219: the platform promise is awaited — a failed setWindowTitle (or an
       // unknown/destroyed window) rejects the invoke instead of acking success.
       const request = parseTitleRequest(payload);
@@ -978,7 +978,7 @@ export class WindowPlugin extends AsyncPluginBase {
             );
           }
         } else if (request.windowId > 0) {
-          // Float sub-window (tao windowId > 0) with an unreadable/degenerate
+          // Sub-window (tao windowId > 0) with an unreadable/degenerate
           // drawableRect — sub-windows are created with decorEnabled:false,
           // so chrome 0 is exact BY CONSTRUCTION (same reasoning as the
           // resize-inner branch above; keyed on windowId, not
@@ -1180,7 +1180,7 @@ export class WindowPlugin extends AsyncPluginBase {
       // - Main (UIAbility) window: setResizeByDragEnabled (API 14+) — only
       //   effective in free-window state on PC/2in1 (silently ignored
       //   otherwise, no error per official docs).
-      // - Float sub-window: enableDrag (API 20+, same as set-draggable).
+      // - Sub-window: enableDrag (API 20+, same as set-draggable).
       const request = parseDraggableRequest(payload);
       const win = WindowManager.getInstance().getWindow(request.windowId);
       if (!win) {
@@ -1375,11 +1375,11 @@ export class WindowPlugin extends AsyncPluginBase {
 
   private requireWindow(windowId: number, context: BridgeCallContext): window.Window {
     // Plugin-created sub-windows live in the `windows` Map (populated by create-os-window).
-    // The main UIAbility window (logical id 0) and Float sub-windows created via the legacy
+    // The main UIAbility window (logical id 0) and sub-windows created via the legacy
     // core `create_os_window` path are NOT in this Map — they live in the process-wide
     // WindowManager registry. p1-ohos-window-ops migrated window *operations* to this plugin
     // but left window *creation* on the old path, so the two registries never synced.
-    // Resolve the gap by falling back to WindowManager (which knows about main + Float windows)
+    // Resolve the gap by falling back to WindowManager (which knows about main + sub windows)
     // when the plugin Map misses. For id=0 prefer context.getWindow() (the host component's own
     // window) — fastest, matches the get-avoid-area path and avoids assuming which host received
     // the call.

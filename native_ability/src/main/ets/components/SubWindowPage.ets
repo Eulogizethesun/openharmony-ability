@@ -704,7 +704,7 @@ struct SubWindowPage {
     // bar + resize handles) — the same mechanism MainPage relies on in
     // production ("NDK DispatchMouseEvent doesn't fire over the WebView,
     // ArkTS onMouse bubbling works", tao event_loop.rs CURSOR_POSITION note).
-    // Without this, a cursor over a Float sub-window left the snapshot at the
+    // Without this, a cursor over a sub-window left the snapshot at the
     // last main-window coordinate and the consumer's hit-test never matched
     // (ignore stayed true → the toolbar was unclickable). R2 fallback bit:
     // if the webview ever stops bubbling mouse moves, add onMouse to

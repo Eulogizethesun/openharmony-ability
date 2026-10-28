@@ -5,7 +5,7 @@
  * (sub-windows) — call {@link feedCursorFromMouse} from their root
  * `onMouse` (Move/Press) so EVERY window's mouse traffic updates the
  * process-level cursor snapshot. Root-cause-1 fix: SubWindowPage had no onMouse
- * at all, so a cursor over a Float sub-window left the snapshot at the last
+ * at all, so a cursor over a sub-window left the snapshot at the last
  * main-window coordinate (the consumer's hit-test then never matched →
  * `set_ignore_cursor_events` stayed true → the whole toolbar was
  * unclickable).

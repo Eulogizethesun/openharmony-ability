@@ -1645,8 +1645,8 @@ export class WindowManager {
       // DOES run on a spawned UIAbility stage (creation+render+input all work), but the
       // system close-cascades ALL sub-windows when that stage's instance is destroyed —
       // owner semantics (like Windows WebviewWindowBuilder.parent). Production keeps
-      // Floats on the primary stage so they outlive individual instance destruction;
-      // per-instance Floats remain a documented-not-implemented option.
+      // sub-windows on the primary stage so they outlive individual instance destruction;
+      // per-instance sub-windows remain a documented-not-implemented option.
       if (deviceInfo.sdkApiVersion >= 19) {
         const opts: window.SubWindowOptions = {
           title: "",
@@ -1883,16 +1883,16 @@ export class WindowManager {
               hilog.warn(
                 DOMAIN,
                 "WindowManager",
-                `Float window container color failed: code=%{public}d`,
+                `Sub-window container color failed: code=%{public}d`,
                 containerErr.code,
               );
             }
           }
         } else {
           // setWindowContainerColor is API 20+; below that the container layer
-          // stays opaque, so a transparent Float window shows no visible blur
+          // stays opaque, so a transparent sub-window shows no visible blur
           // (vibrancy) effect. Non-fatal: the window itself still works.
-          hilog.warn(DOMAIN, 'WindowManager', `Float window %{public}d transparent container requires API20+, current %{public}d; container stays opaque (no visible blur)`, windowId, deviceInfo.sdkApiVersion);
+          hilog.warn(DOMAIN, 'WindowManager', `Sub-window %{public}d transparent container requires API20+, current %{public}d; container stays opaque (no visible blur)`, windowId, deviceInfo.sdkApiVersion);
         }
       } else if (backgroundColor !== undefined) {
         const colorStr = "#" + backgroundColor.toString(16).padStart(8, "0");
@@ -1995,20 +1995,20 @@ export class WindowManager {
   //   The old implementation used hideSystemBar/showSystemBar (status bar, since deleted),
   //   which was wrong — status bar != title bar.
   //   May be unsupported on phones (throws 801); the catch fallback does not affect other logic.
-  // Float sub-window: LocalStorage setOrCreate('decorations') — SubWindowPage @LocalStorageProp reactively re-renders.
-  // Returns whether the window kind was handled: Float storage write and a successful
+  // Sub-window: LocalStorage setOrCreate('decorations') — SubWindowPage @LocalStorageProp reactively re-renders.
+  // Returns whether the window kind was handled: a sub-window storage write and a successful
   // UIAbility setWindowDecorVisible return true; a missing window, a thrown system call,
   // or an unknown window kind return false (the plugin handler surfaces that as an error).
   // The two kinds are mutually exclusive in practice: `windows` map entries are only
-  // created by createSubWindow (Float), while UIAbility main windows are tracked in
+  // created by createSubWindow (the sub-window kind), while UIAbility main windows are tracked in
   // `windowKinds` and never carry a `windows` entry.
   setDecorations(windowId: number, decorations: boolean): boolean {
     hilog.info(DOMAIN, 'WindowManager', 'setDecorations %{public}d decorations=%{public}s ENTER', windowId, String(decorations));
-    // Float sub-window: write LocalStorage to drive SubWindowPage title bar show/hide
+    // Sub-window: write LocalStorage to drive SubWindowPage title bar show/hide
     const entry = this.windows.get(windowId);
     if (entry && entry.storage) {
       entry.storage.setOrCreate('decorations', decorations);
-      hilog.info(DOMAIN, 'WindowManager', `Decorations set to %{public}s for Float window %{public}d (LocalStorage)`, String(decorations), windowId);
+      hilog.info(DOMAIN, 'WindowManager', `Decorations set to %{public}s for sub-window %{public}d (LocalStorage)`, String(decorations), windowId);
       return true;
     }
     // UIAbility main window: call setWindowDecorVisible directly to control the system title bar
@@ -2136,7 +2136,7 @@ export class WindowManager {
   // Window vibrancy: apply blur to the WebView container.
   // Blur API selection (WebviewPlugin's BuildWebview):
   // - transparent=true (main window): `backgroundBlurStyle` — samples content behind the window
-  // - transparent=false (opaque, Float sub-windows): `backdropBlur` — blurs in-surface pixels
+  // - transparent=false (opaque sub-windows): `backdropBlur` — blurs in-surface pixels
   // The radius is persisted (WindowAttachmentRegistry) and consumed when the webview node
   // is built; a live webview is refreshed through the registered callback.
   applyWindowBlur(windowId: number, radius: number): void {
