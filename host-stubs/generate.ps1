@@ -32,11 +32,12 @@
 # only, and this script diff-verifies them against the sources on every run
 # (update the record in the same change or the script fails with a drift
 # error). It also drift-checks the cross-repo set-bounds sentinel constant
-# recorded in sentinel_constants.txt (comment lines are stripped and the
-# pattern is anchored, so a comment echoing the declaration cannot satisfy
-# it). The drift checks prove the records do
-# not rot - they do NOT prove a link will succeed. See host-stubs/README.md
-# for the full workflow.
+# recorded in sentinel_constants.txt (before matching, the check strips
+# line comments, doc-comment interior lines, and multi-line /* */ block
+# comment spans, and anchors the pattern at line start, so a comment
+# echoing the declaration form cannot satisfy it). The drift checks prove
+# the records do not rot - they do NOT prove a link will succeed. See
+# host-stubs/README.md for the full workflow.
 
 $ErrorActionPreference = "Stop"
 
@@ -121,9 +122,9 @@ Assert-SymbolRecord $webSymbols @((Join-Path $stubDir "symbols_web.txt")) "stub-
 # the ArkTS-only wire, so it is pinned by a record file the same way the
 # symbol sets are. As with the symbol records this verifies documentation
 # does not rot - it does NOT verify that a link will succeed. ability-R5: the
-# check strips comment lines (line comments and doc-comment interior lines)
-# and anchors the pattern at line start, so a comment echoing the declaration
-# shape cannot satisfy it.
+# check strips comments before matching (line comments, doc-comment interior
+# lines, and multi-line /* */ block comment spans) and anchors the pattern at
+# line start, so a comment echoing the declaration shape cannot satisfy it.
 function Assert-SentinelConstants([string]$RecordPath) {
     if (-not (Test-Path $RecordPath)) {
         throw "sentinel record missing: $RecordPath"
@@ -143,15 +144,64 @@ function Assert-SentinelConstants([string]$RecordPath) {
         if (-not (Test-Path $sourcePath)) {
             throw "sentinel source file missing: $file"
         }
-        # ability-R5: match only real declaration lines. Comment lines are
-        # stripped first (line comments and doc-comment interior lines), and
-        # the pattern is anchored at line start - a comment echoing the
-        # declaration form (e.g. prose quoting
+        # ability-R5: match only real declaration lines. Comment text is
+        # stripped first and the pattern is anchored at line start, so a
+        # comment echoing the declaration form (e.g. prose quoting
         # 'const <name>: number = <literal>;') must not satisfy the check.
-        $codeLines = @(Get-Content $sourcePath | Where-Object {
-            $trimmed = $_.TrimStart()
-            (-not $trimmed.StartsWith("//")) -and (-not $trimmed.StartsWith("*"))
-        })
+        # Round 3 (AR3-1): the strip is a small two-state scanner, not a
+        # line-shape filter. The previous filter only dropped lines that
+        # START with '//' or '*', which let the bare interior lines of a
+        # multi-line /* */ block comment survive - a block comment echoing
+        # the declaration could then satisfy the anchored pattern and fake a
+        # pass while the real declaration was gone. The scanner removes:
+        #   - '//' line comments (the rest of the line);
+        #   - '/*' ... '*/' block comment spans across lines (bare interior
+        #     lines included), keeping any code that follows the closing
+        #     '*/' on that line;
+        #   - lines whose first non-blank character is '*' (doc-comment
+        #     interior shape, previous rule kept).
+        # It is a scanner, not a lexer: string literals are not tracked, so
+        # '//' or '/*' inside a string also strips. That only ever
+        # over-strips, which fails closed - it cannot resurrect comment text
+        # as a declaration.
+        $codeLines = @()
+        $inBlock = $false
+        foreach ($line in (Get-Content $sourcePath)) {
+            if ($inBlock) {
+                $close = $line.IndexOf("*/", [System.StringComparison]::Ordinal)
+                if ($close -lt 0) { continue }
+                $inBlock = $false
+                $line = $line.Substring($close + 2)
+            }
+            if ($line.TrimStart().StartsWith("*")) { continue }
+            $code = New-Object System.Text.StringBuilder
+            $i = 0
+            while ($i -lt $line.Length) {
+                $two = if ($i + 1 -lt $line.Length) { $line.Substring($i, 2) } else { "" }
+                if ($two -ceq "/*") {
+                    $close = $line.IndexOf("*/", $i + 2, [System.StringComparison]::Ordinal)
+                    if ($close -ge 0) {
+                        # complete pair on this line: drop the comment, keep the tail
+                        $i = $close + 2
+                    } else {
+                        # unclosed: the rest of the line opens a block span
+                        $inBlock = $true
+                        break
+                    }
+                }
+                elseif ($two -ceq "//") {
+                    break
+                }
+                else {
+                    [void]$code.Append($line[$i])
+                    $i += 1
+                }
+            }
+            $codeText = $code.ToString()
+            if ($codeText.Trim().Length -gt 0) {
+                $codeLines += $codeText
+            }
+        }
         $pattern = ('^\s*const\s+' + [regex]::Escape($name) +
             '\s*:\s*number\s*=\s*' + [regex]::Escape($literal) + '\s*;')
         $matched = $false
