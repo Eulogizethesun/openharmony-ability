@@ -34,6 +34,10 @@ pub struct AbilityInitContext {
     pub pref_path: Option<String>,
     pub preferred_locales: Option<String>,
     pub module_name: Option<String>,
+    /// HAP module name (`currentHapModuleInfo.name`, e.g. `entry_desktop`) —
+    /// distinct from [`Self::module_name`], which carries the `.so` library name.
+    #[napi(js_name = "hapModuleName")]
+    pub hap_module_name: Option<String>,
     pub sdk_api_version: Option<i32>,
     #[napi(js_name = "distributionOSApiVersion")]
     pub distribution_api_version: Option<i32>,
@@ -50,6 +54,7 @@ impl AbilityInitContext {
             pref_path: context.get("prefPath")?,
             preferred_locales: context.get("preferredLocales")?,
             module_name: context.get("moduleName")?,
+            hap_module_name: context.get("hapModuleName")?,
             sdk_api_version: context.get("sdkApiVersion")?,
             distribution_api_version: context.get("distributionOSApiVersion")?,
         })
@@ -544,6 +549,12 @@ impl OpenHarmonyApp {
 
     pub fn module_name(&self) -> Option<String> {
         self.init_context().module_name
+    }
+
+    /// HAP module name (e.g. `entry_desktop`), as opposed to the `.so` library
+    /// name returned by [`Self::module_name`].
+    pub fn hap_module_name(&self) -> Option<String> {
+        self.init_context().hap_module_name
     }
 
     pub fn base_path(&self) -> Option<String> {
