@@ -286,8 +286,14 @@ impl OpenHarmonyAppInner {
         //   sub-window destroy on the ArkTS side does not notify the Rust
         //   registry family. That is the known cross-repo limitation; the
         //   stale entries stay until the owning module's host is disposed.
-        // NOTE: deactivate_surface intentionally does NOT reset window_rects — that
-        // preserves the asymmetric semantics (only full release clears the rect cache).
+        // NOTE: deactivate_surface intentionally does NOT reset either rect table
+        // (neither window_rects nor inner_rects). That preserves the asymmetric
+        // teardown semantics: surface deactivation clears no entries - the rect
+        // tables are emptied only along their own lifecycles. The main-window
+        // (id 0) entries are cleared by the full release below (the two
+        // remove(&0) lines), the spawned UIAbility id entries by
+        // unregister_ui_ability_state (see the bullet above), and the true
+        // sub-window entries persist (the disclosed limitation noted above).
         self.window_rects.remove(&0);
         self.inner_rects.remove(&0);
         self.avoid_areas.clear();
