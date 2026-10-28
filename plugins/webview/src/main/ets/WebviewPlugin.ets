@@ -91,15 +91,35 @@ function enableWebDebuggingIfAvailable(): void {
 
 /**
  * Per-component "unspecified" marker for the set-bounds wire contract
- * (cross-repo: tauri-runtime-wry sends i32::MIN for any bounds component it
- * does not own (auto-resize re-application included). A component equal to
- * this value keeps the webview's current ArkTS-side geometry instead of being
- * applied. The value is i32::MIN (-2147483648), NOT -1: multi-screen setups
+ * (cross-repo, tauri-runtime-wry cfg(target_env = "ohos")). Only the two
+ * partial-bounds arms send sentinels: SetSize sends i32::MIN for the whole
+ * position pair and SetPosition sends it for the whole size pair, so each
+ * call touches only the component it owns. A component equal to this value
+ * keeps the webview's current ArkTS-side geometry instead of being applied.
+ * The auto-resize re-application arm (window Resized) never sends sentinels:
+ * an armed webview (one with runtime bounds rates) gets all four components
+ * re-applied with real geometry, and a natural-layout webview gets no update
+ * at all.
+ *
+ * Known cross-repo limitation: SetAutoResize(false) clears the runtime rates
+ * and the OHOS enable arm is a no-op, so disable-then-enable permanently
+ * stops resize re-application for an explicit-bounds webview (no path back
+ * to container layout).
+ *
+ * The value is i32::MIN (-2147483648), NOT -1: multi-screen setups
  * legitimately produce -1 window coordinates, which would collide with a -1
  * sentinel and silently drop real geometry. Where the Rust side has no real
  * geometry for a component it may instead send its 200x200 default placeholder
  * (wry's bounds-cache default for a natural-layout webview, never 0x0); only
  * i32::MIN marks "leave the current value untouched".
+ *
+ * The literal is pinned three ways (PR#55 review gate F12), because no host
+ * UT can observe the ArkTS-only wire: (1) host-stubs/generate.ps1 drift-checks
+ * this constant against host-stubs/sentinel_constants.txt and fails on drift;
+ * (2) the device e2e case-b +-2px set-bounds readback is the behavioral
+ * discriminator - a wrong sentinel value would be applied as real geometry,
+ * move the webview, and fail that assertion; (3) the wry-side UT pins that
+ * sentinel components never enter the Rust bounds cache.
  */
 const WEBVIEW_BOUNDS_SENTINEL: number = -2147483648;
 
@@ -3005,18 +3025,29 @@ class WebviewSurface {
     // and keeps the webview's CURRENT geometry: the baseline is read from the
     // ArkTS-side actual layout: the style fields the builder chained (with the
     // build-time defaults: position 0, natural "100%"), never from a Rust-side
-    // cached rect. tauri-runtime-wry sends sentinel components for anything it
-    // does not own (auto-resize re-application included), so a resize-driven
-    // refresh can move/resize the webview without clobbering the position or
-    // forcing an explicit size the Rust side never set; where it has no real
-    // geometry it may send its 200x200 default placeholder for a component, and
-    // that still applies (only i32::MIN marks "leave the current value
-    // untouched").
+    // cached rect. Only the two partial-bounds arms of tauri-runtime-wry send
+    // sentinel components (SetSize sentinels the position pair, SetPosition
+    // the size pair); the auto-resize re-application arm never does - it
+    // re-applies all four components with real geometry for an armed webview
+    // and sends nothing for a natural-layout one. Where the Rust side has no
+    // real geometry it may send its 200x200 default placeholder for a
+    // component, and that still applies (only i32::MIN marks "leave the
+    // current value untouched"). Known cross-repo limitation: auto-resize
+    // disable-then-enable permanently stops the resize arm for an
+    // explicit-bounds webview (the OHOS enable arm does not re-arm), so no
+    // resize-driven refresh can be relied on after that.
     const style = entry.data.style;
     const applyX = x !== WEBVIEW_BOUNDS_SENTINEL;
     const applyY = y !== WEBVIEW_BOUNDS_SENTINEL;
     const applyWidth = width !== WEBVIEW_BOUNDS_SENTINEL;
     const applyHeight = height !== WEBVIEW_BOUNDS_SENTINEL;
+    // Skipped-axis baseline asymmetry (PR#55 review gate F5, disclosure only,
+    // no behavior change): a skipped x/y falls back to 0 when the chained
+    // style holds a string ("50%" collapses to 0), while a skipped
+    // width/height passes the string style through (or null when absent).
+    // The Rust wire always sends numbers for real components and sentinels
+    // for unset ones, so the asymmetry is only reachable through a
+    // hand-crafted invoke.
     const effectiveX = applyX ? x : (typeof style.x === "number" ? style.x : 0);
     const effectiveY = applyY ? y : (typeof style.y === "number" ? style.y : 0);
     const effectiveWidth = applyWidth ? width : (style.width ?? null);
