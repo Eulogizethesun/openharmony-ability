@@ -32,7 +32,9 @@
 # only, and this script diff-verifies them against the sources on every run
 # (update the record in the same change or the script fails with a drift
 # error). It also drift-checks the cross-repo set-bounds sentinel constant
-# recorded in sentinel_constants.txt. The drift checks prove the records do
+# recorded in sentinel_constants.txt (comment lines are stripped and the
+# pattern is anchored, so a comment echoing the declaration cannot satisfy
+# it). The drift checks prove the records do
 # not rot - they do NOT prove a link will succeed. See host-stubs/README.md
 # for the full workflow.
 
@@ -118,7 +120,10 @@ Assert-SymbolRecord $webSymbols @((Join-Path $stubDir "symbols_web.txt")) "stub-
 # cross-repo wire contract with tauri-runtime-wry and no host UT can observe
 # the ArkTS-only wire, so it is pinned by a record file the same way the
 # symbol sets are. As with the symbol records this verifies documentation
-# does not rot - it does NOT verify that a link will succeed.
+# does not rot - it does NOT verify that a link will succeed. ability-R5: the
+# check strips comment lines (line comments and doc-comment interior lines)
+# and anchors the pattern at line start, so a comment echoing the declaration
+# shape cannot satisfy it.
 function Assert-SentinelConstants([string]$RecordPath) {
     if (-not (Test-Path $RecordPath)) {
         throw "sentinel record missing: $RecordPath"
@@ -138,15 +143,27 @@ function Assert-SentinelConstants([string]$RecordPath) {
         if (-not (Test-Path $sourcePath)) {
             throw "sentinel source file missing: $file"
         }
-        $content = Get-Content $sourcePath -Raw
-        $pattern = ('const\s+' + [regex]::Escape($name) +
+        # ability-R5: match only real declaration lines. Comment lines are
+        # stripped first (line comments and doc-comment interior lines), and
+        # the pattern is anchored at line start - a comment echoing the
+        # declaration form (e.g. prose quoting
+        # 'const <name>: number = <literal>;') must not satisfy the check.
+        $codeLines = @(Get-Content $sourcePath | Where-Object {
+            $trimmed = $_.TrimStart()
+            (-not $trimmed.StartsWith("//")) -and (-not $trimmed.StartsWith("*"))
+        })
+        $pattern = ('^\s*const\s+' + [regex]::Escape($name) +
             '\s*:\s*number\s*=\s*' + [regex]::Escape($literal) + '\s*;')
-        if (-not ($content -cmatch $pattern)) {
+        $matched = $false
+        foreach ($codeLine in $codeLines) {
+            if ($codeLine -cmatch $pattern) { $matched = $true; break }
+        }
+        if (-not $matched) {
             throw ("sentinel constant drifted: $file no longer declares " +
-                "'const ${name}: number = ${literal};' - the i32::MIN set-bounds " +
-                "sentinel is a cross-repo wire contract with tauri-runtime-wry; " +
-                "update host-stubs/sentinel_constants.txt only if the contract " +
-                "itself changed on both sides")
+                "'const ${name}: number = ${literal};' (uncommented, at line start) - " +
+                "the i32::MIN set-bounds sentinel is a cross-repo wire contract " +
+                "with tauri-runtime-wry; update host-stubs/sentinel_constants.txt " +
+                "only if the contract itself changed on both sides")
         }
         Write-Host ("sentinel constant verified: $name = $literal in $file")
     }
