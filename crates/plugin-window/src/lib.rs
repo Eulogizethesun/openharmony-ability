@@ -1121,9 +1121,14 @@ mod tests {
     // contract is that the facade must NOT pre-gate the main-window id
     // Rust-side (the Err the caller sees must be the ArkTS throw, not a Rust
     // validation message) and that the request payload carries the exact named
-    // wire contract the ArkTS isUIAbilityMainWindow branch keys on. The error
-    // text itself is asserted end-to-end by the api demo device suite
-    // (tauri repo, window-ops ut_ decoration-reject cases).
+    // wire contract the ArkTS isUIAbilityMainWindow branch keys on. Coverage
+    // note: the api demo device suite (tauri repo, window-ops ut_
+    // decoration-reject cases) regexes /not supported on OpenHarmony/, which
+    // is the Rust-side tauri-runtime-wry message; this repo's ArkTS throw
+    // inserts "the" plus a window id, so it does not match, and window-ops
+    // only touches set-decoration-flags on the Float success path. The ArkTS
+    // error text itself therefore has no end-to-end assertion -- the host UT
+    // below pins the non-pre-gate + payload contract only.
     #[test]
     fn ut_decoration_flags_main_window_error_is_surfaced_from_the_arkts_throw() {
         // Brief:

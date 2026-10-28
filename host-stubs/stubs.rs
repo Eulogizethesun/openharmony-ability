@@ -489,8 +489,12 @@
 #[no_mangle] extern "C" fn OH_NativeXComponent_GetNativeAccessibilityProvider() {}
 
 // --- round 4 (2026-10-26, second host link triage) ---
-// 36 symbols unresolved after round 3: the full OH_ResourceManager_*
-// family (ohresmgr.lib is an empty existence-only archive), 8 ArkWeb
+// 36 symbols unresolved after round 3 (round-4 census: 27 OH_ResourceManager_* then +
+// 8 ArkWeb + 1 OH_LOG_Print; round 5 later added 2 more RM stubs, so the RM subset below
+// counts 29 today): the OH_ResourceManager_* subset the
+// host links actually reference (29 of the 67 the binding declares, not the
+// full family; the remaining 38 are deliberately not stubbed -- round 5 note
+// below; ohresmgr.lib is an empty existence-only archive), 8 ArkWeb
 // scheme-handler/resource symbols referenced by the demo NAPI crates,
 // and OH_LOG_Print (hilog binding). All land in the always-linked
 // archive; none overlap the ohweb.lib ArkWeb set, so no LNK2005 risk.

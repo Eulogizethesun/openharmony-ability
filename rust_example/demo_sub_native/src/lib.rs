@@ -1,6 +1,6 @@
 //! Sub-window native module demo: a second `#[ability]` module that hosts a
-//! Float-sub-window webview, used by the manual multi-window tests to verify
-//! per-window rect, keyboard inset and close-handshake behavior.
+//! transparent SubWindow webview, used by the manual multi-window tests to
+//! verify per-window rect, keyboard inset and close-handshake behavior.
 
 use std::sync::{LazyLock, RwLock};
 
@@ -23,7 +23,7 @@ fn current_app() -> Result<OpenHarmonyApp> {
         .ok_or_else(|| Error::from_reason("Sub-window native module is not initialized"))
 }
 
-/// Creates the demo transparent Float-sub-window webview bound to this
+/// Creates the demo transparent SubWindow webview bound to this
 /// module's render surface (manual multi-window test entry).
 #[napi]
 pub async fn create_sub_window_webview() -> Result<()> {
