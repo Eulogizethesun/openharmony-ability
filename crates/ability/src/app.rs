@@ -1995,6 +1995,58 @@ mod tests {
     }
 
     #[test]
+    fn ui_ability_teardown_removes_its_window_rects_entry() {
+        // Contract (release_render_owner note + unregister_ui_ability_state doc):
+        // a spawned UIAbility instance's onAbilityDestroy path reaches
+        // unregister_ui_ability_state, which removes that id's entry from the
+        // per-window window_rects cache. The rect entry is seeded through the
+        // registry directly (same style as
+        // releasing_a_component_clears_its_window_scoped_cache) because the
+        // production writer is the windowRectChange lifecycle closure, which no
+        // host test can drive.
+        let app = super::OpenHarmonyApp::new();
+        let spawned_id = 33;
+        {
+            let mut inner = app.inner.write().unwrap();
+            inner.window_rects.insert(
+                spawned_id,
+                Rect {
+                    top: 12,
+                    left: 34,
+                    width: 560,
+                    height: 320,
+                },
+            );
+            // A different spawned window's entry must survive this teardown
+            // (window ids are monotonic and removal is by id only).
+            inner.window_rects.insert(
+                34,
+                Rect {
+                    top: 1,
+                    left: 2,
+                    width: 3,
+                    height: 4,
+                },
+            );
+        }
+
+        app.unregister_ui_ability_state(spawned_id);
+
+        let inner = app.inner.read().unwrap();
+        assert!(
+            inner.window_rects.get(&spawned_id).is_none(),
+            "unregister_ui_ability_state must remove the destroyed UIAbility's \
+             window_rects entry (id {})",
+            spawned_id
+        );
+        assert!(
+            inner.window_rects.get(&34).is_some(),
+            "unregister_ui_ability_state must not touch other windows' \
+             window_rects entries"
+        );
+    }
+
+    #[test]
     fn render_owner_rejects_overlap_and_ignores_stale_surface_callbacks() {
         let mut inner = OpenHarmonyAppInner::new();
         inner.claim_render_owner("owner-a").unwrap();
