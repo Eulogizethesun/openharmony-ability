@@ -2425,13 +2425,59 @@ mod tests {
                 height: 1100,
             },
         );
+        // Seed the sub-window's outer rect too, with values distinct from the
+        // drawable seed: a table swap would flip the two and the pins below
+        // would catch it. width/height of the composed read come from the
+        // drawable, so the pre-release composed asserts still hold.
+        inner.set_window_rect(
+            2,
+            Rect {
+                top: 40,
+                left: 30,
+                width: 800,
+                height: 1200,
+            },
+        );
         assert_eq!(inner.inner_rect_for(2).width, 760_i32);
         assert_eq!(inner.inner_rect_for(2).height, 1_100_i32);
         // release_render_owner tears down the MAIN window surface: key 0's
-        // cached rects go with it; sub-window snapshots are unaffected.
+        // cached rects go with it; sub-window snapshots are unaffected. Both
+        // tables' sub-window entries are pinned at value level here, mirroring
+        // the sibling survival tests.
         assert_eq!(inner.release_render_owner("owner"), Some(false));
         assert!(!inner.inner_rects.contains_key(&0));
-        assert_eq!(inner.inner_rect_for(2).height, 1_100_i32);
+        assert_eq!(
+            inner.window_rects.get(&2),
+            Some(&Rect {
+                top: 40,
+                left: 30,
+                width: 800,
+                height: 1_200,
+            }),
+            "release_render_owner must not touch sub-window window_rects entries"
+        );
+        assert_eq!(
+            inner.inner_rects.get(&2),
+            Some(&Rect {
+                top: 0,
+                left: 0,
+                width: 760,
+                height: 1_100,
+            }),
+            "release_render_owner must not touch sub-window inner_rects entries"
+        );
+        // Composed read pinned end-to-end: inner_rect_for offsets the drawable
+        // origin by the outer rect (window {40,30} + drawable {0,0}) and takes
+        // width/height from the drawable.
+        assert_eq!(
+            inner.inner_rect_for(2),
+            Rect {
+                top: 40,
+                left: 30,
+                width: 760,
+                height: 1_100,
+            }
+        );
     }
 
     #[test]
