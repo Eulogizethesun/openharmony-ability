@@ -2136,6 +2136,85 @@ mod tests {
     }
 
     #[test]
+    fn deactivating_a_surface_keeps_both_rect_tables() {
+        // Pin for the release_render_owner NOTE: deactivate_surface clears the
+        // surface-level fields only (raw_window/rect/surface_active) and
+        // intentionally does NOT reset either rect table - window_rects and
+        // inner_rects entries are emptied only along their own lifecycles
+        // (release_render_owner for the main-window key 0,
+        // unregister_ui_ability_state for spawned UIAbility ids). Seeded the
+        // same way as ui_ability_teardown_pair_out_removes_both_rect_table_entries
+        // because the production writer is the windowRectChange lifecycle
+        // closure, which no host test can drive.
+        let mut inner = OpenHarmonyAppInner::new();
+        inner.claim_render_owner("owner").unwrap();
+        assert!(inner.activate_surface("owner", None, Rect::default()));
+
+        // Seed both tables with the main window (0) and a second window (2):
+        // four entries total, all of which must survive deactivation.
+        inner.window_rects.insert(
+            0,
+            Rect {
+                top: 1,
+                left: 2,
+                width: 3,
+                height: 4,
+            },
+        );
+        inner.inner_rects.insert(
+            0,
+            Rect {
+                top: 5,
+                left: 6,
+                width: 7,
+                height: 8,
+            },
+        );
+        inner.window_rects.insert(
+            2,
+            Rect {
+                top: 11,
+                left: 12,
+                width: 13,
+                height: 14,
+            },
+        );
+        inner.inner_rects.insert(
+            2,
+            Rect {
+                top: 15,
+                left: 16,
+                width: 17,
+                height: 18,
+            },
+        );
+
+        assert!(inner.deactivate_surface("owner"));
+
+        // All four entries survive untouched in BOTH tables.
+        assert!(
+            inner.window_rects.get(&0).is_some(),
+            "deactivate_surface must not touch window_rects: the main-window \
+             (id 0) entry is emptied only by release_render_owner"
+        );
+        assert!(
+            inner.inner_rects.get(&0).is_some(),
+            "deactivate_surface must not touch inner_rects: the main-window \
+             (id 0) entry is emptied only by release_render_owner"
+        );
+        assert!(
+            inner.window_rects.get(&2).is_some(),
+            "deactivate_surface must not touch window_rects: the id 2 entry \
+             is emptied only along its own teardown lifecycle"
+        );
+        assert!(
+            inner.inner_rects.get(&2).is_some(),
+            "deactivate_surface must not touch inner_rects: the id 2 entry \
+             is emptied only along its own teardown lifecycle"
+        );
+    }
+
+    #[test]
     fn releasing_a_component_clears_its_window_scoped_cache() {
         let mut inner = OpenHarmonyAppInner::new();
         inner.claim_render_owner("owner").unwrap();
