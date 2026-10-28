@@ -879,12 +879,18 @@ impl OpenHarmonyApp {
     /// primary (id 0) also passes through on process exit: harmless, its
     /// handshake entry never existed and `release_render_owner` already
     /// cleared its rect.
+    ///
+    /// The rect teardown is symmetric with `set_window_rects`' pair-in: the
+    /// outer (`window_rects`) and drawable (`inner_rects`) snapshots for this
+    /// id are removed together, and because ids are monotonic and never
+    /// reused the paired removal cannot touch a live window.
     pub fn unregister_ui_ability_state(&self, window_id: i64) {
         let pending_len = crate::window::unregister_pending_ui_ability(window_id);
         remove_want_uri_storage(window_id);
         unregister_window_label(window_id);
         if let Ok(mut inner) = self.inner.write() {
             inner.window_rects.remove(&window_id);
+            inner.inner_rects.remove(&window_id);
         }
         // Registry-size observability for the teardown path: log AFTER the
         // mutations and outside any lock (lock discipline — see
@@ -1998,8 +2004,10 @@ mod tests {
     fn ui_ability_teardown_removes_its_window_rects_entry() {
         // Contract (release_render_owner note + unregister_ui_ability_state doc):
         // a spawned UIAbility instance's onAbilityDestroy path reaches
-        // unregister_ui_ability_state, which removes that id's entry from the
-        // per-window window_rects cache. The rect entry is seeded through the
+        // unregister_ui_ability_state, which removes that id's entries from the
+        // per-window rect caches — BOTH tables, pair-out symmetric with
+        // set_window_rects' pair-in (outer + drawable go in together, so they
+        // go out together). The rect entries are seeded through the
         // registry directly (same style as
         // releasing_a_component_clears_its_window_scoped_cache) because the
         // production writer is the windowRectChange lifecycle closure, which no
@@ -2017,13 +2025,32 @@ mod tests {
                     height: 320,
                 },
             );
-            // A different spawned window's entry must survive this teardown
-            // (window ids are monotonic and removal is by id only).
+            inner.inner_rects.insert(
+                spawned_id,
+                Rect {
+                    top: 14,
+                    left: 3,
+                    width: 560,
+                    height: 306,
+                },
+            );
+            // A different spawned window's entries must survive this teardown
+            // in BOTH tables (window ids are monotonic and removal is by id
+            // only).
             inner.window_rects.insert(
                 34,
                 Rect {
                     top: 1,
                     left: 2,
+                    width: 3,
+                    height: 4,
+                },
+            );
+            inner.inner_rects.insert(
+                34,
+                Rect {
+                    top: 2,
+                    left: 1,
                     width: 3,
                     height: 4,
                 },
@@ -2040,9 +2067,22 @@ mod tests {
             spawned_id
         );
         assert!(
+            inner.inner_rects.get(&spawned_id).is_none(),
+            "unregister_ui_ability_state must also remove the destroyed \
+             UIAbility's inner_rects entry (id {}): set_window_rects writes \
+             the outer+drawable pair into both tables together, so teardown \
+             must clear them as a pair too (no bounded-leak dead entries)",
+            spawned_id
+        );
+        assert!(
             inner.window_rects.get(&34).is_some(),
             "unregister_ui_ability_state must not touch other windows' \
              window_rects entries"
+        );
+        assert!(
+            inner.inner_rects.get(&34).is_some(),
+            "unregister_ui_ability_state must not touch other windows' \
+             inner_rects entries"
         );
     }
 
