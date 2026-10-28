@@ -923,6 +923,26 @@ impl WindowClient {
     /// Applies the decoration flag bit-field (closable=1, maximizable=2,
     /// minimizable=4, resizable=8) that gates the matching window operations
     /// on the ArkTS side.
+    ///
+    /// Issue #238 contract: the UIAbility MAIN window (id 0) is rejected by the
+    /// ArkTS `WindowManager.setDecorationFlags` branch -- its decoration
+    /// buttons are OS-managed and the platform has no API that maps to the
+    /// operation-level enable/disable flag semantics -- so the bridge invoke
+    /// rejects and this method surfaces the ArkTS error text ("...not supported
+    /// on the OpenHarmony main window..."). Only sub-windows honor the flags
+    /// (LocalStorage-driven sub-window page buttons). The Rust side adds NO
+    /// main-window gate of its own: id 0 must reach the ArkTS throw, so the
+    /// caller always sees the platform rejection, never a Rust validation
+    /// message (pinned by
+    /// `ut_decoration_flags_main_window_error_is_surfaced_from_the_arkts_throw`).
+    ///
+    /// # Errors
+    /// - The ArkTS main-window rejection when `window_id` is 0 (accepted by the
+    ///   Rust-side validation on purpose -- see #238 above).
+    /// - The Rust-side [`validate_window_id`] error for negative ids: the only
+    ///   error this facade produces itself for this call.
+    /// - The bridge-transport errors (session not ready, invoke timeout,
+    ///   rejection) surfaced by [`WindowClient::call`].
     pub async fn set_window_decoration_flags(&self, window_id: i64, flags: i32) -> Result<()> {
         validate_window_id(window_id)?;
         self.call::<DecorationFlagsRequest, WindowAcknowledgement>(
@@ -1118,6 +1138,67 @@ mod tests {
             "ohos.window.DecorationFlagsRequest"
         );
         assert!(validate_window_id(-1).is_err());
+    }
+
+    #[test]
+    fn ut_decoration_flags_facade_body_has_no_rust_side_main_window_pregate() {
+        // Brief (A55R-5 review follow-up): the test above pins that id 0 passes
+        // the shared validation, but a future main-window pre-gate added inside
+        // the `set_window_decoration_flags` body (before the dispatch) would
+        // still turn the #238 Err into a Rust validation message. A live
+        // behavioral probe ("call the facade and assert the error comes from
+        // the transport, not a Rust gate") is not executable on the host:
+        // `BridgeRuntime` is only constructible from a real N-API Env, so a
+        // `WindowClient` cannot be built here (same limitation recorded on
+        // `validate_resize_args`). The next-strongest enforceable assertion
+        // pins the facade body itself: it must keep the shared window-id
+        // validation, dispatch the frozen wire request, and contain none of the
+        // shapes a main-window pre-gate would take (an id comparison, an early
+        // `return Err`, or a delegate to a main-window classifier). This fails
+        // the build the moment such a gate is added to the facade.
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        let body = facade_fn_body(src, "set_window_decoration_flags");
+        assert!(
+            body.contains("validate_window_id(window_id)"),
+            "set_window_decoration_flags must keep the shared window-id validation"
+        );
+        assert!(
+            body.contains("DecorationFlagsRequest { window_id, flags }"),
+            "set_window_decoration_flags must dispatch the frozen DecorationFlagsRequest wire contract"
+        );
+        for pregate_marker in [
+            "window_id == 0",
+            "window_id != 0",
+            "window_id > 0",
+            "window_id < 0",
+            "return Err(",
+            "is_uiability_main_window",
+            "isUIAbilityMainWindow",
+        ] {
+            assert!(
+                !body.contains(pregate_marker),
+                "set_window_decoration_flags gained a Rust-side main-window pre-gate \
+                 (marker {pregate_marker:?}) -- the #238 Err must come from the ArkTS throw, \
+                 not from a Rust-side gate"
+            );
+        }
+    }
+
+    /// Slices the body of one `fn <name>(...)` definition out of a source file.
+    ///
+    /// Returns everything from the `fn` keyword to the next item boundary (the
+    /// next doc comment or `pub` item at the impl-block indent). Good enough
+    /// for the uniformly rustfmt-formatted facade methods in this file; the
+    /// assertion fails loudly if the function is renamed or removed.
+    fn facade_fn_body<'a>(src: &'a str, fn_name: &str) -> &'a str {
+        let needle = format!("fn {fn_name}(");
+        let start = src.find(&needle).unwrap_or_else(|| {
+            panic!("facade fn {fn_name} not found in lib.rs");
+        });
+        let rest = &src[start..];
+        let next_doc = rest.find("\n    ///").unwrap_or(rest.len());
+        let next_item = rest.find("\n    pub ").unwrap_or(rest.len());
+        &rest[..next_doc.min(next_item)]
     }
 
     #[test]
