@@ -525,6 +525,12 @@
 #[no_mangle] extern "C" fn OH_ResourceManager_InitNativeResourceManager() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_IsRawDir() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_OpenRawDir() {}
+// round 5 (2026-10-28): missed by round 4 -- both exist in the resource-manager
+// binding since 0.3.3 (not a dependency-upgrade artifact) and are referenced by
+// the plugin-resource + demo_native host links (LNK2019). Completes the
+// OH_ResourceManager_* family covered above (29/29).
+#[no_mangle] extern "C" fn OH_ResourceManager_OpenRawFile() {}
+#[no_mangle] extern "C" fn OH_ResourceManager_OpenRawFile64() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_ReadRawFile() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_ReadRawFile64() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_ReleaseNativeResourceManager() {}
