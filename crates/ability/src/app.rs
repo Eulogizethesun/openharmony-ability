@@ -2191,24 +2191,50 @@ mod tests {
 
         assert!(inner.deactivate_surface("owner"));
 
-        // All four entries survive untouched in BOTH tables.
-        assert!(
-            inner.window_rects.get(&0).is_some(),
+        // All four entries survive untouched in BOTH tables - pinned at value
+        // level, not presence-only: deactivation must not remove, replace, or
+        // overwrite any seeded entry.
+        assert_eq!(
+            inner.window_rects.get(&0),
+            Some(&Rect {
+                top: 1,
+                left: 2,
+                width: 3,
+                height: 4,
+            }),
             "deactivate_surface must not touch window_rects: the main-window \
              (id 0) entry is emptied only by release_render_owner"
         );
-        assert!(
-            inner.inner_rects.get(&0).is_some(),
+        assert_eq!(
+            inner.inner_rects.get(&0),
+            Some(&Rect {
+                top: 5,
+                left: 6,
+                width: 7,
+                height: 8,
+            }),
             "deactivate_surface must not touch inner_rects: the main-window \
              (id 0) entry is emptied only by release_render_owner"
         );
-        assert!(
-            inner.window_rects.get(&2).is_some(),
+        assert_eq!(
+            inner.window_rects.get(&2),
+            Some(&Rect {
+                top: 11,
+                left: 12,
+                width: 13,
+                height: 14,
+            }),
             "deactivate_surface must not touch window_rects: the id 2 entry \
              is emptied only along its own teardown lifecycle"
         );
-        assert!(
-            inner.inner_rects.get(&2).is_some(),
+        assert_eq!(
+            inner.inner_rects.get(&2),
+            Some(&Rect {
+                top: 15,
+                left: 16,
+                width: 17,
+                height: 18,
+            }),
             "deactivate_surface must not touch inner_rects: the id 2 entry \
              is emptied only along its own teardown lifecycle"
         );
