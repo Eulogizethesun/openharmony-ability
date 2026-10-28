@@ -24,13 +24,17 @@
 #
 # New unresolved `OH_*` symbol (LNK2019): add
 # `#[no_mangle] extern "C" fn <SymbolName>() {}` DIRECTLY to stubs.rs
-# (ArkUI/IME/XComponent/dlopen/hilog/resource-manager family) or stub-web.rs
-# (ArkWeb family), then rerun this script. It compiles those two sources into
-# the archives - it NEVER reads the symbols_roundN.txt / symbols_web.txt files;
-# those are documentation records only, and this script diff-verifies them
-# against the sources on every run (update the record in the same change or the
-# script fails with a drift error). See host-stubs/README.md for the full
-# workflow.
+# (ArkUI/IME/XComponent/dlopen/hilog/resource-manager family, plus the
+# round-4 ArkWeb scheme set) or stub-web.rs (ArkWeb scheme-handler/resource
+# family pulled by links that include ohos-web-sys), then rerun this script.
+# It compiles those two sources into the archives - it NEVER reads the
+# symbols_roundN.txt / symbols_web.txt files; those are documentation records
+# only, and this script diff-verifies them against the sources on every run
+# (update the record in the same change or the script fails with a drift
+# error). It also drift-checks the cross-repo set-bounds sentinel constant
+# recorded in sentinel_constants.txt. The drift checks prove the records do
+# not rot - they do NOT prove a link will succeed. See host-stubs/README.md
+# for the full workflow.
 
 $ErrorActionPreference = "Stop"
 
@@ -108,6 +112,46 @@ Assert-SymbolRecord $stubSymbols @(
 ) "stubs.rs"
 $webSymbols = Get-StubSymbols (Join-Path $stubDir "stub-web.rs")
 Assert-SymbolRecord $webSymbols @((Join-Path $stubDir "symbols_web.txt")) "stub-web.rs"
+
+# --- 0b. cross-repo sentinel-constant drift check -----------------------------
+# F12: the ArkTS set-bounds sentinel literal (i32::MIN) is part of the
+# cross-repo wire contract with tauri-runtime-wry and no host UT can observe
+# the ArkTS-only wire, so it is pinned by a record file the same way the
+# symbol sets are. As with the symbol records this verifies documentation
+# does not rot - it does NOT verify that a link will succeed.
+function Assert-SentinelConstants([string]$RecordPath) {
+    if (-not (Test-Path $RecordPath)) {
+        throw "sentinel record missing: $RecordPath"
+    }
+    $entries = Get-Content $RecordPath |
+        Where-Object { $_.Trim() -ne "" -and -not $_.Trim().StartsWith("#") }
+    if (-not $entries -or @($entries).Count -eq 0) {
+        throw "sentinel record empty: $RecordPath"
+    }
+    foreach ($entry in @($entries)) {
+        $parts = @($entry.Trim() -split '\s+')
+        if ($parts.Count -ne 3) {
+            throw ("malformed sentinel record entry (expected '<file> <name> <literal>'): " + $entry)
+        }
+        $file = $parts[0]; $name = $parts[1]; $literal = $parts[2]
+        $sourcePath = Join-Path $repoRoot $file
+        if (-not (Test-Path $sourcePath)) {
+            throw "sentinel source file missing: $file"
+        }
+        $content = Get-Content $sourcePath -Raw
+        $pattern = ('const\s+' + [regex]::Escape($name) +
+            '\s*:\s*number\s*=\s*' + [regex]::Escape($literal) + '\s*;')
+        if (-not ($content -cmatch $pattern)) {
+            throw ("sentinel constant drifted: $file no longer declares " +
+                "'const ${name}: number = ${literal};' - the i32::MIN set-bounds " +
+                "sentinel is a cross-repo wire contract with tauri-runtime-wry; " +
+                "update host-stubs/sentinel_constants.txt only if the contract " +
+                "itself changed on both sides")
+        }
+        Write-Host ("sentinel constant verified: $name = $literal in $file")
+    }
+}
+Assert-SentinelConstants (Join-Path $stubDir "sentinel_constants.txt")
 
 # --- 1. empty per-name archives -------------------------------------------
 # Compile one empty object, then archive it under every link name the

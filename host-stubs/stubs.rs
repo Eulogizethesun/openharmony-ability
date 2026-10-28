@@ -526,9 +526,15 @@
 #[no_mangle] extern "C" fn OH_ResourceManager_IsRawDir() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_OpenRawDir() {}
 // round 5 (2026-10-28): missed by round 4 -- both exist in the resource-manager
-// binding since 0.3.3 (not a dependency-upgrade artifact) and are referenced by
-// the plugin-resource + demo_native host links (LNK2019). Completes the
-// OH_ResourceManager_* family covered above (29/29).
+// binding since at least 0.3.1 (the version Cargo.lock pins; 0.3.1-0.3.4 all
+// declare the same 67 OH_ResourceManager_* symbols, so this is not a
+// dependency-upgrade artifact) and are pulled into the plugin-resource +
+// demo_native host links through the binding crate (LNK2019).
+// Scope (PR#55 review gate F2): the stubs cover the OH_ResourceManager_*
+// symbols the workspace's host links actually reference -- 29 of the 67 the
+// binding declares. The remaining 38 are unreferenced today and deliberately
+// not stubbed; a future link that pulls one fails with LNK2019 and gets its
+// stub added here on demand.
 #[no_mangle] extern "C" fn OH_ResourceManager_OpenRawFile() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_OpenRawFile64() {}
 #[no_mangle] extern "C" fn OH_ResourceManager_ReadRawFile() {}
