@@ -2042,7 +2042,8 @@ mod tests {
             );
             // A different spawned window's entries must survive this teardown
             // in BOTH tables (window ids are monotonic and removal is by id
-            // only).
+            // only). Seeded as a near-miss pair (top/left transposed) and
+            // pinned at value level, not presence-only.
             inner.window_rects.insert(
                 34,
                 Rect {
@@ -2080,13 +2081,25 @@ mod tests {
              must clear them as a pair too (no bounded-leak dead entries)",
             spawned_id
         );
-        assert!(
-            inner.window_rects.get(&34).is_some(),
+        assert_eq!(
+            inner.window_rects.get(&34),
+            Some(&Rect {
+                top: 1,
+                left: 2,
+                width: 3,
+                height: 4,
+            }),
             "unregister_ui_ability_state must not touch other windows' \
              window_rects entries"
         );
-        assert!(
-            inner.inner_rects.get(&34).is_some(),
+        assert_eq!(
+            inner.inner_rects.get(&34),
+            Some(&Rect {
+                top: 2,
+                left: 1,
+                width: 3,
+                height: 4,
+            }),
             "unregister_ui_ability_state must not touch other windows' \
              inner_rects entries"
         );
