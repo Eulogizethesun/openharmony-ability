@@ -1133,7 +1133,7 @@ mod tests {
     // decoration-reject cases) regexes /not supported on OpenHarmony/, which
     // is the Rust-side tauri-runtime-wry message; this repo's ArkTS throw
     // inserts "the" plus a window id, so it does not match, and window-ops
-    // only touches set-decoration-flags on the Float success path. The ArkTS
+    // only touches set-decoration-flags on the sub-window success path. The ArkTS
     // error text itself therefore has no end-to-end assertion -- the host UT
     // below pins the non-pre-gate + payload contract only.
     #[test]

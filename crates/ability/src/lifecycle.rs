@@ -570,8 +570,8 @@ fn make_on_avoid_area_change<'a>(
 
         // The avoid-area cache and Event::AvoidAreaChange remain primary-window scoped
         // until per-window avoid areas land (same known-limitation family as NG7).
-        // Sub-window registrations from the existing Float path call back without the
-        // trailing id, degrade to 0, and keep their current behavior.
+        // Sub-window registrations from the existing sub-window path call back
+        // without the trailing id, degrade to 0, and keep their current behavior.
         if window_id == 0 {
             {
                 let mut inner = avoid_area_change_app.inner.write().unwrap();
