@@ -842,18 +842,25 @@ export class WindowPlugin extends AsyncPluginBase {
           // Main window (tao windowId 0) with an unreadable/degenerate
           // drawableRect (content not loaded yet, abnormal state) — no precise
           // value: explicit failure, never resize to a guessed size.
-          // NOTE: the sub-window branch below is keyed on windowId, not
-          // WindowProperties.type -- this app's sub-windows are created
-          // via createSubWindow(WithOptions), which the framework reports as
-          // an APP SUB window (not TYPE_FLOAT), so a type check would never
-          // match (issue #97 review finding).
+          // NOTE: the non-main window branch below is keyed on windowId, not
+          // WindowProperties.type — windowId is the only discriminator for
+          // the two families that branch covers: this app's sub-windows are
+          // created via createSubWindow(WithOptions), which the framework
+          // reports as an APP SUB window (not TYPE_FLOAT), so a type check
+          // would never match them, and spawned UIAbility instances are not
+          // sub-windows at all, so a type check would not discriminate them
+          // either (issue #97 review finding).
           throw new Error(
             `no precise decor available (outer=${outer.width}x${outer.height}, drawable=${drawable.width}x${drawable.height} — content not loaded / window state abnormal)`,
           );
         }
-        // else: sub-window (tao windowId > 0) with degenerate drawableRect
-        // — sub-windows are created with decorEnabled:false, so chrome 0 is
-        // exact BY CONSTRUCTION (not an estimate): outer = inner directly.
+        // else: non-main window (tao windowId > 0 — sub-window or spawned
+        // UIAbility instance) with degenerate drawableRect — sub-windows are
+        // created with decorEnabled:false, so chrome 0 is exact BY
+        // CONSTRUCTION (not an estimate): outer = inner directly. Spawned
+        // UIAbility instances carry OS-managed chrome, so chrome-0 here is a
+        // silent off-by-chrome approximation for them (the main window's
+        // parallel branch throws instead).
         // Positive evidence for issue #97 verification: the exact chrome used.
         hilog.info(
           DOMAIN,
@@ -978,11 +985,15 @@ export class WindowPlugin extends AsyncPluginBase {
             );
           }
         } else if (request.windowId > 0) {
-          // Sub-window (tao windowId > 0) with an unreadable/degenerate
-          // drawableRect — sub-windows are created with decorEnabled:false,
-          // so chrome 0 is exact BY CONSTRUCTION (same reasoning as the
-          // resize-inner branch above; keyed on windowId, not
-          // WindowProperties.type, per the issue #97 review finding).
+          // Non-main window (tao windowId > 0 — sub-window or spawned
+          // UIAbility instance) with an unreadable/degenerate drawableRect —
+          // sub-windows are created with decorEnabled:false, so chrome 0 is
+          // exact BY CONSTRUCTION (same reasoning as the resize-inner branch
+          // above; keyed on windowId, not WindowProperties.type, per the
+          // issue #97 review finding). (a spawned UIAbility instance's chrome
+          // is OS-managed and nonzero, so its chrome-0 use is a silent
+          // approximation; the main window's parallel arm below degrades with
+          // a WARN — this arm is silent)
         } else {
           // Main window with an unreadable drawableRect (content not loaded /
           // abnormal state — e.g. the builder-time limits dispatch races
