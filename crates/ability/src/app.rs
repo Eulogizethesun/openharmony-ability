@@ -1501,7 +1501,7 @@ pub fn notify_window_status(window_id: i32, status: i32) {
 }
 
 /// Drain all pending window status changes.
-/// Called by tauri-runtime-wry event loop (alongside `drain_pending_window_closes`)
+/// Called by tao's OHOS event loop (alongside `drain_pending_window_closes`)
 /// to feed system window status back into tao mirror bits.
 pub fn drain_pending_window_status() -> Vec<(i32, i32)> {
     PENDING_WINDOW_STATUS
