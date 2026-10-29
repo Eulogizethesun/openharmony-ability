@@ -2703,11 +2703,12 @@ class WebviewSurface {
     // removeCache, clearHistory) do not cover the cookie store --
     // WebCookieManager is process-global, so wipe it first (false = the
     // non-incognito store; both persistent and session cookies). Defensive
-    // typeof probe + try/catch (#222 precedent): the SDK-family d.ts marks
-    // these @since 20 but real-device evidence contradicts the annotation,
-    // so the declaration cannot be trusted literally. Unavailable or
-    // throwing: disclose via warn and continue the existing cleanup --
-    // zero blocking, zero panic (design D4/R10).
+    // typeof probe + try/catch (#222 precedent): clearAllCookiesSync
+    // (incognito?) is a single-block @since 11 API in @ohos.web.webview.d.ts
+    // (local SDK d.ts:1952) -- the probe stays as a device-build availability
+    // guard (shipped API surface varies), not an annotation contradiction.
+    // Unavailable or throwing: disclose via warn and continue the existing
+    // cleanup -- zero blocking, zero panic (design D4/R10).
     try {
       if (typeof webview?.WebCookieManager?.clearAllCookiesSync === "function") {
         webview.WebCookieManager.clearAllCookiesSync(false);

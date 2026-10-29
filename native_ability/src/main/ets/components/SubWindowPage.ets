@@ -189,9 +189,9 @@ struct SubWindowPage {
           // PENDING_WINDOW_FOCUS queue (notifyWindowFocus -> event-loop drain
           // with edge dedup + paired-blur synthesis). `windowFocusChange` is
           // absent from the local SDK20 @ohos.window.d.ets; `windowEvent`
-          // (@since 20, WINDOW_ACTIVE=2 / WINDOW_INACTIVE=3) is the equivalent
-          // surface. Everything is probed at runtime: a host without the API
-          // degrades to a structured warn, never a panic.
+          // @since 10 (revised 11) — WINDOW_ACTIVE=2 / WINDOW_INACTIVE=3 —
+          // is the equivalent surface. Everything is probed at runtime: a host
+          // without the API degrades to a structured warn, never a panic.
           try {
             if (typeof this.windowClass.on !== "function") {
               hilog.warn(
