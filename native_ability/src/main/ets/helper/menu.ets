@@ -182,7 +182,9 @@ export class PredefinedActionExecutor {
 
   /**
    * Close the target window (macOS-like: window-level operation).
-   * - Sub-window (id > 0): notify Rust + destroyWindow via WindowManager
+   * - Non-main window (id > 0 — sub-window or spawned UIAbility instance):
+   *   notify Rust + WindowManager.closeWindow() — sub-windows are destroyed
+   *   via destroyWindow, spawned UIAbility instances terminateSelf
    * - Main window (id = 0): hideAbility() — cannot destroy main window (WindowStage becomes invalid)
    *
    * Target determination:
@@ -195,10 +197,12 @@ export class PredefinedActionExecutor {
       return;
     }
 
-    const isSubWindow = windowId > 0;
+    const isNonMainWindow = windowId > 0;
 
-    if (isSubWindow) {
-      // Sub-window: notify Rust + use WindowManager.closeWindow()
+    if (isNonMainWindow) {
+      // Non-main window: notify Rust + use WindowManager.closeWindow() —
+      // sub-windows are destroyed via destroyWindow, spawned UIAbility
+      // instances terminateSelf via their registered context
       try {
         const nativeModule: Module | undefined = AppStorage.get<Module>(NATIVE_MODULE_STORAGE_KEY);
         if (nativeModule && typeof nativeModule.notifyWindowClose === 'function') {
@@ -206,7 +210,7 @@ export class PredefinedActionExecutor {
         }
         await WindowManager.getInstance().closeWindow(windowId);
       } catch (e) {
-        hilog.warn(DOMAIN, 'Menu', 'Close sub-window failed: %{public}s', String(e));
+        hilog.warn(DOMAIN, 'Menu', 'Close non-main window failed: %{public}s', String(e));
       }
     } else {
       // Main window: hideAbility (cannot destroyWindow as WindowStage becomes invalid)

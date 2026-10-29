@@ -1854,8 +1854,9 @@ function handleControllerAttached(data: ManagedWebview): void {
     // controller stays null.
     notifyPrimaryWebviewController(data.controller as ESObject);
 
-    // === §14 fix: register sub-window controller for menu.getTargetController ===
-    // Sub-windows only (windowId > 0): main window keeps the one-shot path above.
+    // === §14 fix: register non-main-window controller for menu.getTargetController ===
+    // Non-main windows only (windowId > 0 — sub-window or spawned UIAbility
+    // instance): main window keeps the one-shot path above.
     // data.controller is the live attached controller at this point (onControllerAttached
     // just fired), so runJavaScript/getSelection work when Tray Copy later resolves it.
     const wid = data.windowId ?? 0;
@@ -2451,25 +2452,26 @@ class WebviewSurface {
     if (payload.devtools) {
       enableWebDebuggingIfAvailable();
     }
-    // Sub-window webview mounting: when windowId is provided, use the sub-window's
-    // UIContext and component root from WindowManager instead of this module's host.
+    // Non-main-window webview mounting: when windowId is provided, use that
+    // window's UIContext and component root from WindowManager instead of this
+    // module's host.
     // (windowId already declared above at blur injection)
-    const isSubWindow = windowId > 0;
+    const isNonMainWindow = windowId > 0;
     hilog.info(
       0x1999,
       "WebviewSurface",
-      "create: id=%{public}s windowId=%{public}d isSubWindow=%{public}s naturalLayout=%{public}s",
+      "create: id=%{public}s windowId=%{public}d isNonMainWindow=%{public}s naturalLayout=%{public}s",
       payload.id,
       windowId,
-      isSubWindow ? "true" : "false",
+      isNonMainWindow ? "true" : "false",
       String(naturalLayout),
     );
-    const wm = isSubWindow ? WindowManager.getInstance() : null;
+    const wm = isNonMainWindow ? WindowManager.getInstance() : null;
 
-    // Timing guard: if sub-window's componentRoot is not yet registered
-    // (SubWindowPage hasn't aboutToAppear), defer the entire create until
-    // registerComponentRoot fires.
-    if (isSubWindow && wm !== null && wm.getComponentRoot(windowId) === undefined) {
+    // Timing guard: if the non-main window's componentRoot is not yet registered
+    // (SubWindowPage — or the spawned window's page — hasn't aboutToAppear),
+    // defer the entire create until registerComponentRoot fires.
+    if (isNonMainWindow && wm !== null && wm.getComponentRoot(windowId) === undefined) {
       hilog.info(
         0x1999,
         "WebviewSurface",
@@ -2491,7 +2493,7 @@ class WebviewSurface {
       subUiCtx !== undefined ? "found" : "undefined",
       subRoot !== undefined ? "found" : "undefined",
     );
-    const builderUiCtx = isSubWindow && subUiCtx ? subUiCtx : this.pluginContext.getUIContext();
+    const builderUiCtx = isNonMainWindow && subUiCtx ? subUiCtx : this.pluginContext.getUIContext();
     const node = new BuilderNode<[ManagedWebview]>(builderUiCtx);
     const entry = new WebviewEntry(data, node);
     // Wire up close-window callback: when the webview navigates to close-window.invalid,
@@ -2552,8 +2554,8 @@ class WebviewSurface {
           "create: mounted to parentHandle=%{public}s",
           parentHandle,
         );
-      } else if (isSubWindow && subRoot) {
-        // Mount into the sub-window's component root
+      } else if (isNonMainWindow && subRoot) {
+        // Mount into the non-main window's component root
         subRoot.appendChild(frameNode);
         hilog.info(
           0x1999,
