@@ -372,7 +372,7 @@ pub enum PluginLifecycleEvent {
         /// Originating UIAbility instance id (0 = primary).
         window_id: i64,
         /// Raw OHOS `WindowStageEventType` value (1 = SHOWN, 2 = ACTIVE,
-        /// 3 = INACTIVE, 4 = HIDDEN).
+        /// 3 = INACTIVE, 4 = HIDDEN, 5 = RESUMED, 6 = PAUSED).
         event_type: i32,
     },
     /// The ArkUI page context became ready (from `DefaultXComponent`).

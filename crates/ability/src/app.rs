@@ -1311,9 +1311,9 @@ impl Default for OpenHarmonyApp {
 // 3. All interior mutability is provided by `Arc<RwLock>`/`Arc<RefCell>`/
 //    `Arc<Mutex>` guards -- there is no `&mut` aliasing of `OpenHarmonyAppInner`.
 //
-// This impl cannot be removed yet: `tauri/crates/tauri/src/ohos.rs:18` holds a
+// This impl cannot be removed yet: `tauri/crates/tauri/src/ohos.rs:33` holds a
 // `static APP: Mutex<Option<OpenHarmonyApp>>` (requires `Send`), and
-// `crates/derive/src/lib.rs:85` constructs a `LazyLock<OpenHarmonyApp>` (requires
+// `crates/derive/src/lib.rs:98-99` constructs a `LazyLock<OpenHarmonyApp>` (requires
 // `Send + Sync`). Fully eliminating the unsafe impl would require splitting the
 // native handles out of `OpenHarmonyAppInner` into a main-thread-only /
 // thread-local structure -- tracked as future work.

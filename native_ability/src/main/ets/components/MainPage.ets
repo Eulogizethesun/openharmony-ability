@@ -229,9 +229,9 @@ struct MainPage {
     // ohos-cursor-passthrough 3.2: the feed goes through the shared helper
     // (single source of truth for the screen-global coordinate extraction
     // and guards -- D2). The module reference passed here is this page's OWN
-    // `this.nativeModule` (declared :41, loaded :61) -- deliberately NOT an
+    // `this.nativeModule` (declared :42, loaded :62) -- deliberately NOT an
     // AppStorage read: AppStorage is a process-global single value a spawned
-    // instance would overwrite mid-attachment (admonition at :34).
+    // instance would overwrite mid-attachment (admonition at :35-36).
     .onMouse((event: MouseEvent) => {
       if (event.action === MouseAction.Move || event.action === MouseAction.Press) {
         feedCursorFromMouse(this.nativeModule, event);
