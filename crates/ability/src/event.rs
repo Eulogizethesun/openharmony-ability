@@ -82,13 +82,16 @@ pub enum Event<'a> {
     /// alias window.on("windowSizeChange")
     /// <https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V5/js-apis-window-V5#onwindowsizechange7>
     ///
-    /// `window_id` is the OHOS window this resize originated from (0 = main,
-    /// any positive value = a sub-window). Populated by the
+    /// `window_id` is the OHOS window this resize originated from (0 = primary
+    /// main window; any positive value = a sub-window or a spawned UIAbility
+    /// instance -- each instance registers windowSizeChange under its own
+    /// abilityWindowId > 0). Populated by the
     /// window_resize lifecycle closure from the `windowId` field ArkTS wraps
     /// into the options (design.md D2/D6). Phase 3: tao's run_loop routes the
     /// event by this id.
     WindowResize {
-        /// OHOS window the resize originated from (0 = main, positive = sub-window).
+        /// OHOS window the resize originated from (0 = primary main window,
+        /// positive = sub-window or spawned UIAbility instance).
         window_id: i64,
         /// New window size in px.
         size: Size,

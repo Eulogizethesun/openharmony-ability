@@ -925,21 +925,28 @@ impl WindowClient {
     /// minimizable=4, resizable=8) that gates the matching window operations
     /// on the ArkTS side.
     ///
-    /// Issue #238 contract: the UIAbility MAIN window (id 0) is rejected by the
+    /// Issue #238 contract: every UIAbility MAIN window is rejected by the
     /// ArkTS `WindowManager.setDecorationFlags` branch -- its decoration
     /// buttons are OS-managed and the platform has no API that maps to the
     /// operation-level enable/disable flag semantics -- so the bridge invoke
     /// rejects and this method surfaces the ArkTS error text ("...not supported
     /// on the OpenHarmony main window..."). Only sub-windows honor the flags
-    /// (LocalStorage-driven sub-window page buttons). The Rust side adds NO
-    /// main-window gate of its own: id 0 must reach the ArkTS throw, so the
-    /// caller always sees the platform rejection, never a Rust validation
-    /// message (pinned by
+    /// (LocalStorage-driven sub-window page buttons). The rejection is
+    /// kind-based, not id-based: the ArkTS branch keys on
+    /// `WindowManager.isUIAbilityMainWindow` (WindowManager.ets), which rejects
+    /// the primary instance's id 0 AND a spawned UIAbility instance's id > 0 --
+    /// a subsequent UIAbility instance has id > 0 but is still a system-managed
+    /// main window. The Rust side adds NO gate of its own: every
+    /// UIAbility-main-window id must reach the ArkTS throw, so the caller
+    /// always sees the platform rejection, never a Rust validation message
+    /// (pinned for the id-0 path by
     /// `ut_decoration_flags_main_window_error_is_surfaced_from_the_arkts_throw`).
     ///
     /// # Errors
-    /// - The ArkTS main-window rejection when `window_id` is 0 (accepted by the
-    ///   Rust-side validation on purpose -- see #238 above).
+    /// - The ArkTS main-window rejection when `window_id` is a UIAbility main
+    ///   window (kind-based per `WindowManager.isUIAbilityMainWindow`: the
+    ///   primary's id 0, or a spawned UIAbility instance's id > 0) -- accepted
+    ///   by the Rust-side validation on purpose -- see #238 above.
     /// - The Rust-side [`validate_window_id`] error for negative ids: the only
     ///   error this facade produces itself for this call.
     /// - The bridge-transport errors (session not ready, invoke timeout,

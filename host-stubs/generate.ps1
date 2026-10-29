@@ -27,11 +27,12 @@
 # (ArkUI/IME/XComponent/dlopen/hilog/resource-manager family, plus the
 # round-4 ArkWeb scheme set) or stub-web.rs (ArkWeb scheme-handler/resource
 # family pulled by links that include ohos-web-sys), then rerun this script.
-# It compiles those two sources into the archives - it NEVER reads the
-# symbols_roundN.txt / symbols_web.txt files; those are documentation records
-# only, and this script diff-verifies them against the sources on every run
-# (update the record in the same change or the script fails with a drift
-# error). It also drift-checks the cross-repo set-bounds sentinel constant
+# It compiles those two sources into the archives - that compile leg NEVER
+# reads the symbols_roundN.txt / symbols_web.txt files; those are documentation
+# records only. A separate verification leg (Assert-SymbolRecord) DOES read
+# them: it diff-verifies each record against the symbol set extracted from the
+# sources on every run (update the record in the same change or the script
+# fails with a drift error). It also drift-checks the cross-repo set-bounds sentinel constant
 # recorded in sentinel_constants.txt (before matching, the check strips
 # line comments, doc-comment interior lines, and multi-line /* */ block
 # comment spans, and anchors the pattern at line start, so a comment

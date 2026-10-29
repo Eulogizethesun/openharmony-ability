@@ -79,7 +79,8 @@ pub struct OpenHarmonyAppInner {
     id: i64,
     pub(crate) configuration: Configuration,
     pub(crate) rect: Rect,
-    /// Per-window rect cache keyed by windowId (0 = main window, >0 = sub-window).
+    /// Per-window rect cache keyed by windowId (0 = primary main window, >0 =
+    /// sub-window or spawned UIAbility instance).
     /// Written by the `window_rect_change` lifecycle closure (lifecycle.rs) from ArkTS
     /// windowRectChange callbacks; read by tao's inner_size/outer_position/etc via
     /// `window_rect_for(window_id)`. See design.md D1/D4 (openspec change

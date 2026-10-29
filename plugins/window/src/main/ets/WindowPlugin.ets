@@ -1228,13 +1228,13 @@ export class WindowPlugin extends AsyncPluginBase {
         } else {
           if (deviceInfo.sdkApiVersion < 20) {
             throw new Error(
-              `enableDrag requires API20+ for sub-windows, current ${deviceInfo.sdkApiVersion}`,
+              `enableDrag requires API20+ for non-main windows (sub-window or spawned UIAbility instance), current ${deviceInfo.sdkApiVersion}`,
             );
           }
           hilog.info(
             DOMAIN,
             TAG,
-            "set-resize-by-drag: sub-window enableDrag=%{public}s",
+            "set-resize-by-drag: non-main window enableDrag=%{public}s",
             String(request.enable),
           );
           await win.enableDrag(request.enable);

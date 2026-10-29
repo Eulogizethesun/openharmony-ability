@@ -17,8 +17,9 @@ pub struct ContentRect {
     pub reason: RectChangeReason,
     /// The new content rectangle in window coordinates.
     pub rect: Rect,
-    /// Window this rect change originated from (0 = main window, any positive
-    /// value = a sub-window).
+    /// Window this rect change originated from (0 = primary main window; any
+    /// positive value = a sub-window or a spawned UIAbility instance, which
+    /// registers its own resize callbacks under its abilityWindowId > 0).
     /// Populated by the window_rect_change lifecycle closure from the windowId wrapped
     /// into the options by ArkTS (design.md D2). Phase 2 does not consume this field in
     /// tao's run_loop (the match arm stays unchanged); Phase 3 routes the event by it.

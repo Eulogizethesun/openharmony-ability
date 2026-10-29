@@ -17,16 +17,20 @@ import { DOMAIN } from '../helper/constants';
  * module imports this class.
  */
 export class WindowAttachmentRegistry {
-  // Per-window *attached* raw WebviewController (keyed by windowId, sub-windows only).
+  // Per-window *attached* raw WebviewController (keyed by windowId — non-main
+  // windows only: sub-windows and spawned UIAbility instances, both id > 0).
   // Filled by WebviewPlugin.handleControllerAttached when onControllerAttached fires —
   // at that point data.controller is the live attached controller (runJavaScript works).
-  // menu.getTargetController reads this map so Tray Copy/Cut resolve the sub-window's
-  // controller instead of falling back to the one-shot main executor.controller.
+  // menu.getTargetController reads this map so Tray Copy/Cut resolve the target
+  // non-main window's controller instead of falling back to the one-shot main
+  // executor.controller.
   private webviewControllers: Map<number, web_webview.WebviewController> = new Map();
   private uiContexts: Map<number, UIContext> = new Map();
-  // Per-window component root FrameNode (sub-window mode only). DefaultXComponent in
-  // sub-window mode (no moduleName, windowId > 0) creates a root FrameNode and registers
-  // it here so WebviewSurface.create can mount webviews into the correct window.
+  // Per-window component root FrameNode (two families: sub-windows AND spawned
+  // UIAbility instances). DefaultXComponent registers a root FrameNode in both
+  // non-main branches — sub-window mode (no moduleName, windowId > 0) and
+  // spawned-UIAbility mode (moduleName set, windowId > 0) — so WebviewSurface.create
+  // can mount webviews into the correct window.
   private componentRoots: Map<number, FrameNode> = new Map();
   // Persistent per-window blur radius (set by applyWindowBlur, read by WebviewPlugin BuildWebview).
   private windowBlurRadii: Map<number, number> = new Map();
@@ -53,8 +57,9 @@ export class WindowAttachmentRegistry {
   // Register the per-window *attached* raw WebviewController. Called from
   // WebviewPlugin.handleControllerAttached (onControllerAttached callback) — by then
   // the controller is attached to a live Web component and runJavaScript is usable.
-  // Only sub-windows (windowId > 0) are registered: the main window (id=0) keeps the
-  // one-shot primaryWebviewControllerCallback path unchanged (captured first-attach main
+  // Only non-main windows (windowId > 0 — sub-windows or spawned UIAbility instances)
+  // are registered: the primary window (id=0) keeps the one-shot
+  // primaryWebviewControllerCallback path unchanged (captured first-attach main
   // controller into executor.controller), so this map never diverges from main behavior.
   registerWebviewController(windowId: number, controller: web_webview.WebviewController): void {
     this.webviewControllers.set(windowId, controller);

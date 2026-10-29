@@ -3,7 +3,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Color mode of the application.
 pub enum ColorMode {
-    /// Mode not set by the system (sentinel, OHOS `COLOR_MODE_NO_SET`).
+    /// Mode not set by the system (sentinel, OHOS `COLOR_MODE_NOT_SET`).
     NoSet = -1,
     /// Dark mode (OHOS `COLOR_MODE_DARK`).
     Dark = 0,

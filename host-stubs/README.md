@@ -48,8 +48,9 @@ Commands, so a fresh clone must still run it manually.
      present on every host link);
    - `stub-web.rs` - the ArkWeb scheme-handler/resource symbols that are only
      pulled by links including `ohos-web-sys` (lands in `ohweb.lib`).
-2. Rerun `generate.ps1` (the script compiles the two sources into the archives;
-   it never reads the symbol record files).
+2. Rerun `generate.ps1` (the script's compile leg builds the two sources into
+   the archives and never reads the symbol record files; a separate
+   verification leg does read them - see step 3).
 3. Update the symbol record files **in the same change** - `generate.ps1`
    diff-verifies them against the sources and fails on drift. Scope of that
    check: it keeps the documentation records from rotting, it does NOT prove

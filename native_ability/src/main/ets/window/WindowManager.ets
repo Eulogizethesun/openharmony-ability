@@ -2281,8 +2281,9 @@ export class WindowManager {
   // Register the per-window *attached* raw WebviewController. Called from
   // WebviewPlugin.handleControllerAttached (onControllerAttached callback) — by then
   // the controller is attached to a live Web component and runJavaScript is usable.
-  // Only sub-windows (windowId > 0) are registered: the main window (id=0) keeps the
-  // one-shot primaryWebviewControllerCallback path unchanged (captured first-attach main
+  // Only non-main windows (windowId > 0 — sub-windows or spawned UIAbility instances)
+  // are registered: the primary window (id=0) keeps the one-shot
+  // primaryWebviewControllerCallback path unchanged (captured first-attach main
   // controller into executor.controller), so this map never diverges from main behavior.
   registerWebviewController(windowId: number, controller: web_webview.WebviewController): void {
     this.attachments.registerWebviewController(windowId, controller);
