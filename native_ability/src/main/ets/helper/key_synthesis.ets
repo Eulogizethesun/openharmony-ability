@@ -305,7 +305,12 @@ function dispatchKeyEvent(
       String(errCode),
       String(err),
     );
-    if (errCode === 17100001) {
+    // napi_throw_error passes the code as a C string, so on device err.code is
+    // the STRING "17100001" — a bare `errCode === 17100001` never matches (the
+    // static number type hides this) and the dead entry would survive every
+    // key press. Number() normalizes both shapes; for a code-less throw it is
+    // NaN, which never equals, so only 17100001 prunes.
+    if (Number(errCode) === 17100001) {
       controllers.delete(windowId);
     }
     return false;
