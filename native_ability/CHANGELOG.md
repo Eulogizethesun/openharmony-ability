@@ -1,3 +1,47 @@
+# 1.0.0-beta.2
+
+- New `allBridgePlugins` barrel export: one aggregated `LazyPlugin[]` covering every shipped
+  bridge plugin, so scaffolded `EntryAbility`s pick up new plugins without template
+  regeneration (`public bridgePlugins = allBridgePlugins`).
+- New bridge plugins in the aggregate: `accessibility`, `continuation`, `screenshot`, and a
+  `webview-cookie` module with incognito-profile selectors; `url` gains a sync facade for
+  webview state.
+- **Breaking**: `WindowKind.Float` is renamed `WindowKind.SubWindow` and `FloatPage.ets`
+  becomes `SubWindowPage.ets` (#240) — behavior unchanged, exported names moved.
+- Multi-UIAbility: process-wide single-runtime invariant — pending-registry handshake, spawned
+  Ability fail-fast traces, per-instance menubar/rect seeding, and `onPrepareToTerminateAsync`
+  gated to the primary instance only.
+- Key handling: only `KeyType` Down/Up forward to Rust with precise NDK action mapping (#138);
+  pre-IME key forwarding routes by `windowId` (#109); DOM key-repeat synthesis for webviews;
+  `key_synthesis` 17100001 errors normalize and no longer kill the process.
+- Sub-windows: maximize unlocked on API 19+, pre-maximize rect preserved on recover,
+  `startMoving` guarded while maximized, decor-toggle inner-size readback healed with `Resized`
+  events, creation/resize clamped to phone displays.
+- Window events: rect/size callbacks throttled per window (16 ms leading+trailing) and stored
+  per-window with `windowId` wrapping; `resize-by-drag` routed by windowId.
+- Window actions: `set-cursor-icon`, `set-cursor-visible`, `set-decoration-flags`,
+  `resize-inner`, all-displays enumeration, screen-global cursor feed.
+- Webviews: create-failure rollback, ArkWeb engine version query, geometry consumed by the
+  render layer (Stack wrapper + `AttributeUpdater`), intercept response headers use the
+  top-level `Header` interface, cookie clear + incognito selectors, PDF scale, https-scheme
+  protocol seeded at create time.
+- Clipboard: `altText` written as a coexisting `text/plain` record (#214); `READ_PASTEBOARD`
+  gated by form factor.
+- Menu: `&` mnemonics stripped at every menubar/popup render point (#205); predefined
+  fullscreen unified with the window-API dual path; ops rejected when no menu-callback window.
+- Tray: icon-replace race fixed, native Folder icons render in the menubar, click handlers
+  re-registered after async receiver swaps.
+- Account: login response decode and interactive login timeout fixed.
+- Ability lifecycle: `onAbilityDestroy` dispatched synchronously, `onWindowStageRestore`
+  signature aligned with the base class, `hideAbility` guarded against the tray focus-restore
+  race, `onCreate` fail-fast teardown, save-state flag + continuation session migration.
+- `StageEventType` unknown values soft-fail instead of panicking.
+- Global-shortcut: registration generations close the ghost-hotkey race; Released triggers are
+  no longer synthesized (#212).
+- Permissions: window permissions (`SET_WINDOW_TRANSPARENT`, `LOCK_WINDOW_CURSOR`) are declared
+  by the consuming app's `module.json5` — the packaged HAR never carried them (tauri-cli
+  scaffold templates declare them for you).
+
 # 1.0.0-beta.1
 
 - **Breaking**: remove `EagerPlugin`; every ArkTS plugin instance is now scoped to one
