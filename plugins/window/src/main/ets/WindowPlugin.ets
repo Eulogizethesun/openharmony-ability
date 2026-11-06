@@ -7,15 +7,16 @@ import { hilog } from "@kit.PerformanceAnalysisKit";
 import { notificationManager } from "@kit.NotificationKit";
 import { inputMethod } from "@kit.IMEKit";
 import {
+  BridgeAcknowledgement,
   BridgeCallContext,
   BridgePluginHookContext,
   BridgeTypedValue,
   BridgeContextRequirement,
   AsyncPluginBase,
+  DOMAIN,
   WindowManager,
 } from "@ohos-rs/ability";
 
-const DOMAIN: number = 0x1999;
 const TAG: string = "WindowPlugin";
 
 const AVOID_AREA_REQUEST_TYPE = "ohos.window.AvoidAreaRequest";
@@ -43,6 +44,7 @@ const ACKNOWLEDGEMENT_TYPE = "ohos.window.Acknowledgement";
 const STATE_RESPONSE_TYPE = "ohos.window.StateResponse";
 const IME_POSITION_RESPONSE_TYPE = "ohos.window.ImePositionResponse";
 const REAL_WINDOW_ID_RESPONSE_TYPE = "ohos.window.RealWindowIdResponse";
+const RECTS_RESPONSE_TYPE = "ohos.window.RectsResponse";
 const MAX_SAFE_INTEGER: number = 9007199254740991;
 const MAX_ARGB_COLOR: number = 0xffffffff;
 
@@ -209,14 +211,6 @@ class WindowCreateResponse {
   }
 }
 
-class WindowAcknowledgement {
-  readonly accepted: boolean;
-
-  constructor(accepted: boolean) {
-    this.accepted = accepted;
-  }
-}
-
 class WindowStateResponse {
   readonly value: boolean;
 
@@ -242,6 +236,37 @@ class RealWindowIdResponse {
 
   constructor(windowId: number) {
     this.windowId = windowId;
+  }
+}
+
+/** Field-copied plain rect (deep copy of the system object, design.md D5). */
+class PlainRectResponse {
+  readonly top: number;
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+
+  constructor(rect: window.Rect) {
+    this.top = rect.top;
+    this.left = rect.left;
+    this.width = rect.width;
+    this.height = rect.height;
+  }
+}
+
+/**
+ * Issue Eulogizethesun/tauri#97: one getWindowProperties() snapshot, both
+ * rects — windowRect (WM/outer, px) and drawableRect (drawable area, position
+ * relative to the window, px). The authoritative read-back source for
+ * verifying resize-inner landed the requested inner size.
+ */
+class WindowRectsResponse {
+  readonly windowRect: PlainRectResponse;
+  readonly drawableRect: PlainRectResponse;
+
+  constructor(windowRect: window.Rect, drawableRect: window.Rect) {
+    this.windowRect = new PlainRectResponse(windowRect);
+    this.drawableRect = new PlainRectResponse(drawableRect);
   }
 }
 
@@ -368,9 +393,12 @@ function parseMoveRequest(payload: BridgeTypedValue): WindowMoveRequest {
   return request;
 }
 
-function parseResizeRequest(payload: BridgeTypedValue): WindowResizeRequest {
+function parseResizeRequest(
+  payload: BridgeTypedValue,
+  action: string = "resize",
+): WindowResizeRequest {
   if (payload.typeName !== RESIZE_REQUEST_TYPE || typeof payload.value !== "object") {
-    throw new Error(`ohos.window.resize requires bridge type ${RESIZE_REQUEST_TYPE}`);
+    throw new Error(`ohos.window.${action} requires bridge type ${RESIZE_REQUEST_TYPE}`);
   }
   const request = payload.value as WindowResizeRequest;
   if (
@@ -380,7 +408,7 @@ function parseResizeRequest(payload: BridgeTypedValue): WindowResizeRequest {
     request.width <= 0 ||
     request.height <= 0
   ) {
-    throw new Error("resize.width and height must be positive");
+    throw new Error(`${action}.width and height must be positive`);
   }
   return request;
 }
@@ -452,7 +480,9 @@ function parseLimitsRequest(payload: BridgeTypedValue): WindowLimitsRequest {
 
 function parseImePositionRequest(payload: BridgeTypedValue): ImePositionRequest {
   if (payload.typeName !== IME_POSITION_REQUEST_TYPE || typeof payload.value !== "object") {
-    throw new Error(`ohos.window.set-ime-position requires bridge type ${IME_POSITION_REQUEST_TYPE}`);
+    throw new Error(
+      `ohos.window.set-ime-position requires bridge type ${IME_POSITION_REQUEST_TYPE}`,
+    );
   }
   const request = payload.value as ImePositionRequest;
   if (!isWindowId(request?.windowId) || !isSafeInteger(request?.x) || !isSafeInteger(request?.y)) {
@@ -485,7 +515,9 @@ function parseCursorIconRequest(payload: BridgeTypedValue): CursorIconRequest {
 
 function parseCursorVisibleRequest(payload: BridgeTypedValue): CursorVisibleRequest {
   if (payload.typeName !== CURSOR_VISIBLE_REQUEST_TYPE || typeof payload.value !== "object") {
-    throw new Error(`ohos.window.set-cursor-visible requires bridge type ${CURSOR_VISIBLE_REQUEST_TYPE}`);
+    throw new Error(
+      `ohos.window.set-cursor-visible requires bridge type ${CURSOR_VISIBLE_REQUEST_TYPE}`,
+    );
   }
   const request = payload.value as CursorVisibleRequest;
   if (typeof request?.visible !== "boolean") {
@@ -496,11 +528,18 @@ function parseCursorVisibleRequest(payload: BridgeTypedValue): CursorVisibleRequ
 
 function parseDecorationFlagsRequest(payload: BridgeTypedValue): DecorationFlagsRequest {
   if (payload.typeName !== DECORATION_FLAGS_REQUEST_TYPE || typeof payload.value !== "object") {
-    throw new Error(`ohos.window.set-decoration-flags requires bridge type ${DECORATION_FLAGS_REQUEST_TYPE}`);
+    throw new Error(
+      `ohos.window.set-decoration-flags requires bridge type ${DECORATION_FLAGS_REQUEST_TYPE}`,
+    );
   }
   const request = payload.value as DecorationFlagsRequest;
   // FLAG bit-field: closable=1, maximizable=2, minimizable=4, resizable=8 (max 15).
-  if (!isWindowId(request?.windowId) || !isSafeInteger(request?.flags) || request.flags < 0 || request.flags > 15) {
+  if (
+    !isWindowId(request?.windowId) ||
+    !isSafeInteger(request?.flags) ||
+    request.flags < 0 ||
+    request.flags > 15
+  ) {
     throw new Error("set-decoration-flags requires a valid windowId and flags in [0, 15]");
   }
   return request;
@@ -541,18 +580,23 @@ export class WindowPlugin extends AsyncPluginBase {
           ? "#00000000"
           : this.colorString(request.backgroundColor ?? 0xffffffff);
         created.setWindowBackgroundColor(backgroundColor);
-        // Float sub-windows also have a window container layer. Without making
+        // Sub-windows also have a window container layer. Without making
         // it transparent, an opaque container sits between the window background
         // and ArkUI content — blocking backgroundBlurStyle from sampling through
         // the transparent window (vibrancy/frosted glass effect invisible).
         if (request.transparent && deviceInfo.sdkApiVersion >= 20) {
           try {
-            created.setWindowContainerColor('#00000000', '#00000000');
+            created.setWindowContainerColor("#00000000", "#00000000");
           } catch (containerErr: any) {
             if (containerErr.code !== 801) {
               // 801 = API not supported; other errors logged but non-fatal
             }
           }
+        } else if (request.transparent) {
+          // setWindowContainerColor is API 20+; below that the opaque container
+          // layer stays, so a transparent window background / blur (vibrancy)
+          // has no visible effect. Non-fatal: the window is still created.
+          hilog.warn(DOMAIN, TAG, "create-os-window: transparent container requires API 20+, current %{public}d; container stays opaque (no visible blur)", deviceInfo.sdkApiVersion);
         }
         await created.showWindow();
         this.assertCallActive(context);
@@ -578,13 +622,28 @@ export class WindowPlugin extends AsyncPluginBase {
 
     if (action === "set-decorations") {
       const request = parseDecorationsRequest(payload);
-      const win = this.requireWindow(request.windowId, context);
-      try {
-        win.setWindowDecorVisible(request.decorations);
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
-      } catch (error) {
-        throw new Error(`set-decorations failed: ${String(error)}`);
+      // Validate the window id resolves (same throw semantics as before);
+      // the effect itself is delegated below.
+      this.requireWindow(request.windowId, context);
+      // Delegate to WindowManager.setDecorations: dual-path by window kind —
+      // UIAbility main windows call setWindowDecorVisible (system title bar),
+      // SubWindow-kind sub-windows write LocalStorage('decorations') so
+      // SubWindowPage's @LocalStorageProp reactively shows/hides its
+      // self-drawn title bar.
+      // The inline win.setWindowDecorVisible call below was the pluginize-era
+      // migration of the legacy NAPI path and only implemented the UIAbility
+      // half: sub-windows are created with decorEnabled:false (system
+      // decoration permanently off), so the direct call was a silent no-op and
+      // the SubWindowPage title bar never reacted to setDecorations().
+      // setDecorations returns whether the window kind was handled (SubWindow
+      // LocalStorage write / UIAbility setWindowDecorVisible); false means the
+      // window is unknown or the system call threw — surface it to the Rust
+      // caller instead of acking success (the pre-pluginize handler threw on
+      // the setWindowDecorVisible error).
+      if (!WindowManager.getInstance().setDecorations(request.windowId, request.decorations)) {
+        throw new Error(`set-decorations failed: window ${request.windowId}`);
       }
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "set-fullscreen") {
@@ -596,8 +655,15 @@ export class WindowPlugin extends AsyncPluginBase {
       // setWindowLayoutFullScreen calls below were the pluginize-era migration
       // of the legacy NAPI path and only implemented the mobile path — a silent
       // visual no-op on desktop (ack OK, no window change).
-      WindowManager.getInstance().setFullscreen(request.windowId, request.on);
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      // #219: the full multi-step chain is now awaited (serializeOpTracked) --
+      // a failed maximize/recover/system-bar step rejects the invoke instead of
+      // acking success.
+      try {
+        await WindowManager.getInstance().setFullscreen(request.windowId, request.on);
+      } catch (error) {
+        throw new Error(`set-fullscreen failed: ${String(error)}`);
+      }
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "set-background-color") {
@@ -605,7 +671,7 @@ export class WindowPlugin extends AsyncPluginBase {
       const win = this.requireWindow(request.windowId, context);
       try {
         win.setWindowBackgroundColor(this.colorString(request.color));
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
       } catch (error) {
         throw new Error(`setWindowBackgroundColor failed: ${String(error)}`);
       }
@@ -613,18 +679,74 @@ export class WindowPlugin extends AsyncPluginBase {
 
     if (action === "set-blur") {
       const request = parseBlurRequest(payload);
-      hilog.info(DOMAIN, TAG,
-        'set-blur: ENTER windowId=%{public}d radius=%{public}f',
-        Number(request.windowId), request.radius);
+      hilog.info(
+        DOMAIN,
+        TAG,
+        "set-blur: ENTER windowId=%{public}d radius=%{public}f",
+        Number(request.windowId),
+        request.radius,
+      );
       // Use WindowManager.applyWindowBlur (backdropBlur on WebView container)
       // instead of setWindowShadowRadius (window shadow — wrong API for vibrancy)
       WindowManager.getInstance().applyWindowBlur(request.windowId, request.radius);
-      hilog.info(DOMAIN, TAG, 'set-blur: applyWindowBlur returned, ack=true');
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      hilog.info(DOMAIN, TAG, "set-blur: applyWindowBlur returned, ack=true");
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "focus") {
       const request = parseWindowIdRequest(payload);
+      if (request.windowId === 0) {
+        // Main window (issue Eulogizethesun/tauri#105): raiseToAppTop is
+        // subwindow-only per the official docs, so the old path was a silent
+        // no-effect for the main window. Use window.shiftAppWindowFocus
+        // (API 11+) — intra-app focus transfer between main/sub windows.
+        // Source window: the one the user last interacted with (typically the
+        // sub-window holding focus); falls back to the main window
+        // itself when untracked.
+        try {
+          const manager = WindowManager.getInstance();
+          const targetRealId = manager.getRealWindowId(0);
+          if (targetRealId < 0) {
+            throw new Error("main window not found");
+          }
+          let sourceRealId = targetRealId;
+          const lastInteracted = manager.getUserInteractedWindowId();
+          if (lastInteracted > 0) {
+            const resolved = manager.getRealWindowId(lastInteracted);
+            if (resolved >= 0) {
+              sourceRealId = resolved;
+            }
+          }
+          // Review R15 (issue #131): source==target means single-window /
+          // no tracked source (untracked, main-window, or the last-interacted
+          // sub-window was destroyed) — shiftAppWindowFocus(src, src) has no
+          // defined behavior in the official docs and the transfer is a
+          // semantic no-op; skip it and report success.
+          if (sourceRealId === targetRealId) {
+            hilog.info(
+              DOMAIN,
+              TAG,
+              "focus: source==target (last-interacted window untracked, main, or destroyed), skipping shiftAppWindowFocus",
+            );
+            return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
+          }
+          const windowModule: ESObject = window;
+          if (typeof windowModule.shiftAppWindowFocus !== "function") {
+            throw new Error("shiftAppWindowFocus is unavailable on this API level");
+          }
+          hilog.info(
+            DOMAIN,
+            TAG,
+            "focus: shiftAppWindowFocus src=%{public}d tgt=%{public}d",
+            sourceRealId,
+            targetRealId,
+          );
+          await (windowModule.shiftAppWindowFocus(sourceRealId, targetRealId) as Promise<void>);
+          return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
+        } catch (error) {
+          throw new Error(`focus (main window) failed: ${String(error)}`);
+        }
+      }
       const win = this.requireWindow(request.windowId, context);
       try {
         const dynamic: ESObject = this.dynamic(win);
@@ -632,7 +754,7 @@ export class WindowPlugin extends AsyncPluginBase {
           throw new Error("raiseToAppTop is unavailable on this API level");
         }
         await (dynamic.raiseToAppTop() as Promise<void>);
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
       } catch (error) {
         throw new Error(`focus failed: ${String(error)}`);
       }
@@ -643,7 +765,7 @@ export class WindowPlugin extends AsyncPluginBase {
       const win = this.requireWindow(request.windowId, context);
       try {
         await win.setFocusable(request.focusable);
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
       } catch (error) {
         throw new Error(`setFocusable failed: ${String(error)}`);
       }
@@ -654,7 +776,7 @@ export class WindowPlugin extends AsyncPluginBase {
       const win = this.requireWindow(request.windowId, context);
       try {
         await win.setWindowTouchable(request.touchable);
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
       } catch (error) {
         throw new Error(`set-touchable failed: ${String(error)}`);
       }
@@ -665,7 +787,7 @@ export class WindowPlugin extends AsyncPluginBase {
       const win = this.requireWindow(request.windowId, context);
       try {
         await win.moveWindowTo(request.x, request.y);
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
       } catch (error) {
         throw new Error(`moveWindowTo failed: ${String(error)}`);
       }
@@ -676,9 +798,104 @@ export class WindowPlugin extends AsyncPluginBase {
       const win = this.requireWindow(request.windowId, context);
       try {
         await win.resize(request.width, request.height);
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
       } catch (error) {
         throw new Error(`resize failed: ${String(error)}`);
+      }
+    }
+
+    if (action === "resize-inner") {
+      // Issue Eulogizethesun/tauri#97: INNER-size resize with the precise
+      // system decor. getWindowProperties() is a SYNC call returning ONE
+      // atomic snapshot: windowRect (outer, px) + drawableRect (drawable area,
+      // position relative to the window, px). chrome = outer − drawable per
+      // axis is the system's own title-bar inset — not an estimate, and unlike
+      // getWindowDecorHeight() (integer vp → ±2px quantization at density
+      // 1.9) it needs no unit conversion. Computed at DISPATCH time so the
+      // requested inner size lands exactly in one shot; a decor change that
+      // happens afterwards is the caller's business (no post-hoc correction).
+      // If the snapshot is unreadable or degenerate we THROW (→ Rust Err →
+      // tao warns + skips) — never resize to a guessed size.
+      const request = parseResizeRequest(payload, "resize-inner");
+      const win = this.requireWindow(request.windowId, context);
+      try {
+        const props = win.getWindowProperties();
+        const outer = props.windowRect;
+        const drawable = props.drawableRect;
+        let chromeWidth = 0;
+        let chromeHeight = 0;
+        if (drawable.width > 0 && drawable.height > 0) {
+          // Precise snapshot: both rects from one getWindowProperties() call.
+          if (outer.width <= 0 || outer.height <= 0) {
+            throw new Error(
+              `degenerate window rect (${outer.width}x${outer.height} — window state abnormal)`,
+            );
+          }
+          chromeWidth = outer.width - drawable.width;
+          chromeHeight = outer.height - drawable.height;
+          if (chromeWidth < 0 || chromeHeight < 0) {
+            throw new Error(
+              `drawable rect (${drawable.width}x${drawable.height}) exceeds window rect (${outer.width}x${outer.height})`,
+            );
+          }
+        } else if (request.windowId === 0) {
+          // Main window (tao windowId 0) with an unreadable/degenerate
+          // drawableRect (content not loaded yet, abnormal state) — no precise
+          // value: explicit failure, never resize to a guessed size.
+          // NOTE: the non-main window branch below is keyed on windowId, not
+          // WindowProperties.type — windowId is the only discriminator for
+          // the two families that branch covers: this app's sub-windows are
+          // created via createSubWindow(WithOptions), which the framework
+          // reports as an APP SUB window (not TYPE_FLOAT), so a type check
+          // would never match them, and spawned UIAbility instances are not
+          // sub-windows at all, so a type check would not discriminate them
+          // either (issue #97 review finding).
+          throw new Error(
+            `no precise decor available (outer=${outer.width}x${outer.height}, drawable=${drawable.width}x${drawable.height} — content not loaded / window state abnormal)`,
+          );
+        }
+        // else: non-main window (tao windowId > 0 — sub-window or spawned
+        // UIAbility instance) with degenerate drawableRect — sub-windows are
+        // created with decorEnabled:false, so chrome 0 is exact BY
+        // CONSTRUCTION (not an estimate): outer = inner directly. Spawned
+        // UIAbility instances carry OS-managed chrome, so chrome-0 here is a
+        // silent off-by-chrome approximation for them (the main window's
+        // parallel branch throws instead).
+        // Positive evidence for issue #97 verification: the exact chrome used.
+        hilog.info(
+          DOMAIN,
+          TAG,
+          "resize-inner %{public}d: inner=%{public}dx%{public}d chrome=%{public}dx%{public}d -> outer=%{public}dx%{public}d",
+          request.windowId,
+          request.width,
+          request.height,
+          chromeWidth,
+          chromeHeight,
+          request.width + chromeWidth,
+          request.height + chromeHeight,
+        );
+        await win.resize(request.width + chromeWidth, request.height + chromeHeight);
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
+      } catch (error) {
+        throw new Error(`resize-inner failed: ${String(error)}`);
+      }
+    }
+
+    if (action === "get-window-rects") {
+      // Issue Eulogizethesun/tauri#97: authoritative geometry read-back — one
+      // getWindowProperties() snapshot, both rects. Verification of
+      // resize-inner asserts against drawableRect here, never against a
+      // tao-side derived inner size.
+      const request = parseWindowIdRequest(payload);
+      const win = this.requireWindow(request.windowId, context);
+      try {
+        const props = win.getWindowProperties();
+        return {
+          typeName: RECTS_RESPONSE_TYPE,
+          value: new WindowRectsResponse(props.windowRect, props.drawableRect),
+        };
+      } catch (error) {
+        throw new Error(`get-window-rects failed: ${String(error)}`);
       }
     }
 
@@ -710,29 +927,123 @@ export class WindowPlugin extends AsyncPluginBase {
     if (action === "set-topmost") {
       // Delegates to WindowManager.setWindowTopmost (API14 guard + WINDOW_TOPMOST
       // permission handling live there, ported from upstream PR#45).
+      // #219: the platform promise is awaited -- a failed setWindowTopmost
+      // (801 non-freeform / 1300002 abnormal state / unknown window) rejects
+      // the invoke (Rust Err -> tao warn) instead of acking success.
       const request = parseTopmostRequest(payload);
-      WindowManager.getInstance().setWindowTopmost(request.windowId, request.topmost);
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      try {
+        await WindowManager.getInstance().setWindowTopmost(request.windowId, request.topmost);
+      } catch (error) {
+        throw new Error(`set-topmost failed: ${String(error)}`);
+      }
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "set-title") {
-      // Delegates to WindowManager.setWindowTitle (API9+, main window + Float sub-windows).
+      // Delegates to WindowManager.setWindowTitle (API9+, main window + sub-windows).
+      // #219: the platform promise is awaited -- a failed setWindowTitle (or an
+      // unknown/destroyed window) rejects the invoke instead of acking success.
       const request = parseTitleRequest(payload);
-      WindowManager.getInstance().setWindowTitle(request.windowId, request.title);
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      try {
+        await WindowManager.getInstance().setWindowTitle(request.windowId, request.title);
+      } catch (error) {
+        throw new Error(`set-title failed: ${String(error)}`);
+      }
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "set-limits") {
       // Delegates to WindowManager.setWindowLimits (API11+, px, 0 = no limit).
+      // Review R12: OHOS setWindowLimits constrains the OUTER windowRect while
+      // the caller's min/max are INNER sizes — compensate with the precise
+      // system chrome (the same one-snapshot algorithm as resize-inner above:
+      // chrome = windowRect − drawableRect per axis) so an inner min/max
+      // lands as an inner min/max. Only non-zero slots are compensated: 0
+      // means "no limit / system default" and must stay 0 (compensating it
+      // would pin the window at ~chrome px). A decor change after dispatch is
+      // the caller's business — same accepted limitation as resize-inner.
       const request = parseLimitsRequest(payload);
-      WindowManager.getInstance().setWindowLimits(
+      const win = this.requireWindow(request.windowId, context);
+      let chromeWidth = 0;
+      let chromeHeight = 0;
+      try {
+        const props = win.getWindowProperties();
+        const outer = props.windowRect;
+        const drawable = props.drawableRect;
+        if (drawable.width > 0 && drawable.height > 0) {
+          // Precise snapshot: both rects from one getWindowProperties() call.
+          if (outer.width <= 0 || outer.height <= 0) {
+            throw new Error(
+              `degenerate window rect (${outer.width}x${outer.height} — window state abnormal)`,
+            );
+          }
+          chromeWidth = outer.width - drawable.width;
+          chromeHeight = outer.height - drawable.height;
+          if (chromeWidth < 0 || chromeHeight < 0) {
+            throw new Error(
+              `drawable rect (${drawable.width}x${drawable.height}) exceeds window rect (${outer.width}x${outer.height})`,
+            );
+          }
+        } else if (request.windowId > 0) {
+          // Non-main window (tao windowId > 0 — sub-window or spawned
+          // UIAbility instance) with an unreadable/degenerate drawableRect —
+          // sub-windows are created with decorEnabled:false, so chrome 0 is
+          // exact BY CONSTRUCTION (same reasoning as the resize-inner branch
+          // above; keyed on windowId, not WindowProperties.type, per the
+          // issue #97 review finding). (a spawned UIAbility instance's chrome
+          // is OS-managed and nonzero, so its chrome-0 use is a silent
+          // approximation; the main window's parallel arm below degrades with
+          // a WARN — this arm is silent)
+        } else {
+          // Main window with an unreadable drawableRect (content not loaded /
+          // abnormal state — e.g. the builder-time limits dispatch races
+          // content load). Degrade rather than fail: limits are boundaries,
+          // not targets — inner-sized limits still bound the window (off by
+          // the chrome, exactly the pre-R12 behavior), while failing would
+          // leave it completely unconstrained.
+          hilog.warn(
+            DOMAIN,
+            TAG,
+            "set-limits %{public}d: no precise decor (outer=%{public}dx%{public}d drawable=%{public}dx%{public}d) — chrome compensation skipped, limits remain inner-sized",
+            request.windowId,
+            outer.width,
+            outer.height,
+            drawable.width,
+            drawable.height,
+          );
+        }
+      } catch (error) {
+        // Snapshot threw / was abnormal — same degradation as above.
+        hilog.warn(
+          DOMAIN,
+          TAG,
+          "set-limits %{public}d: chrome compensation skipped (%{public}s) — limits remain inner-sized",
+          request.windowId,
+          String(error),
+        );
+      }
+      const minW = request.minWidth > 0 ? request.minWidth + chromeWidth : 0;
+      const minH = request.minHeight > 0 ? request.minHeight + chromeHeight : 0;
+      const maxW = request.maxWidth > 0 ? request.maxWidth + chromeWidth : 0;
+      const maxH = request.maxHeight > 0 ? request.maxHeight + chromeHeight : 0;
+      hilog.info(
+        DOMAIN,
+        TAG,
+        "set-limits %{public}d: inner min=%{public}dx%{public}d max=%{public}dx%{public}d chrome=%{public}dx%{public}d -> outer min=%{public}dx%{public}d max=%{public}dx%{public}d",
         request.windowId,
         request.minWidth,
         request.minHeight,
         request.maxWidth,
         request.maxHeight,
+        chromeWidth,
+        chromeHeight,
+        minW,
+        minH,
+        maxW,
+        maxH,
       );
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      WindowManager.getInstance().setWindowLimits(request.windowId, minW, minH, maxW, maxH);
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "request-user-attention") {
@@ -743,32 +1054,70 @@ export class WindowPlugin extends AsyncPluginBase {
       // context, so hilog is safe everywhere here.
       const request = parseWindowIdRequest(payload);
       const notifId = ++attentionNotifId;
+      let retriedOnce = false; // 1600004 → authorize → retry fires at most once
       const doPublish = (): void => {
-        notificationManager.publish({
-          id: notifId,
-          content: {
-            contentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
-            normal: { title: "Tauri App", text: "请查看应用窗口" as string },
-          } as ESObject,
-        } as ESObject).then(() => {
-          hilog.info(DOMAIN, TAG, "request-user-attention: published OK (id=%{public}d, window=%{public}d)", notifId, request.windowId);
-        }).catch((err: ESObject) => {
-          const code = (err && (err as ESObject).code) ? (err as ESObject).code : -1;
-          hilog.warn(DOMAIN, TAG, "request-user-attention: publish failed id=%{public}d code=%{public}s", notifId, String(code));
-          // 1600004 = notification not enabled → pop the system authorization
-          // dialog (requestEnableNotification) and retry once.
-          if (code === 1600004) {
-            notificationManager.requestEnableNotification().then(() => {
-              hilog.info(DOMAIN, TAG, "request-user-attention: enabled, retry publish (id=%{public}d)", notifId);
-              doPublish();
-            }).catch((e2: ESObject) => {
-              hilog.warn(DOMAIN, TAG, "request-user-attention: requestEnableNotification failed: %{public}s", JSON.stringify(e2));
-            });
-          }
-        });
+        notificationManager
+          .publish({
+            id: notifId,
+            content: {
+              contentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
+              normal: { title: "Tauri App", text: "请查看应用窗口" as string },
+            } as ESObject,
+          } as ESObject)
+          .then(() => {
+            hilog.info(
+              DOMAIN,
+              TAG,
+              "request-user-attention: published OK (id=%{public}d, window=%{public}d)",
+              notifId,
+              request.windowId,
+            );
+          })
+          .catch((err: ESObject) => {
+            const code = err && (err as ESObject).code ? (err as ESObject).code : -1;
+            hilog.warn(
+              DOMAIN,
+              TAG,
+              "request-user-attention: publish failed id=%{public}d code=%{public}s",
+              notifId,
+              String(code),
+            );
+            // 1600004 = notification not enabled → pop the system authorization
+            // dialog and retry once. The no-arg requestEnableNotification() is
+            // deprecated since API 12; the UIAbilityContext overload (API 10+,
+            // the official replacement) pops the same dialog and REJECTS with
+            // 1600004 when the user refuses, so the retry only runs after a
+            // real grant. (The official FAQ — overload-agnostic in its wording —
+            // documents that non-first calls resolve success regardless of the
+            // user's choice; on the old no-arg form that looped
+            // publish↔request forever after a denial. The retriedOnce guard
+            // below holds under either reading.)
+            if (code === 1600004 && !retriedOnce) {
+              retriedOnce = true;
+              notificationManager
+                .requestEnableNotification(context.abilityContext)
+                .then(() => {
+                  hilog.info(
+                    DOMAIN,
+                    TAG,
+                    "request-user-attention: enabled, retry publish (id=%{public}d)",
+                    notifId,
+                  );
+                  doPublish();
+                })
+                .catch((e2: ESObject) => {
+                  hilog.warn(
+                    DOMAIN,
+                    TAG,
+                    "request-user-attention: requestEnableNotification failed: %{public}s",
+                    JSON.stringify(e2),
+                  );
+                });
+            }
+          });
       };
       doPublish();
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "set-ime-position") {
@@ -787,13 +1136,31 @@ export class WindowPlugin extends AsyncPluginBase {
       };
       try {
         await inputMethod.getController().updateCursor(cursorInfo);
-        hilog.info(DOMAIN, TAG, "set-ime-position: updateCursor OK window=%{public}d x=%{public}d y=%{public}d", request.windowId, request.x, request.y);
-        return { typeName: IME_POSITION_RESPONSE_TYPE, value: new ImePositionResponse(true, 0, "OK") };
+        hilog.info(
+          DOMAIN,
+          TAG,
+          "set-ime-position: updateCursor OK window=%{public}d x=%{public}d y=%{public}d",
+          request.windowId,
+          request.x,
+          request.y,
+        );
+        return {
+          typeName: IME_POSITION_RESPONSE_TYPE,
+          value: new ImePositionResponse(true, 0, "OK"),
+        };
       } catch (error) {
-        const code = (error && (error as ESObject).code) ? (error as ESObject).code : -1;
+        const code = error && (error as ESObject).code ? (error as ESObject).code : -1;
         // 12800009 = input method client detached — no focused editor; caller decides severity.
-        hilog.warn(DOMAIN, TAG, "set-ime-position: updateCursor failed code=%{public}s", String(code));
-        return { typeName: IME_POSITION_RESPONSE_TYPE, value: new ImePositionResponse(false, code as number, String(error)) };
+        hilog.warn(
+          DOMAIN,
+          TAG,
+          "set-ime-position: updateCursor failed code=%{public}s",
+          String(code),
+        );
+        return {
+          typeName: IME_POSITION_RESPONSE_TYPE,
+          value: new ImePositionResponse(false, code as number, String(error)),
+        };
       }
     }
 
@@ -803,7 +1170,7 @@ export class WindowPlugin extends AsyncPluginBase {
       // error instead of the old ArkHelper no-op.
       const request = parseDraggableRequest(payload);
       if (deviceInfo.sdkApiVersion < 20) {
-        throw new Error(`set-draggable requires API20+, current ${deviceInfo.sdkApiVersion}`);
+        throw new Error(`setDraggable requires API level 20+ on OpenHarmony (current: ${deviceInfo.sdkApiVersion})`);
       }
       const win = WindowManager.getInstance().getWindow(request.windowId);
       if (!win) {
@@ -811,9 +1178,70 @@ export class WindowPlugin extends AsyncPluginBase {
       }
       try {
         await win.enableDrag(request.enable);
-        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
       } catch (error) {
         throw new Error(`set-draggable failed: ${String(error)}`);
+      }
+    }
+
+    if (action === "set-resize-by-drag") {
+      // The real "resizable" switch (issue Eulogizethesun/tauri#104), distinct
+      // from the decoration-flag bit that only toggles title-bar button
+      // visibility. Routed by windowId, not by window kind (T28-5: id 0 is
+      // the main window). A non-zero id covers TWO families, and both take
+      // the enableDrag arm below: true sub-windows (WindowKind.SubWindow)
+      // and spawned UIAbility instances, which register under their non-zero
+      // tauri_window_id as WindowKind.UIAbility (WindowManager
+      // registerUIAbilityStage / windowKinds; NativeAbility.onCreate reads
+      // the id from want.parameters). For spawned instances the API20+ guard
+      // below rejects the call on API 14-19; on API20+ devices enableDrag is
+      // invoked on them, the same arm as sub-windows (routing disclosed in
+      // the tao 920fc181 commit body).
+      // Capability face (each arm guards the API level and throws an explicit
+      // Error before the platform call, so nothing is silently skipped):
+      // - Main window (id 0): setResizeByDragEnabled (API 14+) - only
+      //   effective in free-window state on PC/2in1 (silently ignored
+      //   otherwise, no error per official docs).
+      // - Non-zero id (sub-window or spawned UIAbility instance): enableDrag
+      //   (API 20+, same capability as set-draggable). On API 14-19 the call
+      //   is rejected by the explicit API20+ guard below, before enableDrag
+      //   is reached.
+      const request = parseDraggableRequest(payload);
+      const win = WindowManager.getInstance().getWindow(request.windowId);
+      if (!win) {
+        throw new Error(`set-resize-by-drag: window ${request.windowId} not found`);
+      }
+      try {
+        if (request.windowId === 0) {
+          if (deviceInfo.sdkApiVersion < 14) {
+            throw new Error(
+              `setResizeByDragEnabled requires API14+, current ${deviceInfo.sdkApiVersion}`,
+            );
+          }
+          hilog.info(
+            DOMAIN,
+            TAG,
+            "set-resize-by-drag: main window setResizeByDragEnabled=%{public}s",
+            String(request.enable),
+          );
+          await win.setResizeByDragEnabled(request.enable);
+        } else {
+          if (deviceInfo.sdkApiVersion < 20) {
+            throw new Error(
+              `enableDrag requires API20+ for non-main windows (sub-window or spawned UIAbility instance), current ${deviceInfo.sdkApiVersion}`,
+            );
+          }
+          hilog.info(
+            DOMAIN,
+            TAG,
+            "set-resize-by-drag: non-main window enableDrag=%{public}s",
+            String(request.enable),
+          );
+          await win.enableDrag(request.enable);
+        }
+        return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
+      } catch (error) {
+        throw new Error(`set-resize-by-drag failed: ${String(error)}`);
       }
     }
 
@@ -831,33 +1259,48 @@ export class WindowPlugin extends AsyncPluginBase {
 
     if (action === "set-cursor-icon") {
       // Delegates to WindowManager.setPointerStyle, which resolves the real OHOS
-      // window id internally (pointer.setPointerStyleSync). Fire-and-forget on
-      // the ArkTS side: per-window failures are logged there, the ack only
-      // confirms the request was dispatched (tao's set_cursor_icon is a void
-      // setter).
+      // window id internally (pointer.setPointerStyleSync). #219: failures
+      // propagate from the setPointerStyle chain (unknown window / sync throw)
+      // and reject the invoke -- the ack only lands when the style actually
+      // applied.
       const request = parseCursorIconRequest(payload);
-      WindowManager.getInstance().setPointerStyle(request.windowId, request.style);
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      try {
+        WindowManager.getInstance().setPointerStyle(request.windowId, request.style);
+      } catch (error) {
+        throw new Error(`set-cursor-icon failed: ${String(error)}`);
+      }
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "set-cursor-visible") {
       // Delegates to WindowManager.setPointerVisible (pointer.setPointerVisible).
       // GLOBAL visibility — OHOS has no per-window variant, so this request
       // carries no windowId (multi-window caveat documented as 遗留问题六).
-      // Fire-and-forget: failures are logged in WindowManager.
+      // #219: a failed visibility flip rejects the invoke instead of acking
+      // success.
       const request = parseCursorVisibleRequest(payload);
-      WindowManager.getInstance().setPointerVisible(request.visible);
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      try {
+        WindowManager.getInstance().setPointerVisible(request.visible);
+      } catch (error) {
+        throw new Error(`set-cursor-visible failed: ${String(error)}`);
+      }
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     if (action === "set-decoration-flags") {
       // Applies the decoration flag bit-field (closable/maximizable/minimizable/
-      // resizable) to a Float sub-window's LocalStorage. The UIAbility main
-      // window is a no-op (its decorations are system-managed) — WindowManager
-      // logs and returns, still acknowledged.
+      // resizable) to a sub-window's LocalStorage. The UIAbility main window
+      // throws per #238 (platform cannot honor per-button flags; the bridge arm
+      // rejects the invoke) - sub-windows honor the flags via LocalStorage.
+      // #219: an unknown/destroyed window throws out of WindowManager and
+      // rejects the invoke.
       const request = parseDecorationFlagsRequest(payload);
-      WindowManager.getInstance().setDecorationFlags(request.windowId, request.flags);
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      try {
+        WindowManager.getInstance().setDecorationFlags(request.windowId, request.flags);
+      } catch (error) {
+        throw new Error(`set-decoration-flags failed: ${String(error)}`);
+      }
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     throw new Error(`Unsupported ohos.window action '${action}'`);
@@ -871,7 +1314,7 @@ export class WindowPlugin extends AsyncPluginBase {
     const request = parseWindowIdRequest(payload);
 
     // destroy-window is idempotent: a window closed via the notify_window_close
-    // path (FloatPage ✕ button: removeWindow + destroyWindow; or system X:
+    // path (SubWindowPage close button: removeWindow + destroyWindow; or system X:
     // aboutToDisappear) is already destroyed by the time the Rust drain's
     // on_window_close spawns its safety destroy_window bridge call. requireWindow
     // would throw "Unknown OS sub-window" for those — instead soft-lookup and
@@ -881,14 +1324,15 @@ export class WindowPlugin extends AsyncPluginBase {
       if (request.windowId === 0) {
         throw new Error("Cannot destroy the main Ability window (id 0)");
       }
-      const existing = this.windows.get(request.windowId)
-        ?? WindowManager.getInstance().getWindow(request.windowId);
+      const existing =
+        this.windows.get(request.windowId) ??
+        WindowManager.getInstance().getWindow(request.windowId);
       if (existing !== undefined) {
         await existing.destroyWindow();
         this.windows.delete(request.windowId);
       }
       // else: already destroyed — idempotent success
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     }
 
     const win = this.requireWindow(request.windowId, context);
@@ -923,16 +1367,23 @@ export class WindowPlugin extends AsyncPluginBase {
         // A minimized UIAbility main window cannot be brought back by
         // showWindow() — only restore() can (upstream PR#45). Delegate to
         // WindowManager.showWindowMethod, which picks restore() for a minimized
-        // main window and showWindow() for sub-windows.
-        WindowManager.getInstance().showWindowMethod(request.windowId);
+        // main window and showWindow() for sub-windows. #219: the promise is
+        // awaited -- a failed restore/show (or an unknown window, thrown by
+        // showWindowMethod itself) rejects into the ack chain instead of a
+        // fake success ack.
+        await WindowManager.getInstance().showWindowMethod(request.windowId);
       }
-      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new WindowAcknowledgement(true) };
+      return { typeName: ACKNOWLEDGEMENT_TYPE, value: new BridgeAcknowledgement(true) };
     } catch (error) {
       throw new Error(`${action} failed: ${String(error)}`);
     }
   }
 
-  private windowState(action: string, payload: BridgeTypedValue, context: BridgeCallContext): BridgeTypedValue {
+  private windowState(
+    action: string,
+    payload: BridgeTypedValue,
+    context: BridgeCallContext,
+  ): BridgeTypedValue {
     const request = parseWindowIdRequest(payload);
     const win = this.requireWindow(request.windowId, context);
     try {
@@ -949,11 +1400,11 @@ export class WindowPlugin extends AsyncPluginBase {
 
   private requireWindow(windowId: number, context: BridgeCallContext): window.Window {
     // Plugin-created sub-windows live in the `windows` Map (populated by create-os-window).
-    // The main UIAbility window (logical id 0) and Float sub-windows created via the legacy
+    // The main UIAbility window (logical id 0) and sub-windows created via the legacy
     // core `create_os_window` path are NOT in this Map — they live in the process-wide
     // WindowManager registry. p1-ohos-window-ops migrated window *operations* to this plugin
     // but left window *creation* on the old path, so the two registries never synced.
-    // Resolve the gap by falling back to WindowManager (which knows about main + Float windows)
+    // Resolve the gap by falling back to WindowManager (which knows about main + sub windows)
     // when the plugin Map misses. For id=0 prefer context.getWindow() (the host component's own
     // window) — fastest, matches the get-avoid-area path and avoids assuming which host received
     // the call.

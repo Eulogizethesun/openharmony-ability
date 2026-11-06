@@ -60,6 +60,11 @@ pub use ohos_web_binding::CustomProtocolOption as WebviewProtocolOptions;
 pub struct WebviewProtocol;
 
 impl WebviewProtocol {
+    /// Declares one custom scheme (and its flag bits) for engine-time registration.
+    ///
+    /// # Errors
+    /// Fails when the scheme name is invalid, already declared, or the engine has
+    /// already started.
     pub fn register(scheme: impl AsRef<str>, options: WebviewProtocolOptions) -> Result<()> {
         let scheme = scheme.as_ref();
         validate_scheme(scheme)?;
@@ -216,6 +221,7 @@ pub struct WebviewProtocolResponder {
 unsafe impl Send for WebviewProtocolResponder {}
 
 impl WebviewProtocolResponder {
+    /// Delivers the embedded response for the intercepted scheme request.
     pub fn respond<T: Into<Cow<'static, [u8]>>>(self, response: Response<T>) {
         let (parts, body) = response.into_parts();
         (self.responder)(Response::from_parts(parts, body.into()));
@@ -371,6 +377,25 @@ pub(crate) fn clear_attached() -> Result<()> {
     state.installing_schemes.clear();
     state.installed_schemes.clear();
     Ok(())
+}
+
+/// Drops the per-WebView protocol handler declarations for `webview_id`, if any.
+///
+/// Create-failure rollback path (see `callbacks::remove`): a failed create
+/// attached no controller, so no handler was installed — only the queued
+/// declarations need removing. The PROCESS-GLOBAL scheme set
+/// (`WebviewProtocol::register`) is intentionally untouched: it is shared
+/// across webviews, idempotent to re-declare, and bounded by the app's scheme
+/// list rather than by create attempts. Returns how many schemes were dropped.
+pub fn remove_declarations(webview_id: &str) -> Result<usize> {
+    let dropped = PROTOCOL_STATE
+        .lock()
+        .map_err(|_| Error::from_reason("Failed to lock WebView protocol state"))?
+        .declarations
+        .remove(webview_id)
+        .map(|schemes| schemes.len())
+        .unwrap_or(0);
+    Ok(dropped)
 }
 
 fn reserve_installation(state: &mut ProtocolState, native_tag: &str, scheme: &str) -> bool {

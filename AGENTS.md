@@ -10,6 +10,10 @@
 # Check the whole workspace
 cargo check --workspace
 
+# Windows host, before any `cargo test`/doctest (LNK1181 otherwise): generate the
+# device-library link stubs once per clone. See host-stubs/README.md.
+powershell -ExecutionPolicy Bypass -File host-stubs/generate.ps1
+
 # Host unit tests for a plugin crate (typeName / validation / mode+context assertions)
 cargo test -p openharmony-ability-plugin-<name> --lib
 
@@ -82,6 +86,7 @@ Every `crates/plugin-<name>` is paired with an ArkTS HAR in `plugins/<name>` tha
 - **Platform callbacks** — ArkTS normally calls instance-scoped `context.invokeNativeSync(event, reqTypeName, respTypeName, value)`; Rust answers in `BridgePlugin::on_main_thread_event` within the same callback. Only genuinely process-global transitions (ArkWeb engine initialization) use `invokeNativeSyncProcessWide`. Fail-open (navigation) vs fail-closed (download) per event.
 - **One component tree per native module** — each `DefaultXComponent` owns the single root `FrameNode` for its module, injected before that host's `ui-context-ready`; plugins mount via `context.appendChild(key, node, cleanup)` / `removeChild(key)`. Multiple components/windows use multiple modules, while multiple WebViews in one component use distinct IDs. Built-in `ohos.node` gives Rust opaque u32 handles; `FrameNode` values never cross N-API.
 - **Component-window routing** — `windowStageEvent` remains Ability-scoped, but size/rect/avoid-area/keyboard listeners are attached to the actual `Window` resolved from each component's `UIContext`; those events are never broadcast from the main window to sub-window modules.
+- **NAPI exports are never per-item `#[cfg(target_env = "ohos")]`-gated** (issue #87 minor-9 rule). `#[napi]` / `#[napi(object)]` / `#[napi_derive_ohos::napi]` items and their coupled helpers (statics the NAPI body reads, drain fns) compile on **every** target — host unit tests are a supported workflow, and the ~170 existing export sites are all ungated. OHOS-only *consumption* is expressed by the consumer (tao/tauri self-gate their own modules with `#![cfg(target_env = "ohos")]`), not by gating the export. Escape hatch: an item may carry a per-item cfg ONLY when host compilation is impossible (e.g. it links an OHOS NDK symbol at compile time) — and then the rule should be revisited. The `cargo:rustc-check-cfg=cfg(desktop)/cfg(mobile)` lines in `crates/ability/build.rs` are emitted unconditionally so `cfg!(desktop)` reads in ungated exports stay warning-clean on host.
 
 ## Plugin Contract Rules
 

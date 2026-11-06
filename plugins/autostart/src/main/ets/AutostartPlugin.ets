@@ -1,10 +1,13 @@
 import { autoStartupManager, Want } from "@kit.AbilityKit";
 import { BusinessError } from "@kit.BasicServicesKit";
+import deviceInfo from "@ohos.deviceInfo";
 import {
   AsyncPluginBase,
   BridgeCallContext,
   BridgeTypedValue,
   BridgeContextRequirement,
+  BridgeAcknowledgement,
+  expectBridgeRequestType,
 } from "@ohos-rs/ability";
 
 // ── Bridge type name contracts ────────────────────────────────────────────────
@@ -16,14 +19,6 @@ const IS_ENABLED_REQUEST_TYPE = "ohos.autostart.IsEnabledRequest";
 const ACKNOWLEDGEMENT_TYPE = "ohos.autostart.Acknowledgement";
 const IS_ENABLED_RESPONSE_TYPE = "ohos.autostart.IsEnabledResponse";
 
-class AutostartAcknowledgement {
-  readonly accepted: boolean;
-
-  constructor(accepted: boolean) {
-    this.accepted = accepted;
-  }
-}
-
 class AutostartIsEnabledResponse {
   readonly enabled: boolean;
 
@@ -32,24 +27,10 @@ class AutostartIsEnabledResponse {
   }
 }
 
-function expectRequestType(
-  payload: BridgeTypedValue,
-  action: string,
-  typeName: string,
-): void {
-  if (
-    payload.typeName !== typeName ||
-    payload.value === null ||
-    typeof payload.value !== "object"
-  ) {
-    throw new Error(`ohos.autostart.${action} requires bridge type ${typeName}`);
-  }
-}
-
 function ack(accepted: boolean): BridgeTypedValue {
   return {
     typeName: ACKNOWLEDGEMENT_TYPE,
-    value: new AutostartAcknowledgement(accepted),
+    value: new BridgeAcknowledgement(accepted),
   };
 }
 
@@ -67,17 +48,17 @@ export class AutostartPlugin extends AsyncPluginBase {
     }
 
     if (action === "enable") {
-      expectRequestType(payload, action, ENABLE_REQUEST_TYPE);
+      expectBridgeRequestType(payload, "ohos.autostart", action, ENABLE_REQUEST_TYPE);
       return ack(await this.openAutostartSettings());
     }
 
     if (action === "disable") {
-      expectRequestType(payload, action, DISABLE_REQUEST_TYPE);
+      expectBridgeRequestType(payload, "ohos.autostart", action, DISABLE_REQUEST_TYPE);
       return ack(await this.openAutostartSettings());
     }
 
     if (action === "is-enabled") {
-      expectRequestType(payload, action, IS_ENABLED_REQUEST_TYPE);
+      expectBridgeRequestType(payload, "ohos.autostart", action, IS_ENABLED_REQUEST_TYPE);
       const enabled = await this.queryAutostartStatus();
       return {
         typeName: IS_ENABLED_RESPONSE_TYPE,
@@ -101,6 +82,21 @@ export class AutostartPlugin extends AsyncPluginBase {
    * switch to `application_startup_settings` + `pushParams`.
    */
   private async openAutostartSettings(): Promise<boolean> {
+    // Phone guard (2026-10-08 Mate 70 forensics): startAbility() LAUNCHES the
+    // Settings app even on phones — the pc_app_setup_settings URI is 2in1-only,
+    // so nothing useful opens — and the launch itself minimizes this UIAbility
+    // (AMS MinimizeUIAbilityBySCB), backgrounding the whole app. The phone
+    // resource scheduler then Doze-freezes the process ~30s later
+    // (LifecycleDetectTimeoutProc → FreezeFreezeUnit), which killed the mobile
+    // test suite mid-run. Refuse before launching: the caller receives the
+    // clean "rejected the requested operation" instead of a backgrounded app.
+    // PC/2in1 keep the settings-page navigation (verified behavior, no freeze).
+    if (deviceInfo.deviceType === "phone") {
+      // console.warn (not info): console.info does not reach hilog on this
+      // build — the gate must stay observable for device forensics.
+      console.warn("[Autostart] settings page is PC/2in1-only; refusing startAbility on phone to avoid backgrounding the app");
+      return false;
+    }
     const want: Want = {
       bundleName: "com.huawei.hmos.settings",
       abilityName: "com.huawei.hmos.settings.MainAbility",

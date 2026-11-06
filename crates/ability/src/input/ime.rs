@@ -14,7 +14,14 @@ type ImeCallback = (
     ThreadsafeFunction<i32, (), i32, Status, false>,
 );
 
-pub fn ime_ts_fn(env: &Env, app: OpenHarmonyApp, render_owner: String) -> Result<ImeCallback> {
+/// Builds the four IME TSFNs (text input / backspace / status / enter) for one
+/// window and returns them as a single callback bundle.
+pub fn ime_ts_fn(
+    env: &Env,
+    app: OpenHarmonyApp,
+    render_owner: String,
+    window_id: i64,
+) -> Result<ImeCallback> {
     // insert event
     let on_insert_text_app = app.clone();
     let on_insert_text_owner = render_owner.clone();
@@ -23,11 +30,20 @@ pub fn ime_ts_fn(env: &Env, app: OpenHarmonyApp, render_owner: String) -> Result
             if !on_insert_text_app.is_render_surface_active(&on_insert_text_owner) {
                 return Ok(());
             }
-            let s = ctx.first_arg::<String>().unwrap();
+            // TSFN callback (callee_handled=false): a panic here aborts the
+            // process, and returning Err triggers napi_fatal_exception — equally
+            // fatal. A malformed callback simply carries no event (issue #87 minor-2).
+            let Some(s) = ctx.first_arg::<String>().ok() else {
+                crate::warn!("ime_insert_callback: first_arg missing/invalid, dropping event");
+                return Ok(());
+            };
             if let Some(ref mut h) = *on_insert_text_app.event_loop.borrow_mut() {
-                h(Event::Input(InputEvent::ImeEvent(
-                    ImeEvent::TextInputEvent(TextInputEventData { text: s }),
-                )))
+                h(Event::Input {
+                    window_id,
+                    input: InputEvent::ImeEvent(ImeEvent::TextInputEvent(TextInputEventData {
+                        text: s,
+                    })),
+                })
             }
             Ok(())
         })?;
@@ -45,7 +61,13 @@ pub fn ime_ts_fn(env: &Env, app: OpenHarmonyApp, render_owner: String) -> Result
             if !on_ime_hide_app.is_render_surface_active(&on_ime_hide_owner) {
                 return Ok(());
             }
-            let value = ctx.first_arg::<u32>().unwrap();
+            // See ime_insert_callback: never panic/fatal across the TSFN boundary;
+            // a missing arg carries no status event (defaulting to 0 would be
+            // ambiguous under KeyboardStatus::from).
+            let Some(value) = ctx.first_arg::<u32>().ok() else {
+                crate::warn!("ime_hide_callback: first_arg missing/invalid, dropping event");
+                return Ok(());
+            };
 
             let status = KeyboardStatus::from(value);
             if matches!(status, KeyboardStatus::Hide) {
@@ -53,9 +75,10 @@ pub fn ime_ts_fn(env: &Env, app: OpenHarmonyApp, render_owner: String) -> Result
                 on_ime_hide_app.hide_keyboard();
             }
             if let Some(ref mut h) = *on_ime_hide_app.event_loop.borrow_mut() {
-                h(Event::Input(InputEvent::ImeEvent(
-                    ImeEvent::ImeStatusEvent(status),
-                )))
+                h(Event::Input {
+                    window_id,
+                    input: InputEvent::ImeEvent(ImeEvent::ImeStatusEvent(status)),
+                })
             }
             Ok(())
         })?;
@@ -72,11 +95,16 @@ pub fn ime_ts_fn(env: &Env, app: OpenHarmonyApp, render_owner: String) -> Result
             if !on_backspace_app.is_render_surface_active(&on_backspace_owner) {
                 return Ok(());
             }
-            let value = ctx.first_arg::<i32>().unwrap();
+            // See ime_insert_callback: never panic/fatal across the TSFN boundary.
+            let Some(value) = ctx.first_arg::<i32>().ok() else {
+                crate::warn!("on_backspace_callback: first_arg missing/invalid, dropping event");
+                return Ok(());
+            };
             if let Some(ref mut h) = *on_backspace_app.event_loop.borrow_mut() {
-                h(Event::Input(InputEvent::ImeEvent(
-                    ImeEvent::BackspaceEvent(value),
-                )))
+                h(Event::Input {
+                    window_id,
+                    input: InputEvent::ImeEvent(ImeEvent::BackspaceEvent(value)),
+                })
             }
             Ok(())
         })?;
@@ -93,11 +121,16 @@ pub fn ime_ts_fn(env: &Env, app: OpenHarmonyApp, render_owner: String) -> Result
             if !on_ime_enter_app.is_render_surface_active(&on_ime_enter_owner) {
                 return Ok(());
             }
-            let value = ctx.first_arg::<i32>().unwrap();
+            // See ime_insert_callback: never panic/fatal across the TSFN boundary.
+            let Some(value) = ctx.first_arg::<i32>().ok() else {
+                crate::warn!("on_ime_enter_callback: first_arg missing/invalid, dropping event");
+                return Ok(());
+            };
             if let Some(ref mut h) = *on_ime_enter_app.event_loop.borrow_mut() {
-                h(Event::Input(InputEvent::ImeEvent(ImeEvent::EnterEvent(
-                    value,
-                ))))
+                h(Event::Input {
+                    window_id,
+                    input: InputEvent::ImeEvent(ImeEvent::EnterEvent(value)),
+                })
             }
             Ok(())
         })?;

@@ -30,18 +30,17 @@
 //! if version::distribution_api_version() >= 50001 {
 //!     // Use HarmonyOS 5.0.1+ feature
 //! }
-//!
-//! // Check system capability
-//! if version::can_i_use("SystemCapability.Window.SessionManager") {
-//!     // Device supports this capability
-//! }
 //! ```
+//!
+//! # System capabilities
+//!
+//! `can_i_use` was removed (2026-09): it depended on the `GLOBAL_HELPER`
+//! infrastructure that has had zero initialization points since the
+//! `#[ability]` derive refactor, so it could only ever return `false`.
+//! When syscap querying is actually needed, add a `can-i-use` bridge
+//! action (see the fault-injection built-in plugin for the pattern).
 
 use std::sync::OnceLock;
-
-use napi_ohos::bindgen_prelude::{Function, JsObjectValue};
-
-use crate::{get_helper, get_main_thread_env};
 
 static SDK_API_VERSION: OnceLock<i32> = OnceLock::new();
 static DISTRIBUTION_API_VERSION: OnceLock<i32> = OnceLock::new();
@@ -65,7 +64,7 @@ pub fn init(sdk_version: i32, dist_version: i32) {
 /// # Example
 ///
 /// ```rust
-/// if version::sdk_api_version() >= 14 {
+/// if openharmony_ability::version::sdk_api_version() >= 14 {
 ///     // Use API 14+ feature
 /// }
 /// ```
@@ -93,7 +92,7 @@ pub fn sdk_api_version() -> i32 {
 ///
 /// ```rust
 /// // Check for HarmonyOS 5.0.1 (50001)
-/// if version::distribution_api_version() >= 50001 {
+/// if openharmony_ability::version::distribution_api_version() >= 50001 {
 ///     // Use HarmonyOS 5.0.1+ feature
 /// }
 /// ```
@@ -101,102 +100,34 @@ pub fn distribution_api_version() -> i32 {
     DISTRIBUTION_API_VERSION.get().copied().unwrap_or(0)
 }
 
-/// Check if the device supports a specific system capability.
-///
-/// This function calls the ArkTS global `canIUse()` function via NAPI bridge
-/// to query device capabilities. No caching is performed; each call incurs
-/// a small NAPI overhead (microseconds).
-///
-/// # Arguments
-///
-/// * `syscap` - The system capability string to check (e.g., "SystemCapability.Window.SessionManager")
-///
-/// # Returns
-///
-/// Returns `true` if the device supports the capability, `false` otherwise.
-/// Also returns `false` if the NAPI call fails.
-///
-/// # Example
-///
-/// ```rust
-/// if version::can_i_use("SystemCapability.Location.Location.Core") {
-///     // Device supports location services
-/// }
-/// ```
-///
-/// # Note
-///
-/// This function must be called from a thread with access to the NAPI environment
-/// (typically the main thread). If called from a worker thread without NAPI access,
-/// it will return `false`.
-pub fn can_i_use(syscap: &str) -> bool {
-    let env_cell = get_main_thread_env();
-    let env_borrow = env_cell.borrow();
-    let Some(env) = env_borrow.as_ref() else {
-        crate::warn!("can_i_use: NAPI environment not available, returning false");
-        return false;
-    };
-
-    let helper_cell = get_helper();
-    let Some(helper_ref) = helper_cell.helper() else {
-        crate::warn!("can_i_use: ArkHelper not initialized, returning false");
-        return false;
-    };
-
-    let helper_obj = match helper_ref.get_value(env) {
-        Ok(obj) => obj,
-        Err(e) => {
-            crate::warn!("can_i_use: Failed to get helper object: {:?}", e);
-            return false;
-        }
-    };
-
-    let check_fn = match helper_obj.get_named_property::<Function<'_, String, bool>>("checkCanIUse")
-    {
-        Ok(f) => f,
-        Err(e) => {
-            crate::warn!("can_i_use: Failed to get checkCanIUse function: {:?}", e);
-            return false;
-        }
-    };
-
-    match check_fn.call(syscap.to_string()) {
-        Ok(result) => result,
-        Err(e) => {
-            crate::warn!("can_i_use: NAPI call failed for '{}': {:?}", syscap, e);
-            false
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
     fn test_version_calculation() {
         // Test the version calculation formula: M * 10000 + S * 100 + F
-        assert_eq!(5 * 10000 + 0 * 100 + 0, 50000); // HarmonyOS 5.0.0
-        assert_eq!(5 * 10000 + 0 * 100 + 1, 50001); // HarmonyOS 5.0.1
-        assert_eq!(5 * 10000 + 0 * 100 + 2, 50002); // HarmonyOS 5.0.2
-        assert_eq!(5 * 10000 + 1 * 100 + 0, 50100); // HarmonyOS 5.1.0
-        assert_eq!(6 * 10000 + 0 * 100 + 0, 60000); // HarmonyOS 6.0.0
+        assert_eq!(5_i32 * 10_000_i32, 50_000_i32); // HarmonyOS 5.0.0
+        assert_eq!(5_i32 * 10_000_i32 + 1_i32, 50_001_i32); // HarmonyOS 5.0.1
+        assert_eq!(5_i32 * 10_000_i32 + 2_i32, 50_002_i32); // HarmonyOS 5.0.2
+        assert_eq!(5_i32 * 10_000_i32 + 100_i32, 50_100_i32); // HarmonyOS 5.1.0
+        assert_eq!(6_i32 * 10_000_i32, 60_000_i32); // HarmonyOS 6.0.0
     }
 
     #[test]
     fn test_version_comparison() {
         // Test version comparison logic
-        let v50001 = 50001; // HarmonyOS 5.0.1
-        let v60000 = 60000; // HarmonyOS 6.0.0
+        let v50001 = 50_001_i32; // HarmonyOS 5.0.1
+        let v60000 = 60_000_i32; // HarmonyOS 6.0.0
 
-        assert!(v60000 >= 50001);
-        assert!(v50001 >= 50001);
-        assert!(!(v50001 >= 60000));
+        assert!(v60000 >= 50_001_i32);
+        assert!(v50001 >= 50_001_i32);
+        assert!(v50001 < 60_000_i32);
 
-        let sdk_v14 = 14;
-        let sdk_v12 = 12;
+        let sdk_v14 = 14_i32;
+        let sdk_v12 = 12_i32;
 
-        assert!(sdk_v14 >= 14);
-        assert!(sdk_v12 >= 12);
-        assert!(!(sdk_v12 >= 14));
+        assert!(sdk_v14 >= 14_i32);
+        assert!(sdk_v12 >= 12_i32);
+        assert!(sdk_v12 < 14_i32);
     }
 
     // NAPI-dependent tests: require OHOS device runtime
@@ -204,7 +135,7 @@ mod tests {
     //   PACKAGE=openharmony-ability bash .claude/skills/ohos-rust-ut/scripts/run-ut.sh version::
     #[cfg(target_env = "ohos")]
     mod ohos_device_tests {
-        use crate::{init, sdk_api_version, distribution_api_version, can_i_use};
+        use crate::{distribution_api_version, init, sdk_api_version};
 
         #[test]
         fn test_sdk_api_version_returns_value() {
@@ -229,7 +160,10 @@ mod tests {
             // Either way, the returned values should be > 0 since init() was called.
             let sdk = sdk_api_version();
             let dist = distribution_api_version();
-            assert!(sdk > 0, "sdk_api_version should be > 0 after init, got {sdk}");
+            assert!(
+                sdk > 0,
+                "sdk_api_version should be > 0 after init, got {sdk}"
+            );
             assert!(
                 dist > 0,
                 "distribution_api_version should be > 0 after init, got {dist}"
@@ -258,58 +192,22 @@ mod tests {
         }
 
         #[test]
-        fn test_can_i_use_valid_syscap() {
-            // A syscap that exists on virtually all OHOS devices
-            // In test binary mode, NAPI is not initialized → returns false (early return)
-            // In a real app with NAPI context → would return true
-            let result = can_i_use("SystemCapability.Window.SessionManager");
-            // We can't assert true here because test binary has no NAPI context.
-            // But it MUST NOT panic or crash.
-            assert!(
-                !result || result,
-                "can_i_use should return a boolean without panicking"
-            );
-        }
-
-        #[test]
-        fn test_can_i_use_invalid_syscap() {
-            let result = can_i_use("SystemCapability.Fake.NonExistent.Capability");
-            assert!(!result, "non-existent syscap should return false");
-        }
-
-        #[test]
-        fn test_can_i_use_empty_string() {
-            let result = can_i_use("");
-            assert!(!result, "empty syscap should return false");
-        }
-
-        #[test]
-        fn test_can_i_use_from_worker_thread() {
-            // can_i_use from a non-main thread should return false (no NAPI env)
-            // and must NOT panic
-            let handle = std::thread::spawn(|| {
-                let result = can_i_use("SystemCapability.Window.SessionManager");
-                // From worker thread: get_main_thread_env() returns None → false
-                assert!(
-                    !result,
-                    "can_i_use from worker thread should return false"
-                );
-            });
-            handle.join().expect("worker thread should not panic");
-        }
-
-        #[test]
         fn test_sdk_api_version_from_worker_thread() {
             // Version getters from worker thread should still work
             // (they read from OnceLock, no NAPI dependency)
             let handle = std::thread::spawn(|| {
                 let sdk = sdk_api_version();
                 let dist = distribution_api_version();
-                assert!(sdk >= 0, "sdk_api_version from worker thread should be >= 0");
-                assert!(dist >= 0, "distribution_api_version from worker thread should be >= 0");
+                assert!(
+                    sdk >= 0,
+                    "sdk_api_version from worker thread should be >= 0"
+                );
+                assert!(
+                    dist >= 0,
+                    "distribution_api_version from worker thread should be >= 0"
+                );
             });
             handle.join().expect("worker thread should not panic");
         }
     }
 }
-

@@ -23,7 +23,7 @@
 //! up per Ability session.
 
 use napi_derive_ohos::napi;
-use napi_ohos::{Error, Result};
+use napi_ohos::{Error, Result, Status};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -62,14 +62,63 @@ impl_bridge_napi_type!(UpdaterCheckRequest, "ohos.updater.CheckRequest");
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct UpdaterCheckResponse {
+    /// `true` when AppGallery reports an applicable update.
     pub update_available: bool,
+    /// Version string currently installed on the device.
     pub current_version: String,
-    pub version: String,
+    /// `None` when the device API level is below 20 (`versionName` unavailable).
+    pub version: Option<String>,
+    /// Update description body from AppGallery, when present.
     pub body: Option<String>,
+    /// Human-readable release date of the update, when present.
     pub date: Option<String>,
 }
 
-impl_bridge_napi_type!(UpdaterCheckResponse, "ohos.updater.CheckResponse");
+// Hand-rolled decode instead of `impl_bridge_napi_type!`: the
+// napi-derive-backend-ohos 1.2.0 object getter infers the item type from the
+// assignment target, so a derived `let body_: Option<String> = obj.get("body")`
+// compiles as `obj.get::<String>` and explodes with `StringExpected` when ArkTS
+// sends an explicit `null` (the "No update available" response does exactly
+// that — `new UpdaterCheckResponse(false, "unknown", "unknown", null, null)`).
+// A missing property happens to work (the getter skips conversion), which is
+// why no other Option-field bridge type has hit this yet. The explicit
+// turbofish + `flatten()` handles present-null, absent, and undefined alike.
+impl BridgeNapiType for UpdaterCheckResponse {
+    const TYPE_NAME: &'static str = "ohos.updater.CheckResponse";
+
+    fn into_bridge_value<'env>(
+        self,
+        env: &'env napi_ohos::Env,
+    ) -> Result<napi_ohos::bindgen_prelude::Unknown<'env>> {
+        <Self as napi_ohos::bindgen_prelude::ToNapiValue>::into_unknown(self, env)
+    }
+
+    fn from_bridge_value(value: napi_ohos::bindgen_prelude::Unknown<'_>) -> Result<Self> {
+        use napi_ohos::bindgen_prelude::{FromNapiValue, Object};
+        let obj = Object::from_unknown(value)?;
+        let missing =
+            |name: &'static str| Error::new(Status::InvalidArg, format!("Missing field `{name}`"));
+        let update_available: bool = obj
+            .get("updateAvailable")?
+            .ok_or_else(|| missing("updateAvailable"))?;
+        let current_version: String = obj
+            .get("currentVersion")?
+            .ok_or_else(|| missing("currentVersion"))?;
+        // `version` is nullable: `None` when the device API level is below 20
+        // (AppGallery `versionName` unavailable) — same explicit-null handling
+        // as `body`/`date` above.
+        let version: Option<String> = obj.get::<Option<String>>("version")?.flatten();
+        let body: Option<String> = obj.get::<Option<String>>("body")?.flatten();
+        let date: Option<String> = obj.get::<Option<String>>("date")?.flatten();
+        Ok(Self {
+            update_available,
+            current_version,
+            version,
+            body,
+            date,
+        })
+    }
+}
 
 /// Empty request marker for the `downloadAndInstall` action.
 #[napi(object)]
@@ -81,9 +130,11 @@ impl_bridge_napi_type!(
     "ohos.updater.DownloadAndInstallRequest"
 );
 
+/// `download-and-install` response payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct UpdaterDownloadAndInstallResponse {
+    /// `true` when the ArkTS side accepted the download-and-install request.
     pub accepted: bool,
 }
 
@@ -104,9 +155,13 @@ impl_bridge_napi_type!(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckResult {
+    /// Version string currently installed on the device.
     pub current_version: String,
-    pub version: String,
+    /// `None` when the device API level is below 20 (`versionName` unavailable).
+    pub version: Option<String>,
+    /// Update description body from AppGallery, when present.
     pub body: Option<String>,
+    /// Human-readable release date of the update, when present.
     pub date: Option<String>,
 }
 
@@ -151,10 +206,7 @@ impl Updater {
     /// Returns `Ok(Some(result))` if an update is available, `Ok(None)` otherwise.
     pub async fn check(&self) -> Result<Option<CheckResult>> {
         let response = self
-            .call::<UpdaterCheckRequest, UpdaterCheckResponse>(
-                "check",
-                UpdaterCheckRequest {},
-            )
+            .call::<UpdaterCheckRequest, UpdaterCheckResponse>("check", UpdaterCheckRequest {})
             .await?;
         if !response.update_available {
             return Ok(None);
@@ -178,15 +230,13 @@ impl Updater {
         if response.accepted {
             Ok(())
         } else {
-            Err(Error::from_reason("updater downloadAndInstall rejected by plugin"))
+            Err(Error::from_reason(
+                "updater downloadAndInstall rejected by plugin",
+            ))
         }
     }
 
-    async fn call<Request, Response>(
-        &self,
-        action: &str,
-        request: Request,
-    ) -> Result<Response>
+    async fn call<Request, Response>(&self, action: &str, request: Request) -> Result<Response>
     where
         Request: BridgeNapiType,
         Response: BridgeNapiType,
@@ -209,7 +259,7 @@ mod tests {
     fn check_result_serde_roundtrip() {
         let result = CheckResult {
             current_version: "1.0.0".into(),
-            version: "2.0.0".into(),
+            version: Some("2.0.0".into()),
             body: Some("Bug fixes".into()),
             date: Some("2025-01-15".into()),
         };
@@ -218,32 +268,32 @@ mod tests {
         assert!(json.contains("\"version\":\"2.0.0\""));
         let deserialized: CheckResult = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.current_version, "1.0.0");
-        assert_eq!(deserialized.version, "2.0.0");
+        assert_eq!(deserialized.version.as_deref(), Some("2.0.0"));
         assert_eq!(deserialized.body, Some("Bug fixes".into()));
         assert_eq!(deserialized.date, Some("2025-01-15".into()));
     }
 
     #[test]
     fn check_result_optional_nulls() {
-        let json = r#"{"currentVersion":"1.0.0","version":"unknown","body":null,"date":null}"#;
+        let json = r#"{"currentVersion":"1.0.0","version":null,"body":null,"date":null}"#;
         let result: CheckResult = serde_json::from_str(json).unwrap();
         assert_eq!(result.current_version, "1.0.0");
-        assert_eq!(result.version, "unknown");
+        assert_eq!(result.version, None);
         assert_eq!(result.body, None);
         assert_eq!(result.date, None);
     }
 
     #[test]
     fn check_result_unknown_version_fallback() {
-        // Simulates SDK 12 where versionName is not available
+        // Simulates SDK 12 where versionName is not available (ArkTS returns null)
         let result = CheckResult {
             current_version: "1.0.0".into(),
-            version: "unknown".into(),
+            version: None,
             body: None,
             date: None,
         };
         let json = serde_json::to_value(&result).unwrap();
-        assert_eq!(json["version"], "unknown");
+        assert!(json["version"].is_null());
     }
 
     #[test]

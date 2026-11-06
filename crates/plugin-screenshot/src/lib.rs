@@ -12,9 +12,12 @@
 
 use napi_ohos::{Error, Result};
 use openharmony_ability::OpenHarmonyApp;
-use openharmony_ability_plugin_webview::{WebviewCaptureResponse, WebviewClient, WebviewPickColorResponse};
+use openharmony_ability_plugin_webview::{
+    WebviewCaptureResponse, WebviewClient, WebviewPickColorResponse,
+};
 
-/// A full-page webview screenshot: a base64-encoded PNG plus its pixel dimensions.
+/// A viewport webview screenshot (the on-screen area, not the full scrollable page):
+/// a base64-encoded PNG plus its pixel dimensions.
 ///
 /// base64 (not raw bytes) — a `Vec<u8>` in a napi object would serialize as
 /// `Array<number>`, inflating a multi-hundred-KB PNG ~8x in memory.
@@ -41,9 +44,13 @@ impl From<WebviewCaptureResponse> for CapturedImage {
 /// A single pixel's color channels (0-255 each).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgba {
+    /// Red channel (0-255).
     pub r: u32,
+    /// Green channel (0-255).
     pub g: u32,
+    /// Blue channel (0-255).
     pub b: u32,
+    /// Alpha channel (0-255, 255 = opaque).
     pub a: u32,
 }
 
@@ -67,12 +74,21 @@ impl From<WebviewPickColorResponse> for Rgba {
 #[derive(Clone, Debug)]
 pub enum ScreenshotError {
     /// No WebView is registered under the requested id.
-    UnknownWebview { message: String },
+    UnknownWebview {
+        /// Raw bridge error reason preserved for diagnostics.
+        message: String,
+    },
     /// The snapshot could not be produced (retries exhausted, timeout, or the webview
     /// has not rendered its first frame yet).
-    SnapshotUnavailable { message: String },
+    SnapshotUnavailable {
+        /// Raw bridge error reason preserved for diagnostics.
+        message: String,
+    },
     /// Any other failure (PNG packing, pixel read, coordinate bounds, ...).
-    Internal { message: String },
+    Internal {
+        /// Raw bridge error reason preserved for diagnostics.
+        message: String,
+    },
 }
 
 impl ScreenshotError {
@@ -124,6 +140,10 @@ pub struct ScreenshotClient {
 }
 
 impl ScreenshotClient {
+    /// Creates a client wrapping the app's webview client.
+    ///
+    /// # Errors
+    /// Returns an error when the app has no webview bridge client available.
     pub fn new(app: &OpenHarmonyApp) -> Result<Self> {
         Ok(Self {
             webviews: WebviewClient::new(app)?,

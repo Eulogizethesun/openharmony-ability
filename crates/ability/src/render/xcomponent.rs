@@ -3,17 +3,23 @@ use napi_ohos::{Env, Error, Result};
 use ohos_arkui_binding::component::attribute::ArkUICommonAttribute;
 use ohos_arkui_binding::{ArkUIHandle, RootNode, XComponent};
 use ohos_ime_binding::IME;
+use ohos_xcomponent_binding::{XComponentOffset, XComponentSize};
 
 use crate::{
-    input, set_main_thread_env,
-    Event, InputEvent, IntervalInfo, OpenHarmonyApp, Rect, Size,
+    input, set_main_thread_env, Event, InputEvent, IntervalInfo, OpenHarmonyApp, Rect, Size,
 };
 
 /// create lifecycle object and return to arkts
+///
+/// `window_id` is the UIAbility window this render surface belongs to (0 =
+/// primary). Passed by DefaultXComponent from its per-instance LocalStorage
+/// (Phase 4, design.md D5) and stamped into every event the closures below
+/// dispatch, so tao routes input/redraw/resize by the originating window.
 pub fn render(
     env: &Env,
     slot: ArkUIHandle,
     render_owner: String,
+    window_id: i64,
     app: OpenHarmonyApp,
 ) -> Result<RootNode> {
     set_main_thread_env(*env);
@@ -50,11 +56,23 @@ pub fn render(
         on_ime_hide_callback_tsfn,
         on_backspace_callback_tsfn,
         on_ime_enter_callback_tsfn,
-    ) = input::ime_ts_fn(env, app.clone(), render_owner.clone())?;
+    ) = input::ime_ts_fn(env, app.clone(), render_owner.clone(), window_id)?;
 
     xcomponent.on_surface_created(move |xc_raw, win| {
-        let size = xc_raw.size(win).unwrap();
-        let offset = xc_raw.offset(win).unwrap();
+        // NDK callback boundary: a panic here aborts the process (no unwinding
+        // across "extern C"). Degrade to 0x0 + warn instead (issue #87 minor-2);
+        // a subsequent on_surface_changed carries the real geometry.
+        let size = xc_raw.size(win).unwrap_or_else(|e| {
+            crate::warn!("on_surface_created: size() failed: {e:?}, degrading to 0x0");
+            XComponentSize {
+                width: 0,
+                height: 0,
+            }
+        });
+        let offset = xc_raw.offset(win).unwrap_or_else(|e| {
+            crate::warn!("on_surface_created: offset() failed: {e:?}, degrading to 0,0");
+            XComponentOffset { x: 0.0, y: 0.0 }
+        });
         let rect = Rect {
             top: offset.y as _,
             left: offset.x as _,
@@ -102,10 +120,13 @@ pub fn render(
                 return Ok(());
             }
             if let Some(ref mut h) = *inner_redraw_app.event_loop.borrow_mut() {
-                h(Event::WindowRedraw(IntervalInfo {
-                    time_stamp: _time_stamp as _,
-                    target_time_stamp: _time as _,
-                }))
+                h(Event::WindowRedraw {
+                    window_id,
+                    info: IntervalInfo {
+                        time_stamp: _time_stamp as _,
+                        target_time_stamp: _time as _,
+                    },
+                })
             }
             Ok(())
         })?;
@@ -124,8 +145,24 @@ pub fn render(
     let on_surface_changed_app = app.clone();
     let on_surface_changed_owner = render_owner.clone();
     xcomponent.on_surface_changed(move |xc, win| {
-        let size = xc.size(win).unwrap();
-        let offset = xc.offset(win).unwrap();
+        // NDK callback boundary: never panic (issue #87 minor-2). If the geometry
+        // can't be read, skip this change event rather than dispatching a bogus
+        // 0x0 WindowResize into tao — the next surface-changed callback carries
+        // the real values.
+        let size = match xc.size(win) {
+            Ok(size) => size,
+            Err(e) => {
+                crate::warn!("on_surface_changed: size() failed: {e:?}, skipping rect update");
+                return Ok(());
+            }
+        };
+        let offset = match xc.offset(win) {
+            Ok(offset) => offset,
+            Err(e) => {
+                crate::warn!("on_surface_changed: offset() failed: {e:?}, skipping rect update");
+                return Ok(());
+            }
+        };
         if on_surface_changed_app.update_render_surface_rect(
             &on_surface_changed_owner,
             Rect {
@@ -136,11 +173,13 @@ pub fn render(
             },
         ) {
             if let Some(ref mut h) = *on_surface_changed_app.event_loop.borrow_mut() {
-                // Phase 3 (design.md D6 / task 3.5): XComponent is the main window's
-                // surface, so window_id is always 0. Carrying it explicitly lets tao's
-                // run_loop route WindowResize uniformly (instead of a special-cased ZST).
+                // Phase 4 (design.md D5): the XComponent belongs to the window
+                // that called render(), so the resize is keyed by that id —
+                // tao's run_loop routes WindowResize uniformly to the right
+                // window (0 = primary in practice; spawned UIAbility windows
+                // mount no XComponent).
                 h(Event::WindowResize {
-                    window_id: 0,
+                    window_id,
                     size: Size {
                         width: size.width as _,
                         height: size.height as _,
@@ -158,7 +197,10 @@ pub fn render(
             return Ok(());
         }
         if let Some(ref mut h) = *on_touch_event_app.event_loop.borrow_mut() {
-            h(Event::Input(InputEvent::TouchEvent(data)))
+            h(Event::Input {
+                window_id,
+                input: InputEvent::TouchEvent(data),
+            })
         }
         Ok(())
     });
@@ -170,7 +212,10 @@ pub fn render(
             return Ok(());
         }
         if let Some(ref mut h) = *on_key_event_app.event_loop.borrow_mut() {
-            h(Event::Input(InputEvent::KeyEvent(data)));
+            h(Event::Input {
+                window_id,
+                input: InputEvent::KeyEvent(data),
+            });
         }
         Ok(())
     });
@@ -182,7 +227,10 @@ pub fn render(
             return Ok(());
         }
         if let Some(ref mut h) = *on_mouse_event_app.event_loop.borrow_mut() {
-            h(Event::Input(InputEvent::MouseEvent(data.into())));
+            h(Event::Input {
+                window_id,
+                input: InputEvent::MouseEvent(data.into()),
+            });
         }
         Ok(())
     })?;

@@ -47,6 +47,7 @@ impl ResourceManager {
         Self(Arc::new(native))
     }
 
+    /// Borrows the underlying native resource manager.
     pub fn inner(&self) -> &NativeResourceManager {
         self.0.as_ref()
     }
@@ -67,10 +68,14 @@ pub struct ResourceBridgePlugin {
 }
 
 impl ResourceBridgePlugin {
+    /// Creates an empty plugin instance; the manager arrives later via
+    /// `resource-manager-ready`.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Returns the installed manager handle, or `None` before
+    /// `resource-manager-ready` (or after an Ability-scoped lifecycle clear).
     pub fn resource_manager(&self) -> Option<ResourceManager> {
         self.resource_manager
             .read()
@@ -113,9 +118,18 @@ impl BridgePlugin for ResourceBridgePlugin {
     }
 
     fn on_lifecycle(&self, event: &PluginLifecycleEvent) -> Result<()> {
+        // The stored manager belongs to the primary window's registry (the
+        // Ability-scoped wrapper pushes once via resource-manager-ready). A
+        // spawned UIAbility instance's create/destroy must not clear it —
+        // under the D12 join model a joined instance skips
+        // configurePlugins/onInstall, so resource-manager-ready is never
+        // re-pushed and the primary would lose resource access permanently.
+        // Single-instance events all carry window_id 0, so this gate never
+        // changes existing behavior (multi-uiability-windows R11 / AF2).
         if matches!(
             event,
-            PluginLifecycleEvent::AbilityCreated { .. } | PluginLifecycleEvent::AbilityDestroyed
+            PluginLifecycleEvent::AbilityCreated { window_id: 0, .. }
+                | PluginLifecycleEvent::AbilityDestroyed { window_id: 0 }
         ) {
             self.replace_resource_manager(None)?;
         }
@@ -130,6 +144,7 @@ impl BridgePlugin for ResourceBridgePlugin {
 pub struct ResourceManagerRef(ResourceManager);
 
 impl ResourceManagerRef {
+    /// Consumes the ref and returns the owned native resource manager handle.
     pub fn into_manager(self) -> ResourceManager {
         self.0
     }
@@ -158,9 +173,11 @@ impl BridgeNapiType for ResourceManagerRef {
     }
 }
 
+/// `resource-manager-ready` acknowledgement payload.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ResourceManagerReadyResponse {
+    /// `true` when the Rust side stored the manager.
     pub accepted: bool,
 }
 
@@ -182,6 +199,8 @@ impl_bridge_napi_type!(
 /// }
 /// ```
 pub trait ResourceExt {
+    /// Returns the installed [`ResourceManager`] handle, or `None` when the
+    /// `ohos.resource` plugin has not reported readiness yet.
     fn resource_manager(&self) -> Option<ResourceManager>;
 }
 

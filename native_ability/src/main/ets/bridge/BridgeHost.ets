@@ -406,17 +406,21 @@ class BridgeHost {
     };
     this.pendingComponent = pending;
 
-    console.info(`[DBG-AC] attachComponent ENTER mod=${this.moduleName} sess=${this.sessionId} ready=${this.windowStageReady} stageDefined=${this.windowStage !== undefined}`);
+    console.debug(
+      `[DBG- attachComponent ENTER mod=${this.moduleName} sess=${this.sessionId} ready=${this.windowStageReady} stageDefined=${this.windowStage !== undefined}`,
+    );
     return this.enqueueLifecycle("attach component", async (): Promise<void> => {
       if (this.pendingComponent === pending) {
         this.pendingComponent = undefined;
       }
       if (pending.cancelled) {
-        console.info(`[DBG-AC] attachComponent OP cancelled mod=${this.moduleName}`);
+        console.debug(`[DBG- attachComponent OP cancelled mod=${this.moduleName}`);
         return;
       }
       this.assertActive();
-      console.info(`[DBG-AC] attachComponent OP start mod=${this.moduleName} sess=${this.sessionId} ready=${this.windowStageReady} stageDefined=${this.windowStage !== undefined} stageGen=${this.windowStageGeneration} disposed=${this.disposed}`);
+      console.debug(
+        `[DBG- attachComponent OP start mod=${this.moduleName} sess=${this.sessionId} ready=${this.windowStageReady} stageDefined=${this.windowStage !== undefined} stageGen=${this.windowStageGeneration} disposed=${this.disposed}`,
+      );
       if (!this.windowStageReady) {
         throw new Error(
           `DefaultXComponent cannot attach without an active WindowStage for '${this.moduleName}'`,
@@ -598,13 +602,22 @@ class BridgeHost {
         // Phase 3 (design.md D2/D3): route through per-window(0) throttle. This is the
         // main-window component window's second windowSizeChange registration (the first
         // is in NativeAbility.ets) — the throttle merges both sources for windowId=0.
-        const wrapped: WindowSizeEventWrap = { windowId: 0, width: size.width, height: size.height };
-        WindowManager.getInstance().throttledRectDispatch(0, wrapped, (w: object) => {
-          if (this.component !== state || this.closing || this.disposed) {
-            return;
-          }
-          this.applicationLifecycle?.windowStageEventCallback.onWindowSizeChange(w);
-        }, 'size');
+        const wrapped: WindowSizeEventWrap = {
+          windowId: 0,
+          width: size.width,
+          height: size.height,
+        };
+        WindowManager.getInstance().throttledRectDispatch(
+          0,
+          wrapped,
+          (w: object) => {
+            if (this.component !== state || this.closing || this.disposed) {
+              return;
+            }
+            this.applicationLifecycle?.windowStageEventCallback.onWindowSizeChange(w);
+          },
+          "size",
+        );
       } catch {}
     };
     const onRectChange = (options: window.RectChangeOptions): void => {
@@ -614,17 +627,31 @@ class BridgeHost {
       try {
         // Phase 3 (design.md D2/D3/D5): route through per-window(0) throttle.
         // Deep-copy rect fields (not system object ref) per design.md D5.
+        // Issue Eulogizethesun/tauri#97: attach the same moment's drawableRect
+        // (sync getWindowProperties snapshot) so the Rust inner-rect cache
+        // tracks the system-defined inner value — omitted when unreadable.
         const wrapped: WindowRectEventWrap = {
           windowId: 0,
           reason: options.reason,
-          rect: { left: options.rect.left, top: options.rect.top, width: options.rect.width, height: options.rect.height }
+          rect: {
+            left: options.rect.left,
+            top: options.rect.top,
+            width: options.rect.width,
+            height: options.rect.height,
+          },
+          drawable: WindowManager.readDrawableRect(componentWindow),
         };
-        WindowManager.getInstance().throttledRectDispatch(0, wrapped, (w: object) => {
-          if (this.component !== state || this.closing || this.disposed) {
-            return;
-          }
-          this.applicationLifecycle?.windowStageEventCallback.onWindowRectChange(w);
-        }, 'rect');
+        WindowManager.getInstance().throttledRectDispatch(
+          0,
+          wrapped,
+          (w: object) => {
+            if (this.component !== state || this.closing || this.disposed) {
+              return;
+            }
+            this.applicationLifecycle?.windowStageEventCallback.onWindowRectChange(w);
+          },
+          "rect",
+        );
       } catch {}
     };
     const onAvoidAreaChange = (options: window.AvoidAreaOptions): void => {
@@ -632,7 +659,10 @@ class BridgeHost {
         return;
       }
       try {
-        this.applicationLifecycle?.windowStageEventCallback.onAvoidAreaChange(options);
+        // windowId 0 like the size/rect handlers above: attachComponentWindow
+        // binds to the session-owning (primary) instance's component window —
+        // a joined instance never attaches a component (design.md D12/OQ3).
+        this.applicationLifecycle?.windowStageEventCallback.onAvoidAreaChange(options, 0);
       } catch {}
     };
     const onKeyboardHeightChange = (height: number): void => {
@@ -640,7 +670,7 @@ class BridgeHost {
         return;
       }
       try {
-        this.applicationLifecycle?.keyboardEventCallback.onKeyboardHeightChange(height);
+        this.applicationLifecycle?.keyboardEventCallback.onKeyboardHeightChange(height, 0);
       } catch {}
     };
     state.windowBinding = {
@@ -661,6 +691,37 @@ class BridgeHost {
     } catch {}
     try {
       componentWindow.on("keyboardHeightChange", onKeyboardHeightChange);
+    } catch {}
+
+    // Review R13: seed the rect caches at attach time — attachComponentWindow
+    // resolves the window through a UIContext, so content is loaded here and
+    // drawableRect is readable (unlike the NativeAbility registration point,
+    // which runs pre-load). Dispatches as windowId=0 through the same throttle
+    // as the real handler; an extra seed is idempotent (pair write + no rect
+    // diff → no duplicate events).
+    try {
+      if (this.component === state && !this.closing && !this.disposed) {
+        const snapshot = WindowManager.readWindowRectSnapshot(componentWindow);
+        if (snapshot) {
+          const wrapped: WindowRectEventWrap = {
+            windowId: 0,
+            reason: window.RectChangeReason.UNDEFINED,
+            rect: snapshot.rect,
+            drawable: snapshot.drawable,
+          };
+          WindowManager.getInstance().throttledRectDispatch(
+            0,
+            wrapped,
+            (w: object) => {
+              if (this.component !== state || this.closing || this.disposed) {
+                return;
+              }
+              this.applicationLifecycle?.windowStageEventCallback.onWindowRectChange(w);
+            },
+            "rect",
+          );
+        }
+      }
     } catch {}
   }
 
@@ -777,20 +838,28 @@ class BridgeHost {
   async setWindowStage(windowStage: window.WindowStage): Promise<void> {
     this.assertActive();
     const generation = ++this.windowStageGeneration;
-    console.info(`[DBG-WS] setWindowStage ENTER mod=${this.moduleName} sess=${this.sessionId} gen=${generation} prevReady=${this.windowStageReady}`);
+    console.debug(
+      `[DBG- setWindowStage ENTER mod=${this.moduleName} sess=${this.sessionId} gen=${generation} prevReady=${this.windowStageReady}`,
+    );
     await this.enqueueLifecycle("window-stage-create", async (): Promise<void> => {
       this.assertActive();
-      console.info(`[DBG-WS] setWindowStage OP start mod=${this.moduleName} sess=${this.sessionId} gen=${generation} windowStageGeneration=${this.windowStageGeneration} prevReady=${this.windowStageReady}`);
+      console.debug(
+        `[DBG- setWindowStage OP start mod=${this.moduleName} sess=${this.sessionId} gen=${generation} windowStageGeneration=${this.windowStageGeneration} prevReady=${this.windowStageReady}`,
+      );
       if (generation !== this.windowStageGeneration) {
-        console.info(`[DBG-WS] setWindowStage OP SKIP (gen mismatch) mod=${this.moduleName}`);
+        console.debug(`[DBG- setWindowStage OP SKIP (gen mismatch) mod=${this.moduleName}`);
         return;
       }
       this.windowStage = windowStage;
       this.windowStageReady = true;
-      console.info(`[DBG-WS] setWindowStage OP done mod=${this.moduleName} sess=${this.sessionId} ready=true`);
+      console.debug(
+        `[DBG- setWindowStage OP done mod=${this.moduleName} sess=${this.sessionId} ready=true`,
+      );
       this.notifyContextChanged();
     });
-    console.info(`[DBG-WS] setWindowStage EXIT mod=${this.moduleName} sess=${this.sessionId} ready=${this.windowStageReady}`);
+    console.debug(
+      `[DBG- setWindowStage EXIT mod=${this.moduleName} sess=${this.sessionId} ready=${this.windowStageReady}`,
+    );
   }
 
   async clearWindowStage(): Promise<void> {
@@ -947,9 +1016,7 @@ class BridgeHost {
             // A pending Promise would leak callState — removeActiveCall is bound
             // in operation's .finally, which never settles. Throwing causes
             // operation reject → .finally runs → cleanup proceeds normally.
-            throw new Error(
-              `Bridge call '${pluginId}.${action}' timed out after injected timeout`,
-            );
+            throw new Error(`Bridge call '${pluginId}.${action}' timed out after injected timeout`);
           }
         }
         const result = await asyncPlugin.invokeAsync(
@@ -1390,41 +1457,60 @@ class BridgeHost {
     };
   }
 
-  private pluginHookContext(
-    pluginId: string,
-    signal: TaskCancellationSignal,
+  // Shared builder for the cancellable-context family (issue #87 minor-5): the
+  // platform members are delegated from a base pluginContext, the three
+  // cancellation members are injected — pluginHookContext used to duplicate all
+  // of this field-by-field. (callContext keeps its own literal: ArkTS forbids
+  // assigning a BridgePluginHookContext value to the BridgeCallContext return
+  // type, so its extra action/timeoutMs members rule out the factory.)
+  private cancellableContext(
+    base: BridgePluginContext,
+    isActive: () => boolean,
+    isCancelled: () => boolean,
+    onCancel: (listener: () => void) => () => void,
   ): BridgePluginHookContext {
-    const context = this.pluginContext(pluginId);
     return {
-      pluginId,
-      sessionId: this.sessionId,
-      abilityContext: this.abilityContext,
-      isActive: (): boolean => context.isActive() && !signal.isCancelled(),
-      isCancelled: (): boolean => signal.isCancelled() || this.disposed,
-      onCancel: (listener: () => void): (() => void) => signal.onCancel(listener),
-      getWindowStage: (): window.WindowStage => context.getWindowStage(),
-      getWindow: (): window.Window => context.getWindow(),
-      getUIContext: (): UIContext => context.getUIContext(),
-      getRootFrameNode: (): FrameNode => context.getRootFrameNode(),
+      pluginId: base.pluginId,
+      sessionId: base.sessionId,
+      abilityContext: base.abilityContext,
+      isActive,
+      isCancelled,
+      onCancel,
+      getWindowStage: (): window.WindowStage => base.getWindowStage(),
+      getWindow: (): window.Window => base.getWindow(),
+      getUIContext: (): UIContext => base.getUIContext(),
+      getRootFrameNode: (): FrameNode => base.getRootFrameNode(),
       appendChild: (key: string, node: FrameNode, cleanup?: () => void): void =>
-        context.appendChild(key, node, cleanup),
-      removeChild: (key: string): void => context.removeChild(key),
-      getFrameNode: (handle: number): FrameNode => context.getFrameNode(handle),
+        base.appendChild(key, node, cleanup),
+      removeChild: (key: string): void => base.removeChild(key),
+      getFrameNode: (handle: number): FrameNode => base.getFrameNode(handle),
       invokeNativeSync: (
         event: string,
         requestTypeName: string,
         responseTypeName: string,
         value: ESObject,
-      ): ESObject =>
-        this.invokeNativeSync(pluginId, event, requestTypeName, responseTypeName, value),
+      ): ESObject => base.invokeNativeSync(event, requestTypeName, responseTypeName, value),
       invokeNativeSyncProcessWide: (
         event: string,
         requestTypeName: string,
         responseTypeName: string,
         value: ESObject,
       ): ESObject[] =>
-        context.invokeNativeSyncProcessWide(event, requestTypeName, responseTypeName, value),
+        base.invokeNativeSyncProcessWide(event, requestTypeName, responseTypeName, value),
     };
+  }
+
+  private pluginHookContext(
+    pluginId: string,
+    signal: TaskCancellationSignal,
+  ): BridgePluginHookContext {
+    const base = this.pluginContext(pluginId);
+    return this.cancellableContext(
+      base,
+      (): boolean => base.isActive() && !signal.isCancelled(),
+      (): boolean => signal.isCancelled() || this.disposed,
+      (listener: () => void): (() => void) => signal.onCancel(listener),
+    );
   }
 
   private async runPluginHook(
@@ -1671,6 +1757,10 @@ class BridgeHost {
     if (value === undefined || typeof value === "function" || typeof value === "symbol") {
       throw new Error(`Bridge ${role} '${payload.typeName}' is not an N-API data value`);
     }
+    // The size cap only applies to BARE top-level string/Uint8Array values.
+    // Object payloads are deliberately exempt: actions like capture-webview return
+    // a multi-hundred-KB base64 wrapped in an object ({ pngBase64, width, height }),
+    // and the Rust side applies no equivalent cap.
     if (
       (typeof value === "string" || value instanceof Uint8Array) &&
       value.length > MAX_PAYLOAD_BYTES
@@ -1807,13 +1897,35 @@ export class BridgeHostRegistry {
   private static readonly moduleOwners: Map<string, string> = new Map();
   private static nextSession: number = 1;
 
+  /**
+   * Returns the single live session that currently owns every listed module, or
+   * undefined when at least one module is unowned or the owners diverge
+   * (design.md D12 join model). NativeAbility uses this to detect that
+   * prepare() will join an existing session instead of creating a new one.
+   */
+  static activeSessionForModules(moduleNames: string[]): string | undefined {
+    let owner: string | undefined = undefined;
+    for (const moduleName of moduleNames) {
+      const moduleOwner = BridgeHostRegistry.moduleOwners.get(moduleName);
+      // Unowned, or owned by a session that no longer exists (stale entry) —
+      // either way this is not a clean join.
+      if (moduleOwner === undefined || !BridgeHostRegistry.sessions.has(moduleOwner)) {
+        return undefined;
+      }
+      if (owner === undefined) {
+        owner = moduleOwner;
+      } else if (owner !== moduleOwner) {
+        return undefined;
+      }
+    }
+    return owner;
+  }
+
   static prepare(
     moduleNames: string[],
     abilityContext: common.UIAbilityContext,
     factories: BridgePluginFactory[],
   ): string {
-    const sessionId = `bridge-${Date.now()}-${BridgeHostRegistry.nextSession++}`;
-    const hosts: Map<string, BridgeHost> = new Map();
     if (moduleNames.length === 0) {
       throw new Error("NativeAbility must declare at least one native module");
     }
@@ -1826,13 +1938,33 @@ export class BridgeHostRegistry {
         throw new Error(`Native module '${moduleName}' is declared more than once for one Ability`);
       }
       requestedModules.set(moduleName, true);
+    }
+
+    // Join model (design.md D12, openspec multi-uiability-windows): a spawned
+    // UIAbility instance reuses the same native modules as the primary instance
+    // — module.init cannot run twice and the per-module bridge state is
+    // process-level. When every requested module already belongs to one
+    // still-live session, prepare returns that session's id instead of throwing,
+    // so the spawned instance shares the primary's transport while its own
+    // window identity stays per-instance (windowId, LocalStorage, Rust session
+    // partition). Mixed ownership — some modules owned and some free, or owned
+    // by different live sessions — remains an error: a half-joined session would
+    // leave teardown ownership ambiguous.
+    const existingSession = BridgeHostRegistry.activeSessionForModules(moduleNames);
+    if (existingSession !== undefined) {
+      return existingSession;
+    }
+    for (const moduleName of moduleNames) {
       const owner = BridgeHostRegistry.moduleOwners.get(moduleName);
-      if (owner !== undefined) {
+      if (owner !== undefined && BridgeHostRegistry.sessions.has(owner)) {
         throw new Error(
           `Native module '${moduleName}' already belongs to active Ability session '${owner}'; use a distinct native module for another Ability`,
         );
       }
     }
+
+    const sessionId = `bridge-${Date.now()}-${BridgeHostRegistry.nextSession++}`;
+    const hosts: Map<string, BridgeHost> = new Map();
     try {
       for (const moduleName of moduleNames) {
         const host = new BridgeHost(sessionId, moduleName, abilityContext, factories);

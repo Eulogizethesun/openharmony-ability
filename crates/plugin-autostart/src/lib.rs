@@ -5,13 +5,15 @@
 //! queries and `context.startAbility(want)` to navigate to the system "App Startup Management"
 //! settings page for enable/disable.
 //!
-//! Version guard: `is_enabled` requires API 21+; on lower API levels it returns `Ok(false)`.
+//! Version guard: `is_enabled` requires API 21+; on lower API levels it returns an
+//! error naming the required API level.
 //! `enable` / `disable` have no version guard — `startAbility` is available from API 12+.
 
 use napi_derive_ohos::napi;
 use napi_ohos::{Error, Result};
+pub use openharmony_ability::version;
 use openharmony_ability::{
-    impl_bridge_napi_type, version, AsyncBridge, BridgeCallOptions, BridgeContextRequirement,
+    impl_bridge_napi_type, AsyncBridge, BridgeCallOptions, BridgeContextRequirement,
     BridgeNapiType, BridgePlugin, BridgeRuntime, OpenHarmonyApp,
 };
 
@@ -20,6 +22,8 @@ const MIN_AUTOSTART_API_VERSION: i32 = 21;
 
 // ── Bridge plugin declaration ─────────────────────────────────────────────────
 
+/// Rust facade marker for the built-in `ohos.autostart` plugin (async;
+/// requires the Ability context).
 pub struct AutostartBridgePlugin;
 
 impl BridgePlugin for AutostartBridgePlugin {
@@ -32,6 +36,7 @@ impl BridgePlugin for AutostartBridgePlugin {
 
 // ── enable ────────────────────────────────────────────────────────────────────
 
+/// Empty request marker for `enable`.
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
 pub struct AutostartEnableRequest {}
@@ -40,6 +45,7 @@ impl_bridge_napi_type!(AutostartEnableRequest, "ohos.autostart.EnableRequest");
 
 // ── disable ───────────────────────────────────────────────────────────────────
 
+/// Empty request marker for `disable`.
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
 pub struct AutostartDisableRequest {}
@@ -48,20 +54,20 @@ impl_bridge_napi_type!(AutostartDisableRequest, "ohos.autostart.DisableRequest")
 
 // ── is-enabled ─────────────────────────────────────────────────────────────────
 
+/// Empty request marker for `is-enabled`.
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
 pub struct AutostartIsEnabledRequest {}
 
-impl_bridge_napi_type!(
-    AutostartIsEnabledRequest,
-    "ohos.autostart.IsEnabledRequest"
-);
+impl_bridge_napi_type!(AutostartIsEnabledRequest, "ohos.autostart.IsEnabledRequest");
 
 // ── acknowledgement ───────────────────────────────────────────────────────────
 
+/// Generic acknowledgement for autostart operations.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct AutostartAcknowledgement {
+    /// `true` when the ArkTS side accepted the operation.
     pub accepted: bool,
 }
 
@@ -81,9 +87,11 @@ impl AutostartAcknowledgement {
 
 // ── is-enabled response ───────────────────────────────────────────────────────
 
+/// Response for the `is-enabled` status query.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct AutostartIsEnabledResponse {
+    /// `true` when autostart is enabled for this application (API 21+ only).
     pub enabled: bool,
 }
 
@@ -101,6 +109,10 @@ pub struct AutostartClient {
 }
 
 impl AutostartClient {
+    /// Builds an autostart client bound to the app's bridge session.
+    ///
+    /// # Errors
+    /// Fails when the app has no active bridge session yet.
     pub fn new(app: &OpenHarmonyApp) -> Result<Self> {
         Ok(Self {
             bridge: app.bridge()?,
@@ -154,11 +166,14 @@ impl AutostartClient {
     /// Queries whether autostart is enabled for this application.
     ///
     /// Requires API 21+ (`autoStartupManager.getAutoStartupStatusForSelf()`).
-    /// On lower API levels, returns `Ok(false)` as a forced fallback.
-    /// On devices that do not support `autoStartupManager` (error 801), also returns `Ok(false)`.
+    /// On lower API levels, returns an error naming the required API level.
+    /// On devices that do not support `autoStartupManager` (error 801), returns `Ok(false)`.
     pub async fn is_enabled(&self) -> Result<bool> {
         if version::sdk_api_version() < MIN_AUTOSTART_API_VERSION {
-            return Ok(false);
+            return Err(Error::from_reason(format!(
+                "isEnabled requires API level {MIN_AUTOSTART_API_VERSION}+ on OpenHarmony (current: {})",
+                version::sdk_api_version()
+            )));
         }
         let response = self
             .call::<AutostartIsEnabledRequest, AutostartIsEnabledResponse>(
@@ -170,7 +185,12 @@ impl AutostartClient {
     }
 }
 
+/// Extension trait that adds [`AutostartClient`] access to the app handle.
 pub trait AutostartExt {
+    /// Returns the autostart client bound to this app's bridge session.
+    ///
+    /// # Errors
+    /// Fails when the app has no active bridge session yet.
     fn autostart(&self) -> Result<AutostartClient>;
 }
 

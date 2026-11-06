@@ -4,16 +4,19 @@ import { common } from '@kit.AbilityKit';
 import pointer from '@ohos.multimodalInput.pointer';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { BusinessError } from '@kit.BasicServicesKit';
 import display from '@ohos.display';
-import { RustWebviewNodeController, WebviewInitData, WebviewStyle } from '../webview/DefaultWebview';
-import { ProxyJsHelper } from '../webview/Utils';
-import * as FloatPage from '../components/FloatPage';
+import * as SubWindowPage from '../components/SubWindowPage';
 import { getMenuDataCallback, windowKeyForId } from '../components/MenuBarComponent';
-import { DOMAIN } from '../helper/constants';
-import { objectAssign } from '../helper';
+import { DOMAIN, NATIVE_MODULE_STORAGE_KEY } from '../helper/constants';
 import { clearClipboardEnabled, clearZoomHotkeysEnabled, setClipboardEnabled, setZoomHotkeysEnabled } from '../helper/accelerator_matcher';
+import { unregisterKeySynthesisController, unregisterWebFocus } from '../helper/key_synthesis';
 import web_webview from '@ohos.web.webview';
+import { RectThrottle, WindowRectEventWrap, WindowRectSnapshot, WindowSizeEventWrap } from './RectThrottle';
+import { WindowAttachmentRegistry } from './WindowAttachmentRegistry';
+
+// Event payload types moved to RectThrottle (issue #87 major-5); re-exported here so
+// existing importers (`import {...} from "../window/WindowManager"`) keep working.
+export { WindowRectEventWrap, WindowRectSnapshot, WindowSizeEventWrap } from "./RectThrottle";
 
 interface WindowEntry {
   window: window.Window;
@@ -22,23 +25,10 @@ interface WindowEntry {
   // destroyWindow/removeWindow can call win.off("windowRectChange", handler) to avoid
   // leaking the listener past window destruction.
   rectChangeHandler?: (options: window.RectChangeOptions) => void;
-  // Phase 3 (design.md D4): set to true just before destroyWindow()/closeWindow Float
+  // Phase 3 (design.md D4): set to true just before destroyWindow()/closeWindow sub-window
   // path calls win.destroyWindow(). throttledRectDispatch checks this to discard
   // in-flight events for a window being torn down (no consumers left).
   destroying: boolean;
-}
-
-// Phase 3 (design.md D5): typed wrappers replacing ESObject, eliminating
-// arkts-limited-esobj WARN. These carry windowId through the NAPI boundary.
-export interface WindowSizeEventWrap {
-  windowId: number;
-  width: number;
-  height: number;
-}
-export interface WindowRectEventWrap {
-  windowId: number;
-  reason: window.RectChangeReason;
-  rect: window.Rect;
 }
 
 // Encapsulates all parameters for sub-window creation, replacing a 10-arg signature.
@@ -56,8 +46,8 @@ export interface SubWindowOptions {
 
 // Enum of window kinds. All UIAbility windows are equal, no primary/subordinate distinction.
 export enum WindowKind {
-  UIAbility,  // All UIAbility main windows (id=0 or id>0, equivalent)
-  Float,      // Float sub-window created by windowStage.createSubWindow
+  UIAbility, // All UIAbility main windows (id=0 or id>0, equivalent)
+  SubWindow, // Sub-window created by windowStage.createSubWindow
 }
 
 export class WindowManager {
@@ -70,26 +60,19 @@ export class WindowManager {
   // secondary instance cannot be truly closed (only hidden via hideAbility).
   private uiAbilityContexts: Map<number, common.UIAbilityContext> = new Map();
   private windows: Map<number, WindowEntry> = new Map();
-  private controllers: Map<number, RustWebviewNodeController> = new Map();
-  // Per-window *attached* raw WebviewController (keyed by windowId, sub-windows only).
-  // Filled by WebviewPlugin.handleControllerAttached when onControllerAttached fires —
-  // at that point data.controller is the live attached controller (runJavaScript works).
-  // Distinct from `controllers` (RustWebviewNodeController), which is never populated
-  // (registerController has zero callers) and exists only for the dead NodeContent path.
-  // menu.getTargetController reads this map so Tray Copy/Cut resolve the sub-window's
-  // controller instead of falling back to the one-shot main executor.controller.
-  private webviewControllers: Map<number, web_webview.WebviewController> = new Map();
-  private uiContexts: Map<number, UIContext> = new Map();
-  // Per-window component root FrameNode (sub-window mode only). DefaultXComponent in
-  // sub-window mode (no moduleName, windowId > 0) creates a root FrameNode and registers
-  // it here so WebviewSurface.create can mount webviews into the correct window.
-  private componentRoots: Map<number, FrameNode> = new Map();
+  // Per-window attachments (WebviewControllers / UIContexts / component roots /
+  // vibrancy state / deferred componentRoot callbacks). Extracted to its own class
+  // (issue #87 major-5); facade methods below keep the WindowManager API unchanged.
+  private attachments: WindowAttachmentRegistry = new WindowAttachmentRegistry();
+  // Per-window rect/size event throttle (leading+trailing 16ms). Extracted to its
+  // own class (issue #87 major-5); throttledRectDispatch below is a facade.
+  private rectThrottle: RectThrottle;
   // transparentFlags tracks each UIAbility window's transparent flag (keyed by windowId).
   // Set in registerUIAbilityStage, queried by DefaultXComponent.aboutToAppear to apply
   // setWindowBackgroundColor/setWindowContainerColor after the window is fully ready.
   private transparentFlags: Map<number, boolean> = new Map();
 
-  // windowKinds tracks each window's kind (UIAbility or Float) by windowId.
+  // windowKinds tracks each window's kind (UIAbility or SubWindow) by windowId.
   // Used by isUIAbilityMainWindow() — windowId=0 is NOT special, all UIAbility
   // windows (id=0 or id>0) are equal and system-managed.
   private windowKinds: Map<number, WindowKind> = new Map();
@@ -127,23 +110,6 @@ export class WindowManager {
   private pendingAction: (() => void) | null = null;
   private cleanupTimer: number | null = null;
 
-  // Proxy object queue (caches Rust operations before Controller is ready)
-  private pendingJsHelperProxies: Map<number, ProxyJsHelper> = new Map();
-
-  // Pending URL queue
-  private pendingUrls: Map<number, string> = new Map();
-  // Pending WebView init queue (resolves race conditions)
-  private pendingInits: Map<number, WebviewInitData> = new Map();
-  // Pending window blur queue (vibrancy effect applied before webview controller is ready)
-  private pendingBlurs: Map<number, number> = new Map();
-  // Persistent per-window blur radius (set by applyWindowBlur, read by WebviewPlugin BuildWebview).
-  // Unlike pendingBlurs (consumed by registerController), this persists for the window's lifetime.
-  windowBlurRadii: Map<number, number> = new Map();
-  // Runtime blur refresh callbacks registered by WebviewPlugin (one per windowId). When
-  // applyWindowBlur is called AFTER a WebviewPlugin webview already exists, this fires
-  // so the live Web component's backdropBlur is refreshed via node.update().
-  private blurRefreshCallbacks: Map<number, (radius: number) => void> = new Map();
-
   // Phase 2 (design.md D3 注入小节): single rect-change callback that createSubWindow's
   // per-window windowRectChange handler invokes. WindowManager doesn't hold a lifecycle
   // reference, so NativeAbility.onWindowStageCreate registers a callback here that fans
@@ -152,34 +118,26 @@ export class WindowManager {
   // windowId parameter).
   private rectChangeCallback?: (options: WindowRectEventWrap) => void;
 
-  // Phase 3 (design.md D2): per-window leading+trailing throttle for rect/size events.
-  // rect and size have different payload shapes, so each gets its own set of
-  // timers/pending/leading maps to prevent cross-contamination.
-  private static readonly THROTTLE_MS: number = 16;
-  // rect throttle state
-  private rectTimers: Map<number, number> = new Map();
-  private rectPending: Map<number, WindowRectEventWrap> = new Map();
-  private rectLeading: Map<number, boolean> = new Map();
-  // size throttle state
-  private sizeTimers: Map<number, number> = new Map();
-  private sizePending: Map<number, WindowSizeEventWrap> = new Map();
-  private sizeLeading: Map<number, boolean> = new Map();
-
   private constructor(context: common.UIAbilityContext) {
     this.context = context;
+    // The throttle only needs the window-lifetime `destroying` flag — injected as a
+    // probe so RectThrottle stays decoupled from this class's window registry.
+    this.rectThrottle = new RectThrottle((wid: number): boolean => {
+      const entry = this.windows.get(wid);
+      return entry?.destroying === true;
+    });
   }
 
   static init(context: common.UIAbilityContext): void {
     if (!WindowManager.instance) {
-      hilog.info(DOMAIN, 'WindowManager', 'WindowManager initialized');
+      hilog.info(DOMAIN, "WindowManager", "WindowManager initialized");
       WindowManager.instance = new WindowManager(context);
     }
   }
 
   static getInstance(): WindowManager {
-    hilog.info(DOMAIN, 'WindowManager', 'WindowManager getInstance');
     if (!WindowManager.instance) {
-      hilog.error(DOMAIN, 'WindowManager', 'WindowManager not initialized');
+      hilog.error(DOMAIN, "WindowManager", "WindowManager not initialized");
       throw new Error("WindowManager not initialized");
     }
     return WindowManager.instance;
@@ -195,23 +153,92 @@ export class WindowManager {
   // Whether the primary (first-instance) WindowStage has been registered.
   // Unified registration for all UIAbility WindowStages (id=0 first instance
   // or id>0 subsequent instances — equal, no primary/subordinate distinction).
-  // Stores stage in uiAbilityStages, sets windowKinds, replays pending init,
+  // Stores stage in uiAbilityStages, sets windowKinds, notifies the Rust handshake registry (D7),
   // and registers focus tracking.
-  registerUIAbilityStage(windowId: number, windowStage: window.WindowStage, context: common.UIAbilityContext, transparent: boolean = false): void {
+  // D4b: whether a UIAbility instance has already registered its stage for
+  // windowId. STATIC and throw-free by design: the NativeAbility onCreate
+  // plain-relaunch guard runs BEFORE ProcessInitializer calls WindowManager.init
+  // (ProcessInitializer.ets) — getInstance() would throw "not initialized" and
+  // abort onCreate, freezing the app on the start window. Returning false while
+  // uninitialized is also semantically right: no instance means no registered
+  // stage, so a first cold launch takes the normal path.
+  static isStageRegistered(windowId: number): boolean {
+    return WindowManager.instance !== null && WindowManager.instance.uiAbilityStages.has(Number(windowId));
+  }
+
+  registerUIAbilityStage(
+    windowId: number,
+    windowStage: window.WindowStage,
+    context: common.UIAbilityContext,
+    transparent: boolean = false,
+  ): void {
     const wid = Number(windowId);
+    // D4b overwrite guard (design.md D4b, openspec multi-uiability-windows, risk R4):
+    // a plain-relaunch duplicate EntryAbility under launchType "standard" resolves
+    // to id 0 and would blind-overwrite the live primary's stage entry here —
+    // device-proven corrosion (input/render then route to the dead stage).
+    // Re-registration from the SAME context (warm re-create paths) is allowed;
+    // a different context on an occupied id is refused. The refusal is loud by
+    // design: a broken window is diagnosable, silent corrosion is not. The
+    // NativeAbility onCreate D4b guard prevents reaching this state; this is
+    // defense-in-depth for any future caller.
+    const existingContext = this.uiAbilityContexts.get(wid);
+    if (existingContext !== undefined && existingContext !== context) {
+      hilog.error(DOMAIN, 'WindowManager', 'registerUIAbilityStage REFUSED: id %{public}d already registered by another instance (D4b corrosion guard)', wid);
+      return;
+    }
     this.uiAbilityStages.set(wid, windowStage);
     this.uiAbilityContexts.set(wid, context);
     this.windowKinds.set(wid, WindowKind.UIAbility);
     this.transparentFlags.set(wid, transparent);
-    hilog.info(DOMAIN, 'WindowManager', 'UIAbility stage registered: id=%{public}d transparent=%{public}s', wid, String(transparent));
-    this.replayPendingForWindow(wid);
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      "UIAbility stage registered: id=%{public}d transparent=%{public}s",
+      wid,
+      String(transparent),
+    );
+
+    // Report the stage registration to the Rust handshake registry (design.md
+    // D7, openspec multi-uiability-windows). The spawn side (tao Window::new →
+    // start-ui-ability) registered this id as pending with an event-loop waker;
+    // this NAPI call flips the registry entry and wakes the loop so queued
+    // webview ops for this window dispatch on the next pass. The old-framework
+    // caller (ArkHelper.ets) was dropped in the bridge-facade migration, which
+    // left register_ui_ability_stage a dead export — this is its replacement
+    // call site. The native module is process-level (single Rust registry
+    // shared by all UIAbility instances, NG4), so the AppStorage-stored module
+    // is the right handle regardless of which instance registers.
+    const nativeModule: ESObject = AppStorage.get<ESObject>(NATIVE_MODULE_STORAGE_KEY);
+    if (nativeModule && typeof nativeModule.registerUiAbilityStage === 'function') {
+      try {
+        nativeModule.registerUiAbilityStage(wid);
+      } catch (e) {
+        // Not a C5 (NAPI re-entrant) context: this method runs from
+        // onWindowStageCreate — an OS lifecycle callback whose NAPI call is
+        // ArkTS-initiated, not a Rust-into-ArkTS re-entry — so hilog.error
+        // is safe here and keeps the domain tag for hilog-side filtering
+        // (unlike setPointerStyle below, which IS called back from Rust and
+        // needs the console fallback).
+        hilog.error(DOMAIN, 'WindowManager', 'registerUiAbilityStage NAPI call failed for id=%{public}d (Rust handshake registry not notified): %{public}s', wid, String(e));
+      }
+    } else {
+      hilog.warn(DOMAIN, 'WindowManager', 'nativeModule.registerUiAbilityStage unavailable; Rust handshake registry not notified for id=%{public}d', wid);
+    }
+
 
     // Register focus tracking for this window
     try {
       const mainWindow = windowStage.getMainWindowSync();
       this.registerFocusTracking(mainWindow, wid);
     } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', 'Failed to register focus tracking for id=%{public}d: %{public}s', wid, String(e));
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "Failed to register focus tracking for id=%{public}d: %{public}s",
+        wid,
+        String(e),
+      );
     }
 
     // Transparency is applied in createWebview (when data.transparent=true),
@@ -223,36 +250,65 @@ export class WindowManager {
   unregisterUIAbilityStage(windowId: number): void {
     const wid = Number(windowId);
     this.uiAbilityStages.delete(wid);
+    this.clearWindowState(wid);
+    hilog.info(DOMAIN, "WindowManager", "UIAbility stage unregistered: id=%{public}d", wid);
+  }
+
+  // Single source of truth for per-window state cleanup (issue #87 major-5): both
+  // unregisterUIAbilityStage and removeWindow delegate here, so the two paths can
+  // never drift apart again (they had diverged: one cleared transparentFlags/
+  // windowKinds, the other preMaximizeRects; a later accelerator-flags duplicate
+  // in removeWindow was folded back into this sink — review finding F4).
+  private clearWindowState(wid: number): void {
     this.uiAbilityContexts.delete(wid);
     this.windowKinds.delete(wid);
     this.transparentFlags.delete(wid);
-    this.controllers.delete(wid);
-    this.webviewControllers.delete(wid);
-    this.uiContexts.delete(wid);
-    this.componentRoots.delete(wid);
-    this.pendingInits.delete(wid);
-    this.pendingUrls.delete(wid);
-    this.pendingJsHelperProxies.delete(wid);
-    this.pendingBlurs.delete(wid);
+    this.attachments.clearWindow(wid);
     this.windowOpQueues.delete(wid);
-    // Phase 3 (design.md D4): clear throttle state for the passed windowId (secondary
-    // UIAbility instances have id>0, NOT hardcoded 0) to prevent stale timer dispatch.
-    const rectTimer = this.rectTimers.get(wid);
-    if (rectTimer !== undefined) { clearTimeout(rectTimer); }
-    const sizeTimer = this.sizeTimers.get(wid);
-    if (sizeTimer !== undefined) { clearTimeout(sizeTimer); }
-    this.rectTimers.delete(wid);
-    this.rectPending.delete(wid);
-    this.rectLeading.delete(wid);
-    this.sizeTimers.delete(wid);
-    this.sizePending.delete(wid);
-    this.sizeLeading.delete(wid);
-    hilog.info(DOMAIN, 'WindowManager', 'UIAbility stage unregistered: id=%{public}d', wid);
+    this.preMaximizeRects.delete(wid);
+    this.rectThrottle.clearWindow(wid);
+    // Phase 6 (design.md D13): a spawned UIAbility window closes via terminateSelf,
+    // which bypasses removeWindow — the focus/interaction trackers and the
+    // key-synthesis controller had no removal point on the UIAbility teardown path
+    // and leaked one entry per closed instance across create/destroy rounds (E4
+    // ten-round check). The attachment-backed maps (blur radii, refresh callbacks,
+    // deferred componentRoot callbacks) are cleared by attachments.clearWindow above.
+    if (this.lastFocusedWindowId === wid) {
+      // Clear BOTH the id and the Window reference — keeping the object would
+      // pin the destroyed ability's window and block GC (audit note on A9).
+      this.lastFocusedWindowId = -1;
+      this.lastFocusedWindow = null;
+    }
+    if (this.lastUserInteractedWindowId === wid) {
+      this.lastUserInteractedWindowId = -1;
+    }
+    // Key-synthesis controllers are registered for ALL windows (incl. main) but
+    // this map has no other removal point. Skip wid 0: the primary's controller
+    // outlives its stage teardown (continuation-restore reuses it).
+    if (wid !== 0) {
+      unregisterKeySynthesisController(wid);
+      unregisterWebFocus(wid);
+    }
+    // Per-window accelerator flags (clipboard / zoom-hotkey intercepts) — set
+    // in WebviewPlugin.create and keyed by windowId, so they are cleared on
+    // window-lifetime teardown (both removeWindow and unregisterUIAbilityStage
+    // land here), not in removeWebview (per-webview), which would prematurely
+    // clear flags still in use by sibling webviews in the same window.
+    // removeWindow used to duplicate these two calls after its clearWindowState
+    // delegation — folded back in here so the single-sink invariant holds
+    // (review finding F4).
+    clearClipboardEnabled(wid);
+    clearZoomHotkeysEnabled(wid);
   }
 
   // Whether the given window is a UIAbility main window.
-  // Such windows are system-managed: win.resize()/moveWindowTo() return 1300002,
-  // decorations are system-provided, and per-button enable flags are no-ops.
+  // Such windows are system-managed: resize()/moveWindowTo() dispatches DO run --
+  // the effect is governed by the system WM (e.g. freeform clamping); error
+  // 1300002 only surfaces transiently when the window state is abnormal, it is
+  // not the expected outcome of these calls (see tao facade docs,
+  // committer Eulogizethesun/tauri#170). Decorations are system-provided, and
+  // setDecorationFlags throws for UIAbility main windows (#238); sub-windows
+  // honor per-button flags.
   // windowId=0 alone must NOT be used for this judgement — a subsequent UIAbility
   // instance has id>0 but is still a system-managed main window.
   isUIAbilityMainWindow(windowId: number): boolean {
@@ -274,11 +330,49 @@ export class WindowManager {
   private serializeOp(windowId: number, op: () => Promise<void>): void {
     const wid = Number(windowId);
     const prev = this.windowOpQueues.get(wid) ?? Promise.resolve();
-    hilog.info(DOMAIN, 'WindowManager', '[DBG] serializeOp: window %{public}d queued (had prior=%{public}s)', wid, String(prev !== Promise.resolve()));
+    hilog.debug(
+      DOMAIN,
+      "WindowManager",
+      "serializeOp: window %{public}d queued (had prior=%{public}s)",
+      wid,
+      String(prev !== Promise.resolve()),
+    );
     const next = prev.then(op).catch((err: ESObject) => {
-      hilog.warn(DOMAIN, 'WindowManager', 'serializeOp: window %{public}d op failed: %{public}s', wid, String(err?.message ?? err));
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "serializeOp: window %{public}d op failed: %{public}s",
+        wid,
+        String(err?.message ?? err),
+      );
     });
     this.windowOpQueues.set(wid, next);
+  }
+
+  // #219: tracked variant of serializeOp for the operation-class window commands
+  // (set-fullscreen, show->restore, and any op whose ack must reflect reality).
+  // Chain semantics are IDENTICAL to serializeOp -- a failed op must not block
+  // subsequent ops, so the queue tail is the FAILURE-NEUTRALIZED continuation --
+  // but the returned promise REJECTS with the original failure, letting the
+  // awaiting WindowPlugin arm surface it to Rust (reject -> Err instead of the
+  // fake success ack the fire-and-forget path produced).
+  private serializeOpTracked(windowId: number, op: () => Promise<void>): Promise<void> {
+    const wid = Number(windowId);
+    const prev = this.windowOpQueues.get(wid) ?? Promise.resolve();
+    const next = prev.then(op);
+    next.catch((err: ESObject) => {
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "serializeOpTracked: window %{public}d op failed: %{public}s",
+        wid,
+        String(err?.message ?? err),
+      );
+    });
+    // Queue tail stays failure-neutral (serializeOp semantics: the chain always
+    // continues); the caller's `next` copy still rejects.
+    this.windowOpQueues.set(wid, next.catch(() => {}));
+    return next;
   }
 
   // Apply transparent background + container color to a UIAbility main window.
@@ -287,91 +381,98 @@ export class WindowManager {
   async applyTransparentBackground(windowId: number): Promise<void> {
     const wid = Number(windowId);
     const isTrans = this.isTransparent(wid);
-    hilog.info(DOMAIN, 'WindowManager', '[DBG] applyTransparentBackground: windowId=%{public}d isTransparent=%{public}s', wid, String(isTrans));
+    hilog.debug(
+      DOMAIN,
+      "WindowManager",
+      "applyTransparentBackground: windowId=%{public}d isTransparent=%{public}s",
+      wid,
+      String(isTrans),
+    );
     if (!isTrans) {
       return;
     }
     const stage = this.uiAbilityStages.get(wid);
     if (!stage) {
-      hilog.warn(DOMAIN, 'WindowManager', 'applyTransparentBackground: no stage for id=%{public}d', wid);
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "applyTransparentBackground: no stage for id=%{public}d",
+        wid,
+      );
       return;
     }
     try {
       const mainWindow = await stage.getMainWindow();
-      mainWindow.setWindowBackgroundColor('#00000000');
-      hilog.info(DOMAIN, 'WindowManager', 'applyTransparentBackground: windowId=%{public}d setWindowBackgroundColor transparent OK', wid);
+      mainWindow.setWindowBackgroundColor("#00000000");
+      hilog.info(
+        DOMAIN,
+        "WindowManager",
+        "applyTransparentBackground: windowId=%{public}d setWindowBackgroundColor transparent OK",
+        wid,
+      );
       if (deviceInfo.sdkApiVersion >= 20) {
         try {
-          mainWindow.setWindowContainerColor('#00000000', '#FFFFFFFF');
-          hilog.info(DOMAIN, 'WindowManager', 'applyTransparentBackground: windowId=%{public}d setWindowContainerColor transparent OK (active=transparent inactive=white)', wid);
+          mainWindow.setWindowContainerColor("#00000000", "#FFFFFFFF");
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            "applyTransparentBackground: windowId=%{public}d setWindowContainerColor transparent OK (active=transparent inactive=white)",
+            wid,
+          );
         } catch (containerErr: any) {
-          hilog.warn(DOMAIN, 'WindowManager', 'applyTransparentBackground: windowId=%{public}d setWindowContainerColor failed: code=%{public}d', wid, containerErr.code);
+          hilog.warn(
+            DOMAIN,
+            "WindowManager",
+            "applyTransparentBackground: windowId=%{public}d setWindowContainerColor failed: code=%{public}d",
+            wid,
+            containerErr.code,
+          );
         }
+      } else {
+        // setWindowContainerColor is API 20+; below that the container layer
+        // stays opaque, so the transparent window background has no visible
+        // effect. Non-fatal.
+        hilog.warn(DOMAIN, 'WindowManager', 'applyTransparentBackground: windowId=%{public}d transparent container requires API20+, current %{public}d; container stays opaque', wid, deviceInfo.sdkApiVersion);
       }
     } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', 'applyTransparentBackground: windowId=%{public}d failed: %{public}s', wid, String(e));
-    }
-  }
-
-  // Replay pending WebView init data / URLs queued against a window id before its
-  // controller was ready. Called by registerUIAbilityStage when the new
-  // UIAbility instance's WindowStage is registered. The JsHelper proxy binding is
-  // NOT done here — it requires a full JsHelper (result.controller from addWebview),
-  // not the raw RustWebviewNodeController stored in this.controllers. Proxy binding
-  // happens in registerController when DefaultXComponent.aboutToAppear runs and
-  // calls addWebview (which returns the full JsHelper).
-  private replayPendingForWindow(wid: number): void {
-    const controller = this.controllers.get(wid);
-    if (!controller) {
-      // Controller not registered yet (DefaultXComponent.aboutToAppear hasn't run).
-      // Replay will be triggered again by registerController.
-      return;
-    }
-    const init = this.pendingInits.get(wid);
-    if (init) {
-      try {
-        controller.addWebview(init);
-      } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', 'replayPendingForWindow addWebview %{public}d failed: %{public}s', wid, String(e));
-      }
-      this.pendingInits.delete(wid);
-    }
-    const url = this.pendingUrls.get(wid);
-    if (url) {
-      try {
-        const urlData: WebviewInitData = { url };
-        controller.addWebview(urlData);
-      } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', 'replayPendingForWindow url load %{public}d failed: %{public}s', wid, String(e));
-      }
-      this.pendingUrls.delete(wid);
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "applyTransparentBackground: windowId=%{public}d failed: %{public}s",
+        wid,
+        String(e),
+      );
     }
   }
 
   // Register WINDOW_ACTIVE listener for focus tracking
   // Also listens for RESUMED/WINDOW_ACTIVE to consume pending actions
   private registerFocusTracking(win: window.Window, windowId: number): void {
-    win.on('windowEvent', (eventType: window.WindowEventType) => {
+    win.on("windowEvent", (eventType: window.WindowEventType) => {
       // Track last focused window
       if (eventType === window.WindowEventType.WINDOW_ACTIVE) {
         this.lastFocusedWindow = win;
         this.lastFocusedWindowId = windowId;
-        hilog.info(DOMAIN, 'WindowManager', 'Last focused window updated: id=%{public}d', windowId);
+        hilog.info(DOMAIN, "WindowManager", "Last focused window updated: id=%{public}d", windowId);
       }
 
       // Consume pending action when system foreground transition completes
       // WINDOW_ACTIVE: window gained focus (marks end of foreground transition)
       // WINDOW_SHOWN: window is visible (alternative trigger)
-      if (eventType === window.WindowEventType.WINDOW_ACTIVE ||
-          eventType === window.WindowEventType.WINDOW_SHOWN) {
+      if (
+        eventType === window.WindowEventType.WINDOW_ACTIVE ||
+        eventType === window.WindowEventType.WINDOW_SHOWN
+      ) {
         if (this.hasPendingAction()) {
-          hilog.info(DOMAIN, 'WindowManager',
-            'System foreground transition complete (event: %{public}s), executing pending action',
-            eventType === window.WindowEventType.WINDOW_ACTIVE ? 'WINDOW_ACTIVE' : 'WINDOW_SHOWN');
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            "System foreground transition complete (event: %{public}s), executing pending action",
+            eventType === window.WindowEventType.WINDOW_ACTIVE ? "WINDOW_ACTIVE" : "WINDOW_SHOWN",
+          );
           this.consumePendingAction();
         }
       }
-
     });
   }
 
@@ -387,12 +488,12 @@ export class WindowManager {
 
   // ─── User Interaction Tracking (onTouch-based window targeting) ───
   //
-  // Called from page root Stack.onTouch() (MainPage/FloatPage, D8) when the user physically touches a window.
+  // Called from page root Stack.onTouch() (MainPage/SubWindowPage, D8) when the user physically touches a window.
   // ArkUI onTouch bubbles from child to parent, covering MenuBarComponent + webview + drag bars.
   // Used by tray menu to determine which window to operate on.
   setUserInteractedWindow(windowId: number): void {
     this.lastUserInteractedWindowId = windowId;
-    hilog.info(DOMAIN, 'WindowManager', 'User interacted with window: id=%{public}d', windowId);
+    hilog.info(DOMAIN, "WindowManager", "User interacted with window: id=%{public}d", windowId);
   }
 
   // Get the window the user last physically touched (for Tray menu path)
@@ -435,127 +536,166 @@ export class WindowManager {
   private minimizeWithRestoreGuard(win: window.Window): Promise<void> {
     return new Promise<void>((resolve) => {
       let consumed = false;
-      const finish = () => { try { win.off('windowEvent', onWindowEvent); } catch (_) {} };
+      const finish = () => {
+        try {
+          win.off("windowEvent", onWindowEvent);
+        } catch (_) {}
+      };
       const doMinimize = () => {
         if (consumed) return;
         consumed = true;
         finish();
-        hilog.info(DOMAIN, 'WindowManager', 'minimizeWithRestoreGuard: minimizing (settled)');
-        win.minimize().then(() => resolve())
+        hilog.info(DOMAIN, "WindowManager", "minimizeWithRestoreGuard: minimizing (settled)");
+        win
+          .minimize()
+          .then(() => resolve())
           .catch((err: ESObject) => {
-            hilog.warn(DOMAIN, 'WindowManager', 'minimizeWithRestoreGuard minimize failed: %{public}s', JSON.stringify(err));
+            hilog.warn(
+              DOMAIN,
+              "WindowManager",
+              "minimizeWithRestoreGuard minimize failed: %{public}s",
+              JSON.stringify(err),
+            );
             resolve();
           });
       };
       const onWindowEvent = (eventType: window.WindowEventType) => {
         if (!consumed && eventType === window.WindowEventType.WINDOW_ACTIVE) {
-          hilog.info(DOMAIN, 'WindowManager', 'minimizeWithRestoreGuard: WINDOW_ACTIVE fired');
+          hilog.info(DOMAIN, "WindowManager", "minimizeWithRestoreGuard: WINDOW_ACTIVE fired");
           doMinimize();
         }
       };
       try {
-        win.on('windowEvent', onWindowEvent);
+        win.on("windowEvent", onWindowEvent);
       } catch (_) {
-        hilog.warn(DOMAIN, 'WindowManager', 'minimizeWithRestoreGuard: windowEvent unsupported, direct minimize');
-        win.minimize().then(() => resolve()).catch(() => resolve());
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          "minimizeWithRestoreGuard: windowEvent unsupported, direct minimize",
+        );
+        win
+          .minimize()
+          .then(() => resolve())
+          .catch(() => resolve());
         return;
       }
-      hilog.info(DOMAIN, 'WindowManager', 'minimizeWithRestoreGuard: waiting for WINDOW_ACTIVE (50ms fallback)');
+      hilog.info(
+        DOMAIN,
+        "WindowManager",
+        "minimizeWithRestoreGuard: waiting for WINDOW_ACTIVE (50ms fallback)",
+      );
       setTimeout(doMinimize, 50);
     });
   }
 
   minimizeWindow(windowId: number): void {
     // 拦截:FLAG_MINIMIZABLE 为 0 时,不允许最小化(问题四:语义错位修复)
-    if (!this.getDecorationFlag(windowId, 'minimizable')) {
-      hilog.warn(DOMAIN, 'WindowManager', 'minimizeWindow blocked: minimizable flag not set (window %{public}d)', windowId);
+    if (!this.getDecorationFlag(windowId, "minimizable")) {
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "minimizeWindow blocked: minimizable flag not set (window %{public}d)",
+        windowId,
+      );
       return;
     }
-    const win = this.getWindow(windowId);
-    if (!win) {
-      hilog.warn(DOMAIN, 'WindowManager', 'minimizeWindow: window %{public}d not found', windowId);
-      return;
-    }
-    // Serialize: minimize can race with maximize/recover/fullscreen. The guard's
-    // Promise keeps the serialization slot held until the deferred minimize
-    // settles, preserving op ordering.
-    this.serializeOp(windowId, () =>
-      this.minimizeWithRestoreGuard(win).then(() => {
-        // Only reset tracking if the minimized window was the last interacted one
-        if (this.lastUserInteractedWindowId === windowId) {
-          this.resetUserInteractionTracking();
-        }
-      })
-    );
+    this.withWindow(windowId, "minimizeWindow", (win: window.Window) => {
+      // Serialize: minimize can race with maximize/recover/fullscreen. The guard's
+      // Promise keeps the serialization slot held until the deferred minimize
+      // settles, preserving op ordering.
+      this.serializeOp(windowId, () =>
+        this.minimizeWithRestoreGuard(win).then(() => {
+          // Only reset tracking if the minimized window was the last interacted one
+          if (this.lastUserInteractedWindowId === windowId) {
+            this.resetUserInteractionTracking();
+          }
+        }),
+      );
+    });
   }
 
   focusWindow(windowId: number): void {
-    const win = this.getWindow(windowId);
-    if (!win) {
-      hilog.warn(DOMAIN, 'WindowManager', 'focusWindow: window %{public}d not found', windowId);
-      return;
-    }
-    win.raiseToAppTop().then(() => {
-      hilog.debug(DOMAIN, 'WindowManager', 'focusWindow: window %{public}d raised to top', windowId);
-    }).catch((err: ESObject) => {
-      hilog.error(DOMAIN, 'WindowManager', 'focusWindow: raiseToAppTop failed: %{public}s', String(err));
+    this.withWindow(windowId, "focusWindow", (win: window.Window) => {
+      this.fireAndForget(win.raiseToAppTop(), "focusWindow", windowId, () => {
+        hilog.debug(
+          DOMAIN,
+          "WindowManager",
+          "focusWindow: window %{public}d raised to top",
+          windowId,
+        );
+      });
     });
   }
 
   setWindowFocusable(windowId: number, focusable: boolean): void {
-    const win = this.getWindow(windowId);
-    if (!win) {
-      hilog.warn(DOMAIN, 'WindowManager', 'setWindowFocusable: window %{public}d not found', windowId);
-      return;
-    }
-    win.setWindowFocusable(focusable).then(() => {
-      hilog.debug(DOMAIN, 'WindowManager', 'setWindowFocusable: window %{public}d focusable=%{public}s', windowId, String(focusable));
-    }).catch((err: ESObject) => {
-      hilog.error(DOMAIN, 'WindowManager', 'setWindowFocusable failed: %{public}s', JSON.stringify(err));
+    this.withWindow(windowId, "setWindowFocusable", (win: window.Window) => {
+      this.fireAndForget(win.setWindowFocusable(focusable), "setWindowFocusable", windowId, () => {
+        hilog.debug(
+          DOMAIN,
+          "WindowManager",
+          "setWindowFocusable: window %{public}d focusable=%{public}s",
+          windowId,
+          String(focusable),
+        );
+      });
     });
   }
 
   setWindowTouchable(windowId: number, touchable: boolean): void {
-    const win = this.getWindow(windowId);
-    if (!win) {
-      hilog.warn(DOMAIN, 'WindowManager', 'setWindowTouchable: window %{public}d not found', windowId);
-      return;
-    }
-    // setWindowTouchable returns a Promise; 401/1300002/1300003 reject asynchronously. This
-    // .catch runs in a Promise async callback (NOT the NAPI-reentrant call stack), so hilog
-    // is safe here (mirrors setWindowFocusable above). The catch prevents unhandled-reject crash;
-    // Rust does not perceive the failure (TSFN fire-and-forget, see set_window_touchable docs).
-    win.setWindowTouchable(touchable).then(() => {
-      hilog.debug(DOMAIN, 'WindowManager', 'setWindowTouchable: window %{public}d touchable=%{public}s', windowId, String(touchable));
-    }).catch((err: ESObject) => {
-      hilog.error(DOMAIN, 'WindowManager', 'setWindowTouchable failed: %{public}s', JSON.stringify(err));
+    // setWindowTouchable returns a Promise; 401/1300002/1300003 reject asynchronously;
+    // the unified fireAndForget catch prevents the unhandled-reject crash (Rust does
+    // not perceive the failure — TSFN fire-and-forget, see set_window_touchable docs).
+    this.withWindow(windowId, "setWindowTouchable", (win: window.Window) => {
+      this.fireAndForget(win.setWindowTouchable(touchable), "setWindowTouchable", windowId, () => {
+        hilog.debug(
+          DOMAIN,
+          "WindowManager",
+          "setWindowTouchable: window %{public}d touchable=%{public}s",
+          windowId,
+          String(touchable),
+        );
+      });
     });
   }
 
   // ─── Window operations (ohos-window-ops) ───
 
   moveWindowTo(windowId: number, x: number, y: number): void {
-    const wid = Number(windowId);
-    const win = this.getWindow(wid);
-    if (!win) { this.logNotFound('moveWindowTo', wid); return; }
-    win.moveWindowTo(x, y).catch((err: ESObject) => {
-      hilog.warn(DOMAIN, 'WindowManager', 'moveWindowTo %{public}d failed: %{public}s', wid, JSON.stringify(err));
+    this.withWindow(windowId, "moveWindowTo", (win: window.Window) => {
+      this.fireAndForget(win.moveWindowTo(x, y), "moveWindowTo", Number(windowId));
     });
   }
 
-  resizeWindow(windowId: number, width: number, height: number): void {
-    const wid = Number(windowId);
-    const win = this.getWindow(wid);
-    if (!win) { this.logNotFound('resizeWindow', wid); return; }
-    win.resize(width, height).catch((err: ESObject) => {
-      hilog.warn(DOMAIN, 'WindowManager', 'resizeWindow %{public}d failed: %{public}s', wid, JSON.stringify(err));
+  resizeWindow(windowId: number, reqWidth: number, reqHeight: number): void {
+    // Phone-form clamp (see createSubWindow for the full rationale): keep
+    // resize targets inside the display so set_size can't push window
+    // content off-screen on phones. Values at or below the display size
+    // pass through untouched; PC/2in1 are not gated here at all.
+    let width = reqWidth;
+    let height = reqHeight;
+    if (deviceInfo.deviceType === "phone") {
+      try {
+        const d = display.getDefaultDisplaySync();
+        width = Math.min(width, Math.floor(d.width));
+        height = Math.min(height, Math.floor(d.height));
+      } catch (e) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Phone clamp skipped (display query failed): %{public}s`,
+          String(e),
+        );
+      }
+    }
+    this.withWindow(windowId, "resizeWindow", (win: window.Window) => {
+      this.fireAndForget(win.resize(width, height), "resizeWindow", Number(windowId));
     });
   }
 
   // --- pre-maximize rect snapshot helpers (shared with WindowPlugin's tao bridge path) ---
   // WMS recover() re-anchors the floating rect to the pointer (GetFullScreenToFloatingRect);
   // these snapshot/restore the pre-maximize position so any maximize→recover pair —
-  // FloatPage title-bar buttons OR the tao set_maximized bridge (WindowPlugin.windowCommand,
+  // SubWindowPage title-bar buttons OR the tao set_maximized bridge (WindowPlugin.windowCommand,
   // which cannot delegate to maximizeWindow/recoverWindow without losing its await
   // completion semantics) — lands back where it started.
   snapshotPreMaximizeRect(windowId: number, win: window.Window): void {
@@ -570,179 +710,258 @@ export class WindowManager {
   async restorePreMaximizeRect(windowId: number, win: window.Window): Promise<void> {
     const wid = Number(windowId);
     const saved = this.preMaximizeRects.get(wid);
-    if (!saved) { return; }
+    if (!saved) {
+      return;
+    }
     this.preMaximizeRects.delete(wid);
     try {
       await win.moveTo(saved.left, saved.top);
     } catch (err) {
       // Position restore is best-effort: the caller's recover() already succeeded —
       // a moveTo failure must not surface as a recover failure.
-      hilog.warn(DOMAIN, 'WindowManager', 'restorePreMaximizeRect %{public}d moveTo failed: %{public}s', wid, JSON.stringify(err));
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "restorePreMaximizeRect %{public}d moveTo failed: %{public}s",
+        wid,
+        JSON.stringify(err),
+      );
     }
   }
 
   maximizeWindow(windowId: number): void {
     // 拦截:FLAG_MAXIMIZABLE 为 0 时,不允许最大化(问题四:语义错位修复)
-    if (!this.getDecorationFlag(windowId, 'maximizable')) {
-      hilog.warn(DOMAIN, 'WindowManager', 'maximizeWindow blocked: maximizable flag not set (window %{public}d)', windowId);
+    if (!this.getDecorationFlag(windowId, "maximizable")) {
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "maximizeWindow blocked: maximizable flag not set (window %{public}d)",
+        windowId,
+      );
       return;
     }
-    const win = this.getWindow(windowId);
-    if (!win) { hilog.warn(DOMAIN, 'WindowManager', 'maximizeWindow: window %{public}d not found', windowId); return; }
-    // Serialize: maximize can race with fullscreen-exit (recover) or minimize.
-    this.serializeOp(windowId, () => {
-      // Snapshot the floating rect BEFORE maximizing (see snapshotPreMaximizeRect).
-      this.snapshotPreMaximizeRect(windowId, win);
-      // Use FOLLOW_APP_IMMERSIVE_SETTING (not ENTER_IMMERSIVE) to preserve the existing
-      // fullscreen layout mode. ENTER_IMMERSIVE explicitly enters fullscreen on maximize and
-      // exits it on recover, causing a layout gap (white bar at bottom where navigation bar was).
-      // FOLLOW_APP_IMMERSIVE_SETTING preserves setWindowLayoutFullScreen(true) set at init.
-      return win.maximize(window.MaximizePresentation.FOLLOW_APP_IMMERSIVE_SETTING).then(() => {
-        hilog.info(DOMAIN, 'WindowManager', 'maximizeWindow %{public}d OK', windowId);
+    this.withWindow(windowId, "maximizeWindow", (win: window.Window) => {
+      // Serialize: maximize can race with fullscreen-exit (recover) or minimize.
+      this.serializeOp(windowId, () => {
+        // Snapshot the floating rect BEFORE maximizing (see snapshotPreMaximizeRect).
+        this.snapshotPreMaximizeRect(windowId, win);
+        // Use FOLLOW_APP_IMMERSIVE_SETTING (not ENTER_IMMERSIVE) to preserve the existing
+        // fullscreen layout mode. ENTER_IMMERSIVE explicitly enters fullscreen on maximize and
+        // exits it on recover, causing a layout gap (white bar at bottom where navigation bar was).
+        // FOLLOW_APP_IMMERSIVE_SETTING preserves setWindowLayoutFullScreen(true) set at init.
+        return win.maximize(window.MaximizePresentation.FOLLOW_APP_IMMERSIVE_SETTING).then(() => {
+          hilog.info(DOMAIN, "WindowManager", "maximizeWindow %{public}d OK", windowId);
+        });
       });
     });
   }
 
-  setWindowTopmost(windowId: number, topmost: boolean): void {
+  // #219: async + awaited by the set-topmost bridge arm -- a failed
+  // setWindowTopmost (801 non-freeform / 1300002 abnormal state / permission
+  // denial) now rejects into the ack chain instead of the fire-and-forget warn.
+  // The API14 capability guard below stays a documented no-op (device
+  // capability, not an op failure).
+  async setWindowTopmost(windowId: number, topmost: boolean): Promise<void> {
     // win.setWindowTopmost() is API14+. Requires ohos.permission.WINDOW_TOPMOST
-    // (system_grant, declared in module.json5). Main window only — Float sub-windows
+    // (system_grant, declared in module.json5). Main window only -- sub-windows
     // will error (non-fatal). Only effective in freeform window mode; returns 801
     // on devices without freeform support (phone/tablet).
     if (deviceInfo.sdkApiVersion < 14) {
-      hilog.warn(DOMAIN, 'WindowManager', 'setWindowTopmost: API14+ required, current %{public}d; no-op', deviceInfo.sdkApiVersion);
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "setWindowTopmost: API14+ required, current %{public}d; no-op",
+        deviceInfo.sdkApiVersion,
+      );
       return;
     }
     const win = this.getWindow(windowId);
-    if (!win) { hilog.warn(DOMAIN, 'WindowManager', 'setWindowTopmost: window %{public}d not found', windowId); return; }
-    win.setWindowTopmost(topmost).then(() => {
-      hilog.info(DOMAIN, 'WindowManager', 'setWindowTopmost %{public}d topmost=%{public}s OK', windowId, String(topmost));
-    }).catch((err: ESObject) => {
-      // 801: non-freeform device/state; sub-window call; 1300002: window state abnormal — non-fatal
-      hilog.warn(DOMAIN, 'WindowManager', 'setWindowTopmost %{public}d failed: %{public}s', windowId, JSON.stringify(err));
-    });
+    if (!win) {
+      throw new Error(`setWindowTopmost: window ${windowId} not found`);
+    }
+    await win.setWindowTopmost(topmost);
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      "setWindowTopmost %{public}d topmost=%{public}s OK",
+      windowId,
+      String(topmost),
+    );
   }
 
-  setWindowTitle(windowId: number, title: string): void {
-    // win.setWindowTitle(title) is Promise form (1 arg). Main window + Float sub-windows
+  // #219: async + awaited by the set-title bridge arm -- a failed
+  // setWindowTitle (or an unknown/destroyed window) rejects into the ack chain
+  // instead of the fire-and-forget warn (committer #219 fake-ack fix).
+  async setWindowTitle(windowId: number, title: string): Promise<void> {
+    const win = this.getWindow(windowId);
+    if (!win) {
+      throw new Error(`setWindowTitle: window ${windowId} not found`);
+    }
+    // win.setWindowTitle(title) is Promise form (1 arg). Main window + sub-windows
     // both support title text (icon is NOT changeable at runtime). No extra permission
     // for main window. Only visible when window decorations are enabled (decorEnabled=true).
-    const win = this.getWindow(windowId);
-    if (!win) { hilog.warn(DOMAIN, 'WindowManager', 'setWindowTitle: window %{public}d not found', windowId); return; }
-    // Also update LocalStorage 'title' so FloatPage @LocalStorageProp('title') refreshes the title bar text.
+    // Also update LocalStorage 'title' so SubWindowPage @LocalStorageProp('title') refreshes the title bar text.
     const entry = this.windows.get(windowId);
     if (entry?.storage) {
-      entry.storage.setOrCreate('title', title);
+      entry.storage.setOrCreate("title", title);
     }
-    win.setWindowTitle(title).then(() => {
-      hilog.info(DOMAIN, 'WindowManager', 'setWindowTitle %{public}d title="%{public}s" OK', windowId, title);
-    }).catch((err: ESObject) => {
-      hilog.warn(DOMAIN, 'WindowManager', 'setWindowTitle %{public}d failed: %{public}s', windowId, JSON.stringify(err));
-    });
+    await win.setWindowTitle(title);
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      'setWindowTitle %{public}d title="%{public}s" OK',
+      windowId,
+      title,
+    );
   }
 
   setWindowLimits(windowId: number, minW: number, minH: number, maxW: number, maxH: number): void {
     // win.setWindowLimits() is API11+. Params are px (0 = no limit / system default).
     // WindowLimits fields: minWidth/minHeight/maxWidth/maxHeight (NOT minWindowWidth etc.)
     // ⚠️ Triggers OnSizeChange — caller must not invoke frequently on main window (appfreeze risk).
-    const win = this.getWindow(windowId);
-    if (!win) { hilog.warn(DOMAIN, 'WindowManager', 'setWindowLimits: window %{public}d not found', windowId); return; }
-    const limits: window.WindowLimits = {
-      minWidth: minW,
-      minHeight: minH,
-      maxWidth: maxW,
-      maxHeight: maxH,
-    };
-    win.setWindowLimits(limits).then((actual: window.WindowLimits) => {
-      hilog.info(DOMAIN, 'WindowManager', 'setWindowLimits %{public}d OK: min=%{public}dx%{public}d max=%{public}dx%{public}d',
-        windowId, actual.minWidth, actual.minHeight, actual.maxWidth, actual.maxHeight);
-    }).catch((err: ESObject) => {
-      hilog.warn(DOMAIN, 'WindowManager', 'setWindowLimits %{public}d failed: %{public}s', windowId, JSON.stringify(err));
+    //
+    // Min slots 0→1 translation: the system treats minWidth/minHeight = 0 as "keep
+    // the current limits", NOT as "lift them" (verified on HAD-W32 PC / API 23:
+    // setWindowLimits({minWidth: 0, ...}) returns the previous min unchanged, so
+    // tao's set_min_inner_size(None) — which dispatches 0 — could never lift a
+    // previously-set minimum). 1px is clamped by the system to its product-level
+    // absolute minimum (608×136 outer on the reference PC), which IS the semantic
+    // "no app-level minimum" under the intersection-of-limits model. Max slots keep
+    // 0 — the system maps maxWidth/maxHeight = 0 to its own default ceiling
+    // (7296×7296 on the reference PC), so no translation is needed there.
+    this.withWindow(windowId, "setWindowLimits", (win: window.Window) => {
+      const limits: window.WindowLimits = {
+        minWidth: Math.max(minW, 1),
+        minHeight: Math.max(minH, 1),
+        maxWidth: maxW,
+        maxHeight: maxH,
+      };
+      this.fireAndForget(
+        win.setWindowLimits(limits),
+        "setWindowLimits",
+        windowId,
+        (actual: window.WindowLimits) => {
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            "setWindowLimits %{public}d OK: min=%{public}dx%{public}d max=%{public}dx%{public}d",
+            windowId,
+            actual.minWidth,
+            actual.minHeight,
+            actual.maxWidth,
+            actual.maxHeight,
+          );
+        },
+      );
     });
   }
 
-  restoreWindow(windowId: number): void {
+  // #219: async + tracked -- showWindowMethod's minimized-main-window branch
+  // awaits this, so a failed restore rejects into the show command's ack chain
+  // instead of a fake success ack. Serialization (restore can race with
+  // maximize/recover/fullscreen) keeps serializeOp's chain semantics through
+  // serializeOpTracked (chain continues, caller sees the failure).
+  async restoreWindow(windowId: number): Promise<void> {
     // Mirror the Rust-side API14 guard (win.restore() is API14+). The Rust path
     // (restore_window) already guards, so this is defense-in-depth for any direct
     // ArkTS caller; on API<14 it is a no-op+warn instead of throwing.
     if (deviceInfo.sdkApiVersion < 14) {
-      hilog.warn(DOMAIN, 'WindowManager', 'restoreWindow: win.restore() requires API14+, current %{public}d; no-op', deviceInfo.sdkApiVersion);
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "restoreWindow: win.restore() requires API14+, current %{public}d; no-op",
+        deviceInfo.sdkApiVersion,
+      );
       return;
     }
     const win = this.getWindow(windowId);
-    if (!win) { hilog.warn(DOMAIN, 'WindowManager', 'restoreWindow: window %{public}d not found', windowId); return; }
-    // Serialize: restore can race with maximize/recover/fullscreen.
-    this.serializeOp(windowId, () =>
-      // FOLLOW_APP_IMMERSIVE_SETTING preserves the existing fullscreen layout,
-      // so no setWindowLayoutFullScreen(true) needed after restore.
+    if (!win) {
+      throw new Error(`restoreWindow: window ${windowId} not found`);
+    }
+    // FOLLOW_APP_IMMERSIVE_SETTING preserves the existing fullscreen layout,
+    // so no setWindowLayoutFullScreen(true) needed after restore.
+    await this.serializeOpTracked(windowId, () =>
       win.restore().then(() => {
-        hilog.info(DOMAIN, 'WindowManager', 'restoreWindow %{public}d OK', windowId);
-      })
+        hilog.info(DOMAIN, "WindowManager", "restoreWindow %{public}d OK", windowId);
+      }),
     );
   }
 
   recoverWindow(windowId: number): void {
-    const win = this.getWindow(windowId);
-    if (!win) { hilog.warn(DOMAIN, 'WindowManager', 'recoverWindow: window %{public}d not found', windowId); return; }
-    // Serialize: recover can race with a pending maximize or fullscreen-enter.
-    this.serializeOp(windowId, () =>
-      // FOLLOW_APP_IMMERSIVE_SETTING preserves the existing fullscreen layout,
-      // so no setWindowLayoutFullScreen(true) needed after recover.
-      win.recover().then(async () => {
-        // recover() positions the restored floating window via WMS
-        // GetFullScreenToFloatingRect — pointer-anchored, designed for drag-off-
-        // titlebar unmaximize — NOT the pre-maximize rect (device-verified: a
-        // window created at [0,0] came back at [1913,0], i.e. under the cursor /
-        // top-right where the ❐ button was clicked). moveTo() the rect snapshotted
-        // in maximizeWindow() to restore the original position. Size is NOT
-        // re-applied: GetFullScreenToFloatingRect preserves the floating w/h.
-        if (this.preMaximizeRects.has(Number(windowId))) {
-          await this.restorePreMaximizeRect(windowId, win);
-          hilog.info(DOMAIN, 'WindowManager', 'recoverWindow %{public}d OK (restored pre-maximize rect)', windowId);
-        } else {
-          hilog.info(DOMAIN, 'WindowManager', 'recoverWindow %{public}d OK (no pre-maximize rect; WMS default position)', windowId);
-        }
-      })
-    );
+    this.withWindow(windowId, "recoverWindow", (win: window.Window) => {
+      // Serialize: recover can race with a pending maximize or fullscreen-enter.
+      this.serializeOp(windowId, () =>
+        // FOLLOW_APP_IMMERSIVE_SETTING preserves the existing fullscreen layout,
+        // so no setWindowLayoutFullScreen(true) needed after recover.
+        win.recover().then(async () => {
+          // recover() positions the restored floating window via WMS
+          // GetFullScreenToFloatingRect — pointer-anchored, designed for drag-off-
+          // titlebar unmaximize — NOT the pre-maximize rect (device-verified: a
+          // window created at [0,0] came back at [1913,0], i.e. under the cursor /
+          // top-right where the ❐ button was clicked). moveTo() the rect snapshotted
+          // in maximizeWindow() to restore the original position. Size is NOT
+          // re-applied: GetFullScreenToFloatingRect preserves the floating w/h.
+          if (this.preMaximizeRects.has(Number(windowId))) {
+            await this.restorePreMaximizeRect(windowId, win);
+            hilog.info(
+              DOMAIN,
+              "WindowManager",
+              "recoverWindow %{public}d OK (restored pre-maximize rect)",
+              windowId,
+            );
+          } else {
+            hilog.info(
+              DOMAIN,
+              "WindowManager",
+              "recoverWindow %{public}d OK (no pre-maximize rect; WMS default position)",
+              windowId,
+            );
+          }
+        }),
+      );
+    });
   }
 
-  showWindowMethod(windowId: number): void {
-    // UIAbility main window: hideWindow did win.minimize() → window is in MINIMIZE state.
+  // #219: async -- the show command's bridge arm awaits this, so a failed
+  // restore/show rejects into the ack chain instead of a fake success ack.
+  async showWindowMethod(windowId: number): Promise<void> {
+    // UIAbility main window: a minimized window is in MINIMIZE state.
     // showWindow() cannot restore from MINIMIZE (it only shows a hidden window / raises an
     // already-shown main window to the top). The documented inverse of minimize() for the
     // main window is restore() (the minimize() API doc links restore() for restoration;
-    // API14+, guarded inside restoreWindow). This replaces the prior
-    // startAbility(instanceKey='main') path: under launchType "standard" (tauri-cli
-    // template) instanceKey is ignored and every startAbility spawns a DUPLICATE
-    // EntryAbility. The demo masked this (its module.json5 omits launchType → singleton →
-    // onNewWant). Restore only when actually minimized so a redundant set_visible(true) on
+    // API14+, guarded inside restoreWindow). D4 specified amendment: primary
+    // foregrounding now goes through startAbility(self) (menu.ets / StatusBarUtils /
+    // app-control show-ability) — under launchType "specified" + onAcceptWant AMS routes
+    // it to the live primary and pulls it to the top of the stack. showWindowMethod
+    // stays for the D4b duplicate-guard fallback (raise a still-visible primary) and
+    // the sub-window path; it CANNOT undo a context.hideAbility()-hidden ability.
+    // Restore only when actually minimized so a redundant set_visible(true) on
     // a visible maximized window does not un-maximize it. (PR#45 review F3/D)
     if (this.isUIAbilityMainWindow(windowId)) {
       if (this.isMinimized(windowId)) {
-        this.restoreWindow(windowId);
+        await this.restoreWindow(windowId);
+        return;
       }
+      // D4b plain-relaunch duplicate guard (fallback when the AbilityStage
+      // onAcceptWant route is bypassed): when the window is not
+      // minimized — backgrounded, covered, or already visible — raise it to
+      // the top. showWindow() on a main window raises an already-shown window
+      // without un-maximizing it; the F3/D un-maximize hazard only applies to
+      // restore()/set_visible, which stay confined to the minimized branch.
+      const win = this.getWindow(windowId);
+      if (!win) { throw new Error(`showWindowMethod: window ${windowId} not found`); }
+      await win.showWindow().then(() => {
+        hilog.info(DOMAIN, 'WindowManager', 'showWindowMethod raise %{public}d OK', windowId);
+      });
       return;
     }
-    // Sub-window: showWindow() restores from minimize (symmetric with hideWindow's minimize).
+    // Sub-window: showWindow() restores from minimize.
     const win = this.getWindow(windowId);
-    if (!win) { hilog.warn(DOMAIN, 'WindowManager', 'showWindowMethod: window %{public}d not found', windowId); return; }
-    win.showWindow().then(() => {
-      hilog.info(DOMAIN, 'WindowManager', 'showWindowMethod %{public}d OK', windowId);
-    }).catch((err: ESObject) => {
-      hilog.warn(DOMAIN, 'WindowManager', 'showWindowMethod %{public}d failed: %{public}s', windowId, JSON.stringify(err));
-    });
-  }
-
-  // hide: main window uses win.minimize() (hideAbility not supported on PC/2in1 — StartOptions check failed).
-  // show: main window uses restore() — the documented inverse of minimize() (see showWindowMethod).
-  // Sub-window: minimize + showWindow (symmetric, works).
-  hideWindow(windowId: number): void {
-    const win = this.getWindow(windowId);
-    if (!win) { this.logNotFound('hideWindow', windowId); return; }
-    win.minimize().then(() => {
-      hilog.info(DOMAIN, 'WindowManager', 'hideWindow(minimize) %{public}d OK', windowId);
-    }).catch((err: ESObject) => {
-      hilog.warn(DOMAIN, 'WindowManager', 'hideWindow(minimize) %{public}d failed: %{public}s', windowId, JSON.stringify(err));
-    });
+    if (!win) {
+      throw new Error(`showWindowMethod: window ${windowId} not found`);
+    }
+    await win.showWindow();
+    hilog.info(DOMAIN, "WindowManager", "showWindowMethod %{public}d OK", windowId);
   }
 
   // set_fullscreen → dual-path immersive fullscreen based on screen form factor.
@@ -757,17 +976,31 @@ export class WindowManager {
   // Any failure in the primary path falls back to the desktop immersive maximize.
   // The predefined menu fullscreen (menu.ets PredefinedActionExecutor) and the
   // Esc exit path (NativeAbility menubar recoverFn) both delegate here.
-  setFullscreen(windowId: number, on: boolean): void {
+  // #219: async + tracked -- the set-fullscreen bridge arm awaits the full
+  // multi-step chain, so a failed maximize/recover/setWindowLayoutFullScreen
+  // rejects into the ack chain instead of a fake success ack. The per-window
+  // serialization keeps its chain-continues semantics (serializeOpTracked).
+  // Fire-and-forget callers (Esc exit in NativeAbility, predefined menu in
+  // menu.ets) attach their own .catch so the rejection stays handled.
+  async setFullscreen(windowId: number, on: boolean): Promise<void> {
     const win = this.getWindow(windowId);
-    if (!win) { this.logNotFound('setFullscreen', windowId); return; }
-    hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d on=%{public}s ENTER', windowId, String(on));
+    if (!win) {
+      throw new Error(`setFullscreen: window ${windowId} not found`);
+    }
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      "setFullscreen %{public}d on=%{public}s ENTER",
+      windowId,
+      String(on),
+    );
 
     // Menubar follows fullscreen state (macOS semantics, design.md MW-5/D3):
     // hide on entry, restore on exit. Centralized here so ALL fullscreen
     // entry points (window-API set_fullscreen, predefined menu fullscreen,
     // Esc exit) behave identically. The exit path is additionally covered by
-    // the windowRectChange(RECOVER) → onMenubarVisible(true) handler in
-    // NativeAbility (D3) — double-restore is idempotent.
+    // the windowRectChange(RECOVER) -> onMenubarVisible(true) handler in
+    // NativeAbility (D3) -- double-restore is idempotent.
     const menuCb = getMenuDataCallback(windowKeyForId(windowId));
     menuCb?.onMenubarVisible?.(on ? false : true);
     if (on) {
@@ -777,24 +1010,44 @@ export class WindowManager {
     const isDesktop = display.getDefaultDisplaySync().width > 800;
 
     // Serialize the entire multi-step fullscreen chain per-window. Without this,
-    // a rapid fullscreen-on → fullscreen-off sequence (e.g., auto-test with 400ms
+    // a rapid fullscreen-on -> fullscreen-off sequence (e.g., auto-test with 400ms
     // delay) causes the off chain to race with the still-pending on chain, leaving
     // the window in a half-fullscreen state that breaks subsequent maximize.
-    this.serializeOp(windowId, async () => {
+    await this.serializeOpTracked(windowId, async () => {
       if (on) {
         if (isDesktop) {
-          // Desktop / 2in1: maximize(ENTER_IMMERSIVE) → hide title bar + Dock hover
+          // Desktop / 2in1: maximize(ENTER_IMMERSIVE) -> hide title bar + Dock hover
           await win.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
-          hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d maximize(ENTER_IMMERSIVE) OK', windowId);
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            "setFullscreen %{public}d maximize(ENTER_IMMERSIVE) OK",
+            windowId,
+          );
           await win.setTitleAndDockHoverShown(false, false);
-          hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d setTitleAndDockHoverShown(false,false) OK', windowId);
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            "setFullscreen %{public}d setTitleAndDockHoverShown(false,false) OK",
+            windowId,
+          );
         } else {
-          // Mobile: setWindowLayoutFullScreen(true) → hide status + nav bars
+          // Mobile: setWindowLayoutFullScreen(true) -> hide status + nav bars
           try {
             await win.setWindowLayoutFullScreen(true);
-            hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d setWindowLayoutFullScreen(true) OK', windowId);
+            hilog.info(
+              DOMAIN,
+              "WindowManager",
+              "setFullscreen %{public}d setWindowLayoutFullScreen(true) OK",
+              windowId,
+            );
             await win.setWindowSystemBarEnable([]);
-            hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d setWindowSystemBarEnable([]) OK', windowId);
+            hilog.info(
+              DOMAIN,
+              "WindowManager",
+              "setFullscreen %{public}d setWindowSystemBarEnable([]) OK",
+              windowId,
+            );
           } catch (_err) {
             // Fallback to desktop immersive maximize
             await win.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
@@ -802,18 +1055,33 @@ export class WindowManager {
         }
       } else {
         if (isDesktop) {
-          // Desktop / 2in1: recover() → show title bar + Dock hover
+          // Desktop / 2in1: recover() -> show title bar + Dock hover
           await win.recover();
-          hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d recover() OK', windowId);
+          hilog.info(DOMAIN, "WindowManager", "setFullscreen %{public}d recover() OK", windowId);
           await win.setTitleAndDockHoverShown(true, true);
-          hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d setTitleAndDockHoverShown(true,true) OK', windowId);
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            "setFullscreen %{public}d setTitleAndDockHoverShown(true,true) OK",
+            windowId,
+          );
         } else {
-          // Mobile: setWindowLayoutFullScreen(false) → restore status + nav bars
+          // Mobile: setWindowLayoutFullScreen(false) -> restore status + nav bars
           try {
             await win.setWindowLayoutFullScreen(false);
-            hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d setWindowLayoutFullScreen(false) OK', windowId);
-            await win.setWindowSystemBarEnable(['status', 'navigation']);
-            hilog.info(DOMAIN, 'WindowManager', 'setFullscreen %{public}d setWindowSystemBarEnable([status,navigation]) OK', windowId);
+            hilog.info(
+              DOMAIN,
+              "WindowManager",
+              "setFullscreen %{public}d setWindowLayoutFullScreen(false) OK",
+              windowId,
+            );
+            await win.setWindowSystemBarEnable(["status", "navigation"]);
+            hilog.info(
+              DOMAIN,
+              "WindowManager",
+              "setFullscreen %{public}d setWindowSystemBarEnable([status,navigation]) OK",
+              windowId,
+            );
           } catch (_err) {
             // Fallback to desktop recover
             await win.recover();
@@ -822,17 +1090,20 @@ export class WindowManager {
       }
     });
   }
-
   // Group D decoration button bitfield: bit0 closable, bit1 maximizable, bit2 minimizable, bit3 resizable.
-  // Only applies to Float sub-windows (writes LocalStorage); UIAbility main window is a no-op
-  // (decorations are system-provided).
+  // Only applies to sub-windows (writes LocalStorage). The UIAbility main window's
+  // three decoration buttons are OS-managed: no API maps to the enable/disable flag
+  // semantics (@ohos.window offers style injection via setDecorButtonStyle, whole-bar
+  // visibility via setWindowDecorVisible, and per-button visibility via
+  // setWindowTitleButtonVisible (API 14+), but none disables the operations
+  // themselves) -- issue #238.
   // Read a decoration flag from LocalStorage (问题四: 拦截 API 执行路径)
   // key: 'closable' | 'maximizable' | 'minimizable' | 'resizable'
   // Returns true if not set (default = all available, backward compatible)
   getDecorationFlag(windowId: number, key: string): boolean {
     const entry = this.windows.get(windowId);
     if (!entry || !entry.storage) {
-      return true;  // default: allowed (no storage = main window or not yet initialized)
+      return true; // default: allowed (no storage = main window or not yet initialized)
     }
     const val = entry.storage.get<boolean>(key);
     return val === undefined ? true : val;
@@ -840,40 +1111,70 @@ export class WindowManager {
 
   setDecorationFlags(windowId: number, flags: number): void {
     if (this.isUIAbilityMainWindow(windowId)) {
-      hilog.info(DOMAIN, 'WindowManager', 'setDecorationFlags: UIAbility main window (id=%{public}d) no-op', windowId);
-      return;
+      // Issue #238: the former hilog no-op acked a fake success for a request
+      // the platform cannot honor. Throw so the bridge arm rejects the invoke
+      // instead (#219 unknown-window throw pattern); sub-windows DO honor the
+      // flags (LocalStorage-driven sub-window page buttons).
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "setDecorationFlags: UIAbility main window (id=%{public}d) not supported",
+        windowId,
+      );
+      throw new Error(
+        `setDecorationFlags: setting decoration buttons is not supported on the OpenHarmony main window (window ${windowId}); sub-windows support it`,
+      );
     }
     const entry = this.windows.get(windowId);
     if (!entry || !entry.storage) {
-      hilog.warn(DOMAIN, 'WindowManager', 'setDecorationFlags: window %{public}d not found', windowId);
-      return;
+      // #219: an unknown/destroyed window is a real failure -- throw so the
+      // bridge arm rejects the invoke instead of acking success.
+      throw new Error(`setDecorationFlags: window ${windowId} not found`);
     }
-    entry.storage.setOrCreate('closable', (flags & 1) !== 0);
-    entry.storage.setOrCreate('maximizable', (flags & 2) !== 0);
-    entry.storage.setOrCreate('minimizable', (flags & 4) !== 0);
-    entry.storage.setOrCreate('resizable', (flags & 8) !== 0);
+    entry.storage.setOrCreate("closable", (flags & 1) !== 0);
+    entry.storage.setOrCreate("maximizable", (flags & 2) !== 0);
+    entry.storage.setOrCreate("minimizable", (flags & 4) !== 0);
+    entry.storage.setOrCreate("resizable", (flags & 8) !== 0);
   }
 
   // Group E cursor: @ohos.multimodalInput.pointer
+  // #219: a failed pointer visibility flip now propagates -- the set-cursor-visible
+  // bridge arm wraps this and rejects the invoke instead of acking success.
   setPointerVisible(visible: boolean): void {
-    try { pointer.setPointerVisible(visible); }
-    catch (err) { hilog.warn(DOMAIN, 'WindowManager', 'setPointerVisible failed: %{public}s', JSON.stringify(err)); }
+    try {
+      pointer.setPointerVisible(visible);
+    } catch (err) {
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "setPointerVisible failed: %{public}s",
+        JSON.stringify(err),
+      );
+      throw err as Error;
+    }
   }
 
   setPointerStyle(windowId: number, style: number): void {
     // pointer.setPointerStyleSync needs the REAL OHOS window ID (from getWindowProperties().id),
     // not tao's placeholder windowId (0 for main window). Passing 0 succeeds but has no effect.
-    // NOTE: called from Rust via NAPI func.call (via ArkHelper.setPointerStyle) — bare hilog
-    // in this sync body throws "Argc mismatch" (NAPI re-entrancy, C5): the success log would
-    // turn a success into a reported failure, and the catch log would swallow the original err.
-    // Use console fallback (same escape hatch as safeLogError / getRealWindowId below).
+    // NOTE: this body is NAPI-reentrant when reached through the legacy sync path (C5) --
+    // bare hilog would throw "Argc mismatch"; keep the console fallback for logging.
+    // #219: failures now propagate (unknown window / setPointerStyleSync throw) so
+    // the set-cursor-icon bridge arm can reject the invoke instead of acking success.
     const win = this.getWindow(windowId);
-    if (!win) { console.warn(`[WindowManager] setPointerStyle: window ${windowId} not found`); return; }
+    if (!win) {
+      console.warn(`[WindowManager] setPointerStyle: window ${windowId} not found`);
+      throw new Error(`setPointerStyle: window ${windowId} not found`);
+    }
     try {
       const realWindowId = win.getWindowProperties().id;
       pointer.setPointerStyleSync(realWindowId, style as pointer.PointerStyle);
-      console.info(`[WindowManager] setPointerStyle taoId=${windowId} realId=${realWindowId} style=${style} OK`);
-    } catch (err) { console.error(`[WindowManager] setPointerStyle ${windowId} failed: ${JSON.stringify(err)}`); }
+      // success log removed (issue #231): this body is NAPI-reentrant (C5) --
+      // the failure console below is the exemption that reports real errors.
+    } catch (err) {
+      console.error(`[WindowManager] setPointerStyle ${windowId} failed: ${JSON.stringify(err)}`);
+      throw err as Error;
+    }
   }
 
   // Resolve tao's windowId (0 = main window placeholder) to the REAL OHOS window ID
@@ -883,9 +1184,11 @@ export class WindowManager {
   getRealWindowId(windowId: number): number {
     try {
       const win = this.getWindow(windowId);
-      if (!win) { return -1; }
+      if (!win) {
+        return -1;
+      }
       const id = win.getWindowProperties().id;
-      return (typeof id === 'number') ? id : -1;
+      return typeof id === "number" ? id : -1;
     } catch (_err) {
       return -1;
     }
@@ -893,13 +1196,17 @@ export class WindowManager {
 
   isMaximized(windowId: number): boolean {
     const win = this.getWindow(windowId);
-    if (!win) { return false; }
+    if (!win) {
+      return false;
+    }
     return win.getWindowStatus() === window.WindowStatusType.MAXIMIZE;
   }
 
   isMinimized(windowId: number): boolean {
     const win = this.getWindow(windowId);
-    if (!win) { return false; }
+    if (!win) {
+      return false;
+    }
     return win.getWindowStatus() === window.WindowStatusType.MINIMIZE;
   }
 
@@ -907,13 +1214,18 @@ export class WindowManager {
   // Works for both main window (id=0) and sub-windows.
   async destroyWindow(windowId: number): Promise<void> {
     // 拦截:FLAG_CLOSABLE 为 0 时,不允许关闭(问题四:语义错位修复)
-    if (!this.getDecorationFlag(windowId, 'closable')) {
-      hilog.warn(DOMAIN, 'WindowManager', 'destroyWindow blocked: closable flag not set (window %{public}d)', windowId);
+    if (!this.getDecorationFlag(windowId, "closable")) {
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "destroyWindow blocked: closable flag not set (window %{public}d)",
+        windowId,
+      );
       return;
     }
     const win = this.getWindow(windowId);
     if (!win) {
-      hilog.warn(DOMAIN, 'WindowManager', 'destroyWindow: window %{public}d not found', windowId);
+      hilog.warn(DOMAIN, "WindowManager", "destroyWindow: window %{public}d not found", windowId);
       return;
     }
     // Phase 3 (design.md D4): set destroying=true before win.destroyWindow() so
@@ -925,7 +1237,13 @@ export class WindowManager {
     try {
       await win.destroyWindow();
     } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', 'destroyWindow failed for %{public}d: %{public}s', windowId, String(e));
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "destroyWindow failed for %{public}d: %{public}s",
+        windowId,
+        String(e),
+      );
     }
     this.removeWindow(windowId);
   }
@@ -936,29 +1254,45 @@ export class WindowManager {
   //   closes the instance (removed from recent tasks), distinct from hideAbility
   //   which only backgrounds it. The first instance (id=0) terminating == app
   //   exit; secondary instances (id>0) terminating == that instance only exits.
-  // - Float sub-window: win.destroyWindow() + removeWindow cleanup.
+  // - SubWindow: win.destroyWindow() + removeWindow cleanup.
   async closeWindow(windowId: number): Promise<void> {
     if (this.isUIAbilityMainWindow(windowId)) {
       const ctx = this.uiAbilityContexts.get(Number(windowId));
       if (ctx) {
-        hilog.info(DOMAIN, 'WindowManager', 'closeWindow: terminateSelf for UIAbility id=%{public}d', windowId);
+        hilog.info(
+          DOMAIN,
+          "WindowManager",
+          "closeWindow: terminateSelf for UIAbility id=%{public}d",
+          windowId,
+        );
         try {
           await ctx.terminateSelf();
         } catch (e) {
-          hilog.warn(DOMAIN, 'WindowManager', 'closeWindow: terminateSelf failed for id=%{public}d: %{public}s', windowId, String(e));
+          hilog.warn(
+            DOMAIN,
+            "WindowManager",
+            "closeWindow: terminateSelf failed for id=%{public}d: %{public}s",
+            windowId,
+            String(e),
+          );
         }
       } else {
-        hilog.warn(DOMAIN, 'WindowManager', 'closeWindow: no context for UIAbility id=%{public}d (not registered?), falling back to hideAbility', windowId);
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          "closeWindow: no context for UIAbility id=%{public}d (not registered?), falling back to hideAbility",
+          windowId,
+        );
         await this.hideAbility();
       }
       return;
     }
     const win = this.getWindow(windowId);
     if (!win) {
-      hilog.warn(DOMAIN, 'WindowManager', 'closeWindow: window %{public}d not found', windowId);
+      hilog.warn(DOMAIN, "WindowManager", "closeWindow: window %{public}d not found", windowId);
       return;
     }
-    // Phase 3 (design.md D4): set destroying=true before win.destroyWindow() (Float path).
+    // Phase 3 (design.md D4): set destroying=true before win.destroyWindow() (sub-window path).
     const entry = this.windows.get(windowId);
     if (entry) {
       entry.destroying = true;
@@ -966,28 +1300,152 @@ export class WindowManager {
     try {
       await win.destroyWindow();
     } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', 'closeWindow destroy failed for %{public}d: %{public}s', windowId, String(e));
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "closeWindow destroy failed for %{public}d: %{public}s",
+        windowId,
+        String(e),
+      );
     }
     // removeWindow handles conditional resetUserInteractionTracking
     this.removeWindow(windowId);
   }
 
   private logNotFound(op: string, windowId: number): void {
-    hilog.warn(DOMAIN, 'WindowManager', `%{public}s: window %{public}d not found`, op, windowId);
+    hilog.warn(DOMAIN, "WindowManager", `%{public}s: window %{public}d not found`, op, windowId);
+  }
+
+  // ─── Boilerplate helpers (issue #87 major-5) ───
+  // Centralize the two repeated patterns that used to be hand-written at every
+  // window-op site: (1) getWindow null-check + warn + return; (2) fire-and-forget
+  // Promise .then(ok-log).catch(warn-log).
+
+  // Run `fn` with the window handle if it exists; otherwise warn-and-return.
+  // The windowId is normalized (i64→BigInt NAPI marshalling) once, here.
+  private withWindow(windowId: number, op: string, fn: (win: window.Window) => void): void {
+    const wid = Number(windowId);
+    const win = this.getWindow(wid);
+    if (!win) {
+      this.logNotFound(op, wid);
+      return;
+    }
+    fn(win);
+  }
+
+  // Fire-and-forget a window-op Promise: optional success callback, unified failure
+  // warn. The .catch runs in a Promise async callback (NOT a NAPI-reentrant call
+  // stack), so hilog is safe here. The catch prevents unhandled-reject crashes;
+  // Rust does not perceive the failure (TSFN fire-and-forget).
+  private fireAndForget<T>(
+    p: Promise<T>,
+    op: string,
+    windowId: number,
+    onSuccess?: (v: T) => void,
+  ): void {
+    p.then((v: T) => {
+      if (onSuccess) {
+        onSuccess(v);
+      }
+    }).catch((err: ESObject) => {
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        "%{public}s %{public}d failed: %{public}s",
+        op,
+        windowId,
+        JSON.stringify(err),
+      );
+    });
   }
 
   // Hide the entire Ability (app) to background.
   // Equivalent to macOS Cmd+H (hide:) — all windows become invisible, process stays alive.
   async hideAbility(): Promise<void> {
+    await this.hideWithRestoreGuard();
+  }
+
+  /**
+   * Hide with guard against OHOS system focus restoration.
+   *
+   * Same race as minimizeWithRestoreGuard, but for context.hideAbility(): when a
+   * status-bar tray menu closes, the system restores focus to the app
+   * (startSceneFromOther, focusedOnShow:true → RequestSceneSessionActivation).
+   * If hideAbility() runs immediately, that activation can land AFTER the hide
+   * request and pull the scene back to the foreground, undoing the hide.
+   * Defer the hide until the main window's WINDOW_ACTIVE settles; if it never
+   * fires, a 50ms timeout falls back to direct hide. Mirrors the proven
+   * minimizeWithRestoreGuard pattern. Intentionally NOT wrapped in
+   * serializeOp: hide is an AbilityManager-level app op, not a per-window
+   * WMS op.
+   */
+  private hideWithRestoreGuard(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const win = this.getWindow(0);
+      if (!win) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          "hideWithRestoreGuard: main window not found, direct hide",
+        );
+        this.doHideAbility()
+          .then(() => resolve())
+          .catch(() => resolve());
+        return;
+      }
+      let consumed = false;
+      const finish = () => {
+        try {
+          win.off("windowEvent", onWindowEvent);
+        } catch (_) {}
+      };
+      const doHide = () => {
+        if (consumed) return;
+        consumed = true;
+        finish();
+        hilog.info(DOMAIN, "WindowManager", "hideWithRestoreGuard: hiding (settled)");
+        this.doHideAbility()
+          .then(() => resolve())
+          .catch(() => resolve());
+      };
+      const onWindowEvent = (eventType: window.WindowEventType) => {
+        if (!consumed && eventType === window.WindowEventType.WINDOW_ACTIVE) {
+          hilog.info(DOMAIN, "WindowManager", "hideWithRestoreGuard: WINDOW_ACTIVE fired");
+          doHide();
+        }
+      };
+      try {
+        win.on("windowEvent", onWindowEvent);
+      } catch (_) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          "hideWithRestoreGuard: windowEvent unsupported, direct hide",
+        );
+        this.doHideAbility()
+          .then(() => resolve())
+          .catch(() => resolve());
+        return;
+      }
+      hilog.info(
+        DOMAIN,
+        "WindowManager",
+        "hideWithRestoreGuard: waiting for WINDOW_ACTIVE (50ms fallback)",
+      );
+      setTimeout(doHide, 50);
+    });
+  }
+
+  private async doHideAbility(): Promise<void> {
     if (!this.context) {
-      hilog.warn(DOMAIN, 'WindowManager', 'hideAbility: context not set');
+      hilog.warn(DOMAIN, "WindowManager", "hideAbility: context not set");
       return;
     }
     try {
       await this.context.hideAbility();
       this.resetUserInteractionTracking();
     } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', 'hideAbility failed: %{public}s', String(e));
+      hilog.warn(DOMAIN, "WindowManager", "hideAbility failed: %{public}s", String(e));
     }
   }
 
@@ -1010,13 +1468,16 @@ export class WindowManager {
     this.clearPendingAction();
 
     this.pendingAction = action;
-    hilog.info(DOMAIN, 'WindowManager',
-      'Pending action set, waiting for system foreground transition');
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      "Pending action set, waiting for system foreground transition",
+    );
 
     // Start safety net cleanup timer (2s)
     this.cleanupTimer = setTimeout(() => {
       if (this.pendingAction) {
-        hilog.warn(DOMAIN, 'WindowManager', 'Pending action timeout (2s), cleaning up stale state');
+        hilog.warn(DOMAIN, "WindowManager", "Pending action timeout (2s), cleaning up stale state");
         this.pendingAction = null;
       }
       this.cleanupTimer = null;
@@ -1034,12 +1495,21 @@ export class WindowManager {
     // Cancel cleanup timer since we're executing the action
     this.cancelCleanupTimer();
 
-    hilog.info(DOMAIN, 'WindowManager', 'Consuming pending action after system foreground transition');
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      "Consuming pending action after system foreground transition",
+    );
     try {
       action();
       return true;
     } catch (e) {
-      hilog.error(DOMAIN, 'WindowManager', 'Failed to execute pending action: %{public}s', String(e));
+      hilog.error(
+        DOMAIN,
+        "WindowManager",
+        "Failed to execute pending action: %{public}s",
+        String(e),
+      );
       return false;
     }
   }
@@ -1052,35 +1522,110 @@ export class WindowManager {
     if (this.cleanupTimer !== null) {
       clearTimeout(this.cleanupTimer);
       this.cleanupTimer = null;
-      hilog.info(DOMAIN, 'WindowManager', 'Cleanup timer cancelled');
+      hilog.info(DOMAIN, "WindowManager", "Cleanup timer cancelled");
     }
   }
 
   clearPendingAction(): void {
     if (this.pendingAction) {
-      hilog.info(DOMAIN, 'WindowManager', 'Clearing pending action without execution');
+      hilog.info(DOMAIN, "WindowManager", "Clearing pending action without execution");
       this.pendingAction = null;
     }
     this.cancelCleanupTimer();
   }
 
   async createSubWindow(opts: SubWindowOptions): Promise<number> {
-    const { name, windowId, width = 800, height = 600, x = 100, y = 100,
-            decorations = true, transparent = false, backgroundColor } = opts;
+    const {
+      name,
+      windowId,
+      decorations = true,
+      transparent = false,
+      backgroundColor,
+    } = opts;
+    // Geometry defaults (formerly destructuring defaults) — `let` because the
+    // phone-form clamp below may shrink them into the display rect.
+    let width: number = opts.width ?? 800;
+    let height: number = opts.height ?? 600;
+    let x: number = opts.x ?? 100;
+    let y: number = opts.y ?? 100;
+
+    // Phone-form creation clamp (2026-10-09 Mate 70 report): tauri's default
+    // window geometry is 800×600 LOGICAL, which arrives here already scaled
+    // to physical px (2600×1950 at density 3.25). WMS honors oversized
+    // sub-window rects literally, so on a 1216×2688 phone screen the created
+    // window is 2.1× wider than the display and its content's close
+    // affordance lands ~1400px off-screen — the reported popup could only be
+    // closed after dragging it back on-screen. Clamp creation geometry into
+    // the display rect on phones. PC/2in1 keep literal geometry (verified
+    // 305-case green; 2in1 screens are large enough that tauri defaults
+    // never exceed them).
+    if (deviceInfo.deviceType === "phone") {
+      try {
+        const d = display.getDefaultDisplaySync();
+        const maxW = Math.floor(d.width);
+        const maxH = Math.floor(d.height);
+        const clampedW = Math.min(width, maxW);
+        const clampedH = Math.min(height, maxH);
+        // Re-anchor the top-left into the visible rect — the default 100,100
+        // anchor would leave a full-width window's right edge off-screen.
+        const clampedX = Math.min(Math.max(x, 0), maxW - clampedW);
+        const clampedY = Math.min(Math.max(y, 0), maxH - clampedH);
+        if (clampedW !== width || clampedH !== height || clampedX !== x || clampedY !== y) {
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            `Phone clamp: window %{public}d %{public}dx%{public}d@%{public}d,%{public}d -> %{public}dx%{public}d@%{public}d,%{public}d (display %{public}dx%{public}d)`,
+            windowId,
+            width,
+            height,
+            x,
+            y,
+            clampedW,
+            clampedH,
+            clampedX,
+            clampedY,
+            maxW,
+            maxH,
+          );
+          width = clampedW;
+          height = clampedH;
+          x = clampedX;
+          y = clampedY;
+        }
+      } catch (e) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Phone clamp skipped (display query failed): %{public}s`,
+          String(e),
+        );
+      }
+    }
 
     // Validate windowId: sub-window ID must be greater than 0
     if (windowId <= 0) {
-      hilog.error(DOMAIN, 'WindowManager', `Invalid windowId: %{public}d. Sub-window creation requires windowId > 0.`, windowId);
+      hilog.error(
+        DOMAIN,
+        "WindowManager",
+        `Invalid windowId: %{public}d. Sub-window creation requires windowId > 0.`,
+        windowId,
+      );
       throw new Error(`Invalid windowId: ${windowId}. Must be greater than 0.`);
     }
 
     // Check if windowStage has been set
     if (!this.uiAbilityStages.has(0)) {
-      hilog.error(DOMAIN, 'WindowManager', 'WindowStage not set. Call setWindowStage() first.');
-      throw new Error('WindowStage not set');
+      hilog.error(DOMAIN, "WindowManager", "WindowStage not set. Call setWindowStage() first.");
+      throw new Error("WindowStage not set");
     }
 
-    hilog.info(DOMAIN, 'WindowManager', `Creating sub-window via windowStage: %{public}s, id: %{public}d`, name, windowId);
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      `Creating sub-window via windowStage: %{public}s, id: %{public}d`,
+      name,
+      windowId,
+    );
 
     let win: window.Window;
     try {
@@ -1090,13 +1635,21 @@ export class WindowManager {
       // unless the sub-window declared maximize capability at creation
       // (SubWindowOptions.maximizeSupported defaults to false). title/decorEnabled are
       // required fields (API11+); decorEnabled:false keeps the system decoration off —
-      // FloatPage draws its own title bar. On non-2in1/Tablet devices maximizeSupported
+      // SubWindowPage draws its own title bar. On non-2in1/Tablet devices maximizeSupported
       // is silently ignored (documented no-op), so it is safe to always pass on API19+.
       // This also unlocks maximize for the menu PredefinedMenuItem 'maximize' path and
       // setFullscreen's maximize(ENTER_IMMERSIVE) on sub-windows (same WMS gate).
+      //
+      // Stage routing: always uiAbilityStages.get(0) (primary). A 2026-09-16 zero-code
+      // experiment (openspec multi-uiability-windows B3/OQ2) proved createSubWindowWithOptions
+      // DOES run on a spawned UIAbility stage (creation+render+input all work), but the
+      // system close-cascades ALL sub-windows when that stage's instance is destroyed —
+      // owner semantics (like Windows WebviewWindowBuilder.parent). Production keeps
+      // sub-windows on the primary stage so they outlive individual instance destruction;
+      // per-instance sub-windows remain a documented-not-implemented option.
       if (deviceInfo.sdkApiVersion >= 19) {
         const opts: window.SubWindowOptions = {
-          title: '',
+          title: "",
           decorEnabled: false,
           maximizeSupported: true,
         };
@@ -1105,27 +1658,38 @@ export class WindowManager {
         // API<19: maximizeSupported does not exist in the SDK typings — plain path.
         win = await this.uiAbilityStages.get(0)?.createSubWindow(name);
       }
-      hilog.info(DOMAIN, 'WindowManager', `Sub-window created successfully: %{public}d`, windowId);
+      hilog.info(DOMAIN, "WindowManager", `Sub-window created successfully: %{public}d`, windowId);
     } catch (err) {
-      hilog.error(DOMAIN, 'WindowManager', `Failed to create sub-window: %{public}s`, JSON.stringify(err));
+      hilog.error(
+        DOMAIN,
+        "WindowManager",
+        `Failed to create sub-window: %{public}s`,
+        JSON.stringify(err),
+      );
       throw err;
     }
-    
+
     // Use LocalStorage to pass windowId and decorations, ensuring isolation between windows
     let storage = new LocalStorage();
-    storage.setOrCreate('windowId', windowId);
-    storage.setOrCreate('decorations', decorations);
+    storage.setOrCreate("windowId", windowId);
+    storage.setOrCreate("decorations", decorations);
     // D group decoration flags default (all available; setDecorationFlags updates them)
-    storage.setOrCreate('closable', true);
-    storage.setOrCreate('maximizable', true);
-    storage.setOrCreate('minimizable', true);
-    storage.setOrCreate('resizable', true);
+    storage.setOrCreate("closable", true);
+    storage.setOrCreate("maximizable", true);
+    storage.setOrCreate("minimizable", true);
+    storage.setOrCreate("resizable", true);
     // Title (set by setWindowTitle → updates this via setWindowTitle impl)
-    storage.setOrCreate('title', '');
+    storage.setOrCreate("title", "");
     this.windows.set(windowId, { window: win, storage, destroying: false });
+    // Register the SubWindow kind explicitly. isUIAbilityMainWindow reads this map --
+    // today sub-windows work only because a MISSING key is treated as "not a
+    // UIAbility main window". Making the kind explicit removes that implicit
+    // "absent means SubWindow" dependency (removeWindow's windowKinds.delete above
+    // stays idempotent).
+    this.windowKinds.set(windowId, WindowKind.SubWindow);
 
     // Phase 2 (design.md D3): register this sub-window's windowRectChange handler.
-    // This is the only clean registration point for Float sub-windows — createSubWindow
+    // This is the only clean registration point for sub-windows -- createSubWindow
     // holds both `win` and `windowId`. The handler wraps { windowId, reason, rect } and
     // invokes the single rectChangeCallback (registered by NativeAbility.onWindowStageCreate
     // to fan out to lifecycles), so the Rust window_rect_change closure routes the rect
@@ -1133,27 +1697,54 @@ export class WindowManager {
     // loadContentByName so early rect changes (resize to target size) are captured.
     // The handler reference is stored in the WindowEntry so destroyWindow/removeWindow
     // can win.off("windowRectChange", handler) to avoid leaking the listener.
-    let rectChangeHandler: ((options: window.RectChangeOptions) => void) | undefined =
-      (options: window.RectChangeOptions): void => {
-        try {
-          // Phase 3 (design.md D5): deep-copy rect fields — do not store system object ref.
-          // Phase 3 (design.md D3): route through per-window throttle (leading+trailing 16ms).
-          const wrapped: WindowRectEventWrap = {
-            windowId,
-            reason: options.reason,
-            rect: { left: options.rect.left, top: options.rect.top, width: options.rect.width, height: options.rect.height }
-          };
-          this.throttledRectDispatch(windowId, wrapped, (w: object) => {
+    let rectChangeHandler: ((options: window.RectChangeOptions) => void) | undefined = (
+      options: window.RectChangeOptions,
+    ): void => {
+      try {
+        // Phase 3 (design.md D5): deep-copy rect fields — do not store system object ref.
+        // Phase 3 (design.md D3): route through per-window throttle (leading+trailing 16ms).
+        // Issue Eulogizethesun/tauri#97: attach the same moment's drawableRect
+        // (sync getWindowProperties snapshot) so the Rust inner-rect cache
+        // tracks the system-defined inner value — omitted when unreadable.
+        const wrapped: WindowRectEventWrap = {
+          windowId,
+          reason: options.reason,
+          rect: {
+            left: options.rect.left,
+            top: options.rect.top,
+            width: options.rect.width,
+            height: options.rect.height,
+          },
+          drawable: WindowManager.readDrawableRect(win),
+        };
+        this.throttledRectDispatch(
+          windowId,
+          wrapped,
+          (w: object) => {
             this.rectChangeCallback?.(w as WindowRectEventWrap);
-          }, 'rect');
-        } catch (e) {
-          hilog.warn(DOMAIN, 'WindowManager', `Sub-window rectChange handler failed for %{public}d: %{public}s`, windowId, String(e));
-        }
-      };
+          },
+          "rect",
+        );
+      } catch (e) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Sub-window rectChange handler failed for %{public}d: %{public}s`,
+          windowId,
+          String(e),
+        );
+      }
+    };
     try {
       win.on("windowRectChange", rectChangeHandler);
     } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', `Failed to register windowRectChange for sub-window %{public}d: %{public}s`, windowId, String(e));
+      hilog.warn(
+        DOMAIN,
+        "WindowManager",
+        `Failed to register windowRectChange for sub-window %{public}d: %{public}s`,
+        windowId,
+        String(e),
+      );
       rectChangeHandler = undefined;
     }
     if (rectChangeHandler) {
@@ -1167,31 +1758,99 @@ export class WindowManager {
     this.registerFocusTracking(win, windowId);
 
     try {
-      hilog.info(DOMAIN, 'WindowManager', `Loading content: FloatPage for window %{public}d`, windowId);
-      await win.loadContentByName(FloatPage.RouteName, storage);
-      hilog.info(DOMAIN, 'WindowManager', `UI content loaded successfully for window: %{public}d`, windowId);
-      
+      hilog.info(
+        DOMAIN,
+        "WindowManager",
+        `Loading content: SubWindowPage for window %{public}d`,
+        windowId,
+      );
+      await win.loadContentByName(SubWindowPage.RouteName, storage);
+      hilog.info(
+        DOMAIN,
+        "WindowManager",
+        `UI content loaded successfully for window: %{public}d`,
+        windowId,
+      );
+
+      // Review R13: seed this sub-window's rect caches right after its content
+      // loads. The windowRectChange registration above deliberately runs
+      // pre-load to catch early rect changes, but those events carry no
+      // drawableRect (unreadable before loadContent) and the Rust side updates
+      // the outer/drawable pair atomically — so they seed nothing at all. This
+      // snapshot restores the initial-size signal (the first dispatchable
+      // Resized for sub-windows) and fills inner_rects (chrome is 0 for
+      // decorEnabled:false sub-windows; the pair keeps semantics uniform).
+      try {
+        const snapshot = WindowManager.readWindowRectSnapshot(win);
+        if (snapshot) {
+          const wrapped: WindowRectEventWrap = {
+            windowId,
+            reason: window.RectChangeReason.UNDEFINED,
+            rect: snapshot.rect,
+            drawable: snapshot.drawable,
+          };
+          this.throttledRectDispatch(
+            windowId,
+            wrapped,
+            (w: object) => {
+              this.rectChangeCallback?.(w as WindowRectEventWrap);
+            },
+            "rect",
+          );
+        }
+      } catch (e) {
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Rect cache seed failed for window %{public}d: %{public}s`,
+          windowId,
+          String(e),
+        );
+      }
+
       // Register sub-window's UIContext
       try {
         const uiCtx = win.getUIContext();
         if (uiCtx) {
           this.registerUIContext(windowId, uiCtx);
-          hilog.info(DOMAIN, 'WindowManager', `Sub-window UIContext registered for window: %{public}d`, windowId);
+          hilog.info(
+            DOMAIN,
+            "WindowManager",
+            `Sub-window UIContext registered for window: %{public}d`,
+            windowId,
+          );
         }
       } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', `Failed to get UIContext for window %{public}d: %{public}s`, windowId, JSON.stringify(e));
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `Failed to get UIContext for window %{public}d: %{public}s`,
+          windowId,
+          JSON.stringify(e),
+        );
       }
     } catch (err) {
-      hilog.error(DOMAIN, 'WindowManager', `Failed to load content for window %{public}d: %{public}s`, windowId, JSON.stringify(err));
+      hilog.error(
+        DOMAIN,
+        "WindowManager",
+        `Failed to load content for window %{public}d: %{public}s`,
+        windowId,
+        JSON.stringify(err),
+      );
       throw err;
     }
-    
+
     try {
       // Apply transparent/backgroundColor settings
       if (transparent) {
-        hilog.info(DOMAIN, 'WindowManager', `Setting Float window %{public}d to transparent`, windowId);
-        await win.setWindowBackgroundColor('#00000000');
-        // Float sub-windows ALSO have a window container layer. Without setting
+        hilog.info(
+          DOMAIN,
+          "WindowManager",
+          `Setting sub-window %{public}d to transparent`,
+          windowId,
+        );
+        await win.setWindowBackgroundColor("#00000000");
+        // Sub-windows ALSO have a window container layer. Without setting
         // it transparent, an opaque container sits between the window background
         // and ArkUI content — blocking backdropBlur from sampling through the
         // transparent window to content behind it (vibrancy/frosted glass effect).
@@ -1199,144 +1858,87 @@ export class WindowManager {
         // sub-windows have no container); restoring the original behavior.
         if (deviceInfo.sdkApiVersion >= 20) {
           try {
-            await win.setWindowContainerColor('#00000000', '#00000000');
-            hilog.info(DOMAIN, 'WindowManager', `Float window %{public}d container color set to transparent (API %{public}d)`, windowId, deviceInfo.sdkApiVersion);
+            await win.setWindowContainerColor("#00000000", "#00000000");
+            hilog.info(
+              DOMAIN,
+              "WindowManager",
+              `SubWindow %{public}d container color set to transparent (API %{public}d)`,
+              windowId,
+              deviceInfo.sdkApiVersion,
+            );
           } catch (containerErr: any) {
             if (containerErr.code === 801) {
-              hilog.debug(DOMAIN, 'WindowManager', 'setWindowContainerColor not supported (error 801)');
+              hilog.debug(
+                DOMAIN,
+                "WindowManager",
+                "setWindowContainerColor not supported (error 801)",
+              );
             } else if (containerErr.code === 201) {
-              hilog.error(DOMAIN, 'WindowManager', 'setWindowContainerColor permission denied (error 201): missing ohos.permission.SET_WINDOW_TRANSPARENT');
+              hilog.error(
+                DOMAIN,
+                "WindowManager",
+                "setWindowContainerColor permission denied (error 201): missing ohos.permission.SET_WINDOW_TRANSPARENT",
+              );
             } else {
-              hilog.warn(DOMAIN, 'WindowManager', `Float window container color failed: code=%{public}d`, containerErr.code);
+              hilog.warn(
+                DOMAIN,
+                "WindowManager",
+                `Sub-window container color failed: code=%{public}d`,
+                containerErr.code,
+              );
             }
           }
+        } else {
+          // setWindowContainerColor is API 20+; below that the container layer
+          // stays opaque, so a transparent sub-window shows no visible blur
+          // (vibrancy) effect. Non-fatal: the window itself still works.
+          hilog.warn(DOMAIN, 'WindowManager', `Sub-window %{public}d transparent container requires API20+, current %{public}d; container stays opaque (no visible blur)`, windowId, deviceInfo.sdkApiVersion);
         }
       } else if (backgroundColor !== undefined) {
-        const colorStr = '#' + backgroundColor.toString(16).padStart(8, '0');
-        hilog.info(DOMAIN, 'WindowManager', `Setting window %{public}d background color to %{public}s`, windowId, colorStr);
+        const colorStr = "#" + backgroundColor.toString(16).padStart(8, "0");
+        hilog.info(
+          DOMAIN,
+          "WindowManager",
+          `Setting window %{public}d background color to %{public}s`,
+          windowId,
+          colorStr,
+        );
         await win.setWindowBackgroundColor(colorStr);
       }
 
-      hilog.info(DOMAIN, 'WindowManager', `Resizing window %{public}d to %{public}dx%{public}d`, windowId, width, height);
+      hilog.info(
+        DOMAIN,
+        "WindowManager",
+        `Resizing window %{public}d to %{public}dx%{public}d`,
+        windowId,
+        width,
+        height,
+      );
       await win.resize(width, height);
-      hilog.info(DOMAIN, 'WindowManager', `Moving window %{public}d to %{public}d,%{public}d`, windowId, x, y);
+      hilog.info(
+        DOMAIN,
+        "WindowManager",
+        `Moving window %{public}d to %{public}d,%{public}d`,
+        windowId,
+        x,
+        y,
+      );
       await win.moveWindowTo(x, y);
       await win.showWindow();
-      hilog.info(DOMAIN, 'WindowManager', `Window shown: %{public}d`, windowId);
+      hilog.info(DOMAIN, "WindowManager", `Window shown: %{public}d`, windowId);
     } catch (err) {
-      hilog.error(DOMAIN, 'WindowManager', `Failed to resize/move/show window: %{public}s`, JSON.stringify(err));
+      hilog.error(
+        DOMAIN,
+        "WindowManager",
+        `Failed to resize/move/show window: %{public}s`,
+        JSON.stringify(err),
+      );
       throw err;
     }
 
     return windowId;
   }
-  
-  // Load a URL into the specified window — unified via addWebview, consistent with main window path
-  loadUrl(id: number, url: string): void {
-    const controller = this.controllers.get(id);
-    if (controller) {
-      hilog.info(DOMAIN, 'WindowManager', `Loading URL for window ${id}: ${url}`);
-      // Unified call to addWebview, consistent with main window ArkHelper.createWebview path
-      controller.addWebview({ url: url });
-      // Clear pending URL on successful load
-      this.pendingUrls.delete(id);
-    } else {
-      hilog.warn(DOMAIN, 'WindowManager', `Controller not ready for window ${id}. Queuing URL.`);
-      // Controller not ready yet — queue the URL and wait for registerController
-      this.pendingUrls.set(id, url);
-    }
-  }
-  
-  // Trigger load when page initialization is complete and Controller is registered
-  registerController(id: number, controller: RustWebviewNodeController): void {
-    hilog.info(DOMAIN, 'WindowManager', `Controller registered for window: %{public}d`, id);
-    // pendingBlurs key is normalized to number (applyWindowBlur stores Number(windowId)
-    // because Rust NAPI i64 arrives as BigInt).
-    const pb = this.pendingBlurs.get(Number(id));
-    if (pb !== undefined) {
-      this.pendingBlurs.delete(Number(id));
-    }
-    const injectBlur = (data: WebviewInitData): void => {
-      if (pb !== undefined) {
-        if (!data.style) {
-          data.style = {};
-        }
-        data.style.blurRadius = pb;
-      }
-    };
-    this.controllers.set(id, controller);
 
-    // 1. Process pending WebView init requests (resolves race conditions)
-    const pendingInit = this.pendingInits.get(id);
-    if (pendingInit) {
-      hilog.info(DOMAIN, 'WindowManager', `Processing pending init for window ${id}`);
-      injectBlur(pendingInit);
-      const result = controller.addWebview(pendingInit);
-      this.pendingInits.delete(id);
-
-      // Attach real implementations to result.controller
-      // (same as ArkHelper.ets normal path — without this, ProxyJsHelper replays to no-op stubs)
-      const applyStyle = (style: WebviewStyle) => {
-        objectAssign(pendingInit.style as Record<string, ESObject>, style);
-        controller.updateWebviewStyle(result.webTag, pendingInit.style as WebviewStyle);
-      };
-
-      result.controller.setBackgroundColor = (color: number) => {
-        applyStyle({ backgroundColor: color } as WebviewStyle);
-      };
-
-      result.controller.setVisible = (visible: boolean) => {
-        applyStyle({ visible } as WebviewStyle);
-      };
-
-      result.controller.setBounds = (x: number, y: number, width: number, height: number) => {
-        applyStyle({ x, y, width, height } as WebviewStyle);
-      };
-
-      result.controller.dispose = () => {
-        controller.removeWebview(result.webTag);
-      };
-
-      // 2. Activate proxy (bind real Controller to proxy)
-      const proxy = this.takePendingJsHelperProxy(id);
-      if (proxy) {
-        hilog.info(DOMAIN, 'WindowManager', `Binding real controller to proxy for window ${id}`);
-        proxy.bindToRealController(result.controller);
-      }
-    }
-
-    // 3. Process pending URL load requests
-    const pendingUrl = this.pendingUrls.get(id);
-    if (pendingUrl) {
-      hilog.info(DOMAIN, 'WindowManager', `Pending URL found! Triggering load for window ${id}: ${pendingUrl}`);
-      const urlData: WebviewInitData = { url: pendingUrl };
-      injectBlur(urlData);
-      controller.addWebview(urlData);
-      this.pendingUrls.delete(id);
-    } else {
-      hilog.info(DOMAIN, 'WindowManager', `No pending URL for window ${id}. Waiting for command.`);
-    }
-  }
-  
-  // Queue a WebView init request
-  queueWebviewInit(id: number, init: WebviewInitData): void {
-    hilog.warn(DOMAIN, 'WindowManager', `Controller not ready for window ${id}. Queuing init.`);
-    this.pendingInits.set(id, init);
-  }
-  
-  // Register a proxy object
-  registerPendingJsHelperProxy(id: number, proxy: ProxyJsHelper): void {
-    hilog.info(DOMAIN, 'WindowManager', `Registering pending proxy for window: %{public}d`, id);
-    this.pendingJsHelperProxies.set(id, proxy);
-  }
-
-  // Get and remove proxy (no longer managed after binding)
-  takePendingJsHelperProxy(id: number): ProxyJsHelper | undefined {
-    const proxy = this.pendingJsHelperProxies.get(id);
-    this.pendingJsHelperProxies.delete(id);
-    return proxy;
-  }
-  
   getWindow(id: number): window.Window | undefined {
     // Normalize i64→BigInt marshalling from Rust NAPI: Number() is a no-op when id
     // arrives as a number, but fixes the main-window (id=0) lookup when id arrives as
@@ -1348,7 +1950,7 @@ export class WindowManager {
       try {
         return this.uiAbilityStages.get(0)?.getMainWindowSync();
       } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', 'Failed to get main window: %{public}s', String(e));
+        hilog.warn(DOMAIN, "WindowManager", "Failed to get main window: %{public}s", String(e));
         return undefined;
       }
     }
@@ -1358,7 +1960,13 @@ export class WindowManager {
       try {
         return secStage.getMainWindowSync();
       } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', 'Failed to get subsequent main window %{public}d: %{public}s', wid, String(e));
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          "Failed to get subsequent main window %{public}d: %{public}s",
+          wid,
+          String(e),
+        );
         return undefined;
       }
     }
@@ -1384,44 +1992,113 @@ export class WindowManager {
   // setDecorations: controls visibility of window decorations (title bar).
   // Main UIAbility window: win.setWindowDecorVisible(decorations) — PC/2in1 window decoration API (since API 20).
   //   Reference implementation: demo3signature/entry/src/main/ets/pages/Index.ets toggleWindowDecor.
-  //   The old implementation used hideSystemBar/showSystemBar (status bar), which is wrong —
-  //   status bar != title bar.
+  //   The old implementation used hideSystemBar/showSystemBar (status bar, since deleted),
+  //   which was wrong — status bar != title bar.
   //   May be unsupported on phones (throws 801); the catch fallback does not affect other logic.
-  // Float sub-window: LocalStorage setOrCreate('decorations') — FloatPage @LocalStorageProp reactively re-renders.
-  setDecorations(windowId: number, decorations: boolean): void {
+  // Sub-window: LocalStorage setOrCreate('decorations') -- SubWindowPage @LocalStorageProp reactively re-renders.
+  // Returns whether the window kind was handled: a sub-window storage write and a successful
+  // UIAbility setWindowDecorVisible return true; a missing window, a thrown system call,
+  // or an unknown window kind return false (the plugin handler surfaces that as an error).
+  // The two kinds are mutually exclusive in practice: `windows` map entries are only
+  // created by createSubWindow (the sub-window kind), while UIAbility main windows are tracked in
+  // `windowKinds` and never carry a `windows` entry.
+  setDecorations(windowId: number, decorations: boolean): boolean {
     hilog.info(DOMAIN, 'WindowManager', 'setDecorations %{public}d decorations=%{public}s ENTER', windowId, String(decorations));
-    // Float sub-window: write LocalStorage to drive FloatPage title bar show/hide
+    // Sub-window: write LocalStorage to drive SubWindowPage title bar show/hide
     const entry = this.windows.get(windowId);
     if (entry && entry.storage) {
       entry.storage.setOrCreate('decorations', decorations);
-      hilog.info(DOMAIN, 'WindowManager', `Decorations set to %{public}s for Float window %{public}d (LocalStorage)`, String(decorations), windowId);
+      hilog.info(DOMAIN, 'WindowManager', `Decorations set to %{public}s for sub-window %{public}d (LocalStorage)`, String(decorations), windowId);
+      return true;
     }
     // UIAbility main window: call setWindowDecorVisible directly to control the system title bar
     if (this.isUIAbilityMainWindow(windowId)) {
       const win = this.getWindow(windowId);
       if (!win) {
         hilog.warn(DOMAIN, 'WindowManager', 'setDecorations: main window %{public}d not found', windowId);
-        return;
+        return false;
       }
       try {
         win.setWindowDecorVisible(decorations);
         hilog.info(DOMAIN, 'WindowManager', 'setDecorations %{public}d setWindowDecorVisible(%{public}s) OK', windowId, String(decorations));
+        // Decor visibility changes the drawable area WITHOUT changing the
+        // window rect, so the system fires no windowRectChange here
+        // (device-probed 2026-10-12,
+        // faultlogs/tao27-f2-decor-toggle-probe-20261012.md): the Rust
+        // inner-rect cache went stale and no Resized fired. Push synthetic
+        // rect changes — a fresh getWindowProperties() pair through the same
+        // throttled channel the real handler uses (same wrap shape as the
+        // floating sub-window post-load seed in createSubWindow); the Rust-side
+        // rect dedup makes a push with not-yet-settled (stale) properties a
+        // no-op. Immediate push covers the synchronous-property case; the
+        // delayed one lands after the ArkUI layout settles (~11-18ms
+        // observed on HAD-W32).
+        this.pushSyntheticRectChange(windowId);
+        setTimeout(() => this.pushSyntheticRectChange(windowId), 100);
+        return true;
       } catch (err) {
         // 801: device not supported (phones); 1300002: abnormal window state. Does not affect other logic.
         hilog.warn(DOMAIN, 'WindowManager', 'setDecorations %{public}d setWindowDecorVisible failed: %{public}s', windowId, JSON.stringify(err));
+        return false;
       }
+    }
+    // Unknown window kind (never created through WindowManager).
+    hilog.warn(DOMAIN, 'WindowManager', 'setDecorations: unknown window %{public}d', windowId);
+    return false;
+  }
+
+  /** Synthetic rect-change push after a decor visibility change: reads a
+   *  fresh windowRect+drawableRect snapshot pair and dispatches it through
+   *  the same throttled rect channel the real windowRectChange handler uses
+   *  (the rectChangeCallback fan-out registered by NativeAbility). The Rust
+   *  window_rect_change closure updates the inner-rect cache from the pair
+   *  and the ContentRectChange dedup suppresses unchanged rects, so a
+   *  redundant or not-yet-settled push is a no-op. */
+  private pushSyntheticRectChange(windowId: number): void {
+    const win = this.getWindow(windowId);
+    if (!win) {
+      return;
+    }
+    try {
+      const snapshot = WindowManager.readWindowRectSnapshot(win);
+      if (!snapshot) {
+        return;
+      }
+      const wrapped: WindowRectEventWrap = {
+        windowId,
+        reason: window.RectChangeReason.UNDEFINED,
+        rect: snapshot.rect,
+        drawable: snapshot.drawable,
+      };
+      this.throttledRectDispatch(windowId, wrapped, (w: object) => {
+        this.rectChangeCallback?.(w as WindowRectEventWrap);
+      }, 'rect');
+      hilog.info(DOMAIN, 'WindowManager', 'pushSyntheticRectChange %{public}d drawable=%{public}s', windowId, JSON.stringify(snapshot.drawable));
+    } catch (e) {
+      hilog.warn(DOMAIN, 'WindowManager', 'pushSyntheticRectChange %{public}d failed: %{public}s', windowId, String(e));
     }
   }
 
   setWindowBackgroundColor(windowId: number, color: number): void {
-    const colorStr = '#' + color.toString(16).padStart(8, '0');
-    hilog.info(DOMAIN, 'WindowManager', `setWindowBackgroundColor: windowId=%{public}d, color=%{public}s`, windowId, colorStr);
+    const colorStr = "#" + color.toString(16).padStart(8, "0");
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      `setWindowBackgroundColor: windowId=%{public}d, color=%{public}s`,
+      windowId,
+      colorStr,
+    );
     // UIAbility main windows (first id=0 or subsequent id>0): set on the stage's main window
     if (this.isUIAbilityMainWindow(windowId)) {
       try {
         const mainWindow = this.getWindow(windowId);
         if (!mainWindow) {
-          hilog.warn(DOMAIN, 'WindowManager', `setWindowBackgroundColor: main window %{public}d not found`, windowId);
+          hilog.warn(
+            DOMAIN,
+            "WindowManager",
+            `setWindowBackgroundColor: main window %{public}d not found`,
+            windowId,
+          );
           return;
         }
         mainWindow.setWindowBackgroundColor(colorStr);
@@ -1431,7 +2108,12 @@ export class WindowManager {
         // for active+inactive overwrites the title bar. setWindowBackgroundColor
         // only affects the window background, not the container.
       } catch (e) {
-        hilog.error(DOMAIN, 'WindowManager', `Failed to set main window background: %{public}s`, String(e));
+        hilog.error(
+          DOMAIN,
+          "WindowManager",
+          `Failed to set main window background: %{public}s`,
+          String(e),
+        );
       }
     } else {
       const entry = this.windows.get(windowId);
@@ -1439,86 +2121,56 @@ export class WindowManager {
         try {
           entry.window.setWindowBackgroundColor(colorStr);
         } catch (err) {
-          hilog.error(DOMAIN, 'WindowManager', `Sub-window %{public}d background failed: %{public}s`, windowId, String(err));
+          hilog.error(
+            DOMAIN,
+            "WindowManager",
+            `Sub-window %{public}d background failed: %{public}s`,
+            windowId,
+            String(err),
+          );
         }
       }
     }
   }
 
-  // Window vibrancy: Apply blur to WebView container.
-  // API selection by BlurModifier.applyBlur() in DefaultWebview.ets:
-  // backgroundBlurStyle for transparent main windows, backdropBlur for opaque sub-windows.
-  // Blur API selection (handled by BlurModifier.applyBlur in DefaultWebview.ets):
+  // Window vibrancy: apply blur to the WebView container.
+  // Blur API selection (WebviewPlugin's BuildWebview):
   // - transparent=true (main window): `backgroundBlurStyle` — samples content behind the window
-  // - transparent=false (opaque, Float sub-windows): `backdropBlur` — blurs in-surface pixels
-  // The blur radius is queued here and consumed when the webview node is built.
+  // - transparent=false (opaque sub-windows): `backdropBlur` -- blurs in-surface pixels
+  // The radius is persisted (WindowAttachmentRegistry) and consumed when the webview node
+  // is built; a live webview is refreshed through the registered callback.
   applyWindowBlur(windowId: number, radius: number): void {
     // windowId arrives from Rust NAPI as i64 → BigInt (1n). Normalize to number
-    // so it matches the ArkTS number keys used by registerController.
+    // so it matches the ArkTS number keys used by the per-window Maps.
     const id = Number(windowId);
-    hilog.info(DOMAIN, 'WindowManager',
-      'applyWindowBlur: ENTER rawWindowId=%{public}s id=%{public}d radius=%{public}f controllersSize=%{public}d blurCbSize=%{public}d',
-      String(windowId), id, radius, this.controllers.size, this.blurRefreshCallbacks.size);
-    this.pendingBlurs.set(id, radius);
-    // Also persist for WebviewPlugin path (which reads at webview build time via getPendingBlur)
-    this.windowBlurRadii.set(id, radius);
-    // Runtime refresh: if the window's controller is already registered, apply blur immediately
-    // via AttributeUpdater (BuilderNode.update does not refresh backgroundBlurStyle). For not-yet-built
-    // windows, registerController will inject blurRadius from pendingBlurs at build time.
-    const controller = this.controllers.get(id);
-    if (controller) {
-      controller.setAllWebviewsBlurRadius(radius);
-      hilog.info(DOMAIN, 'WindowManager', 'applyWindowBlur: controller FOUND, setAllWebviewsBlurRadius applied id=%{public}d', id);
-    } else {
-      hilog.warn(DOMAIN, 'WindowManager', 'applyWindowBlur: NO controller registered yet id=%{public}d (will inject at build time via pendingBlurs)', id);
-    }
-    // WebviewPlugin path: if a WebviewPlugin webview already exists for this window,
-    // fire the registered refresh callback so its backdropBlur updates live.
-    const refreshCb = this.blurRefreshCallbacks.get(id);
-    if (refreshCb) {
-      hilog.info(DOMAIN, 'WindowManager', 'applyWindowBlur: blurRefreshCb FOUND, invoking id=%{public}d', id);
-      try {
-        refreshCb(radius);
-      } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', 'applyWindowBlur refresh callback failed: %{public}s', String(e));
-      }
-    } else {
-      hilog.warn(DOMAIN, 'WindowManager', 'applyWindowBlur: NO blurRefreshCb registered id=%{public}d (webview not created yet, or path mismatch)', id);
-    }
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      "applyWindowBlur: ENTER rawWindowId=%{public}s id=%{public}d radius=%{public}f blurCbSize=%{public}d",
+      String(windowId),
+      id,
+      radius,
+      this.attachments.blurRefreshCallbackCount,
+    );
+    this.attachments.setBlurRadius(id, radius);
+    this.attachments.fireBlurRefresh(id, radius);
   }
 
   /** Register a runtime blur refresh callback for a window (WebviewPlugin path). Called
    *  by WebviewSurface when a webview is created so later set-blur commands reach it. */
   registerBlurRefreshCallback(windowId: number, cb: (radius: number) => void): void {
-    this.blurRefreshCallbacks.set(Number(windowId), cb);
+    this.attachments.registerBlurRefreshCallback(windowId, cb);
   }
 
   unregisterBlurRefreshCallback(windowId: number): void {
-    this.blurRefreshCallbacks.delete(Number(windowId));
+    this.attachments.unregisterBlurRefreshCallback(windowId);
   }
 
   /**
-   * Phase 3 (design.md D2/D4/D6): per-window leading+trailing throttle for rect/size events.
-   *
-   * - Leading: first event within a 16ms window fires immediately (hilog edge=leading).
-   * - Trailing: subsequent events within the window are stored as pending; when the timer
-   *   fires, only the last pending payload is dispatched (hilog edge=trailing).
-   * - destroying guard: if the window's WindowEntry.destroying is true (set by
-   *   destroyWindow/closeWindow before win.destroyWindow()), events are discarded.
-   *   Main window (id=0) is not in the windows Map; undefined→falsy→unaffected.
-   *
-   * Callers MUST create the payload with field-copied values (not system object refs),
-   * per design.md D5 (pending payload deep-copy). The throttledRectDispatch itself does
-   * not re-copy — it stores the caller-constructed wrapped object reference, which is
-   * safe because the caller already deep-copied rect fields.
-   *
-   * Q1 (design.md Open Questions): stale listeners after onWindowStageDestroy may still
-   * fire — the try/catch around dispatch swallows errors. If hilog shows stale triggers,
-   * add win.off() in unregisterUIAbilityStage.
-   *
-   * Q2 (design.md Open Questions): BridgeHost and NativeAbility register on possibly
-   * different window instances (main window vs component window) — [THROTTLE-IN] hilog
-   * shows whether the two sources interleave for windowId=0.
+   * Phase 3 (design.md D2/D4/D6): per-window leading+trailing throttle for rect/size
+   * events. Implementation lives in RectThrottle (extracted, issue #87 major-5);
+   * this facade keeps the WindowManager call sites (NativeAbility, BridgeHost,
+   * createSubWindow) unchanged.
    */
   throttledRectDispatch(
     windowId: number,
@@ -1526,59 +2178,7 @@ export class WindowManager {
     dispatchFn: (w: object) => void,
     kind: string,
   ): void {
-    hilog.info(DOMAIN, 'WindowManager', `[THROTTLE-IN] wid=${windowId} kind=${kind}`);
-    // Discard events for windows being destroyed (main window id=0 not in Map → unaffected)
-    const entry = this.windows.get(windowId);
-    if (entry?.destroying) {
-      return;
-    }
-
-    const timersMap = kind === 'rect' ? this.rectTimers : this.sizeTimers;
-    const pendingMap = kind === 'rect' ? this.rectPending : this.sizePending;
-    const leadingMap = kind === 'rect' ? this.rectLeading : this.sizeLeading;
-
-    // Leading: first event in the window fires immediately
-    if (!leadingMap.get(windowId)) {
-      leadingMap.set(windowId, true);
-      hilog.info(DOMAIN, 'WindowManager', `[THROTTLE-OUT] wid=${windowId} kind=${kind} edge=leading`);
-      try {
-        dispatchFn(payload);
-      } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', `[THROTTLE] leading dispatch failed wid=${windowId} kind=${kind}: ${String(e)}`);
-      }
-      // Set timer to end the leading window and flush trailing
-      const timer = setTimeout(() => {
-        try {
-          // Re-check destroying in case the window was destroyed during the timer
-          const e2 = this.windows.get(windowId);
-          if (e2?.destroying) {
-            timersMap.delete(windowId);
-            pendingMap.delete(windowId);
-            leadingMap.delete(windowId);
-            return;
-          }
-          const pending = pendingMap.get(windowId);
-          if (pending !== undefined) {
-            hilog.info(DOMAIN, 'WindowManager', `[THROTTLE-OUT] wid=${windowId} kind=${kind} edge=trailing`);
-            dispatchFn(pending);
-          }
-        } catch (e) {
-          hilog.warn(DOMAIN, 'WindowManager', `[THROTTLE] trailing dispatch failed wid=${windowId} kind=${kind}: ${String(e)}`);
-        } finally {
-          timersMap.delete(windowId);
-          pendingMap.delete(windowId);
-          leadingMap.delete(windowId);
-        }
-      }, WindowManager.THROTTLE_MS);
-      timersMap.set(windowId, timer);
-    } else {
-      // Trailing: store pending (caller already deep-copied fields into the wrapped object)
-      if (kind === 'rect') {
-        this.rectPending.set(windowId, payload as WindowRectEventWrap);
-      } else {
-        this.sizePending.set(windowId, payload as WindowSizeEventWrap);
-      }
-    }
+    this.rectThrottle.dispatch(windowId, payload, dispatchFn, kind);
   }
 
   /** Phase 2 (design.md D3 注入小节): register the single rect-change fan-out callback.
@@ -1593,124 +2193,154 @@ export class WindowManager {
     this.rectChangeCallback = undefined;
   }
 
+  /**
+   * Issue Eulogizethesun/tauri#97: synchronous drawableRect read for
+   * rect-change wraps. One getWindowProperties() snapshot — the system's own
+   * inner rect (position relative to the window, size = drawable area, px),
+   * replacing the removed window-rect − content-rect decor estimate (whose
+   * async races produced garbage values and the shrinking-window bug).
+   * Returns undefined when the call throws (window not created / content not
+   * loaded) or the rect is degenerate — callers omit the field and the Rust
+   * side keeps its last snapshot. Never returns an estimated value.
+   */
+  static readDrawableRect(win: window.Window): window.Rect | undefined {
+    try {
+      const drawable = win.getWindowProperties().drawableRect;
+      if (drawable.width > 0 && drawable.height > 0) {
+        // Typed local first — object literals into a union return type are an
+        // arkts-no-untyped-obj-literals compile risk.
+        const rect: window.Rect = {
+          left: drawable.left,
+          top: drawable.top,
+          width: drawable.width,
+          height: drawable.height,
+        };
+        return rect;
+      }
+    } catch (e) {
+      hilog.debug(
+        DOMAIN,
+        "WindowManager",
+        "readDrawableRect: getWindowProperties unavailable: %{public}s",
+        String(e),
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * Review R13: post-load seed snapshot — the WM (outer) rect AND the drawable
+   * (inner) rect from one getWindowProperties() call, both field-copied (not
+   * system object refs, per design.md D5). Returns undefined when the call
+   * throws or EITHER rect is degenerate: a seed must never plant half a pair
+   * (that is exactly the torn state the Rust side's pair-in/pair-out contract
+   * rejects — see set_window_rects), so callers skip the seed entirely and the
+   * pre-event fallback stays. Never returns an estimated value.
+   */
+  static readWindowRectSnapshot(win: window.Window): WindowRectSnapshot | undefined {
+    try {
+      const props = win.getWindowProperties();
+      const outer = props.windowRect;
+      const drawable = props.drawableRect;
+      if (outer.width > 0 && outer.height > 0 && drawable.width > 0 && drawable.height > 0) {
+        const snapshot: WindowRectSnapshot = {
+          rect: {
+            left: outer.left,
+            top: outer.top,
+            width: outer.width,
+            height: outer.height,
+          },
+          drawable: {
+            left: drawable.left,
+            top: drawable.top,
+            width: drawable.width,
+            height: drawable.height,
+          },
+        };
+        return snapshot;
+      }
+    } catch (e) {
+      hilog.debug(
+        DOMAIN,
+        "WindowManager",
+        "readWindowRectSnapshot: getWindowProperties unavailable: %{public}s",
+        String(e),
+      );
+    }
+    return undefined;
+  }
+
   /** Get the current blur radius for a window (set by applyWindowBlur). Used by WebviewPlugin
    *  BuildWebview to apply the blur at webview creation time. Returns 0 if no blur was set. */
   getPendingBlur(windowId: number): number {
-    return this.windowBlurRadii.get(Number(windowId)) ?? 0;
-  }
-  private hideSystemBar(): void {
-    if (!this.uiAbilityStages.has(0)) return;
-    try {
-      const mainWindow = this.uiAbilityStages.get(0)?.getMainWindowSync();
-      const names: Array<'status' | 'navigation'> = [];
-      mainWindow.setWindowSystemBarEnable(names).catch((err: BusinessError) => {
-        hilog.warn(DOMAIN, 'WindowManager', `Failed to hide system bar: %{public}s`, err.message);
-      });
-    } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', `hideSystemBar failed: %{public}s`, JSON.stringify(e));
-    }
+    return this.attachments.getBlurRadius(windowId);
   }
 
-  // Phase 2: Show system status bar for main window (decorations=true)
-  private showSystemBar(): void {
-    if (!this.uiAbilityStages.has(0)) return;
-    try {
-      const mainWindow = this.uiAbilityStages.get(0)?.getMainWindowSync();
-      const names: Array<'status' | 'navigation'> = ['status', 'navigation'];
-      mainWindow.setWindowSystemBarEnable(names).catch((err: BusinessError) => {
-        hilog.warn(DOMAIN, 'WindowManager', `Failed to show system bar: %{public}s`, err.message);
-      });
-    } catch (e) {
-      hilog.warn(DOMAIN, 'WindowManager', `showSystemBar failed: %{public}s`, JSON.stringify(e));
-    }
-  }
-
-  getController(id: number): RustWebviewNodeController | undefined {
-    return this.controllers.get(id);
-  }
+  // ─── Per-window attachment facades (implementation in WindowAttachmentRegistry) ───
 
   // Register the per-window *attached* raw WebviewController. Called from
   // WebviewPlugin.handleControllerAttached (onControllerAttached callback) — by then
   // the controller is attached to a live Web component and runJavaScript is usable.
-  // Only sub-windows (windowId > 0) are registered: the main window (id=0) keeps the
-  // one-shot primaryWebviewControllerCallback path unchanged (captured first-attach main
+  // Only non-main windows (windowId > 0 — sub-windows or spawned UIAbility instances)
+  // are registered: the primary window (id=0) keeps the one-shot
+  // primaryWebviewControllerCallback path unchanged (captured first-attach main
   // controller into executor.controller), so this map never diverges from main behavior.
   registerWebviewController(windowId: number, controller: web_webview.WebviewController): void {
-    this.webviewControllers.set(windowId, controller);
-    hilog.info(DOMAIN, 'WindowManager', 'WebviewController registered for window: %{public}d', windowId);
+    this.attachments.registerWebviewController(windowId, controller);
   }
 
   // Lookup for menu.getTargetController. Returns undefined for main window (id=0) and
   // any not-yet-attached sub-window — caller falls back to executor.controller.
   getWebviewController(windowId: number): web_webview.WebviewController | undefined {
-    return this.webviewControllers.get(windowId);
+    return this.attachments.getWebviewController(windowId);
   }
 
   // Register UIContext (main window calls in aboutToAppear, sub-window calls after loadContent)
   registerUIContext(windowId: number, ctx: UIContext): void {
-    hilog.info(DOMAIN, 'WindowManager', `UIContext registered for window: %{public}d`, windowId);
-    this.uiContexts.set(windowId, ctx);
+    this.attachments.registerUIContext(windowId, ctx);
   }
 
   // Get UIContext for the specified window
   getUIContext(windowId: number): UIContext | undefined {
-    return this.uiContexts.get(windowId);
+    return this.attachments.getUIContext(windowId);
   }
 
   // Register component root for a sub-window (called by DefaultXComponent sub-window mode)
   registerComponentRoot(windowId: number, root: FrameNode): void {
-    hilog.info(DOMAIN, 'WindowManager', `Component root registered for window: %{public}d`, windowId);
-    this.componentRoots.set(windowId, root);
-    // Flush any pending callbacks registered by plugins (e.g. webview create deferred
-    // due to timing race — webview bridge create arriving before FloatPage.aboutToAppear).
-    this.flushPendingComponentRootCallbacks(windowId);
+    this.attachments.registerComponentRoot(windowId, root);
   }
 
-  // Callback registry for plugins that need to react to componentRoot registration.
-  // Used by WebviewPlugin to replay deferred webview creates (timing race: webview
-  // bridge create arrives ~3ms after TSFN dispatch, but FloatPage.aboutToAppear
-  // which registers the componentRoot takes ~69ms).
-  private static pendingComponentRootCallbacks: Map<number, Array<() => void>> = new Map();
-
+  // Static facade over WindowAttachmentRegistry.onComponentRootRegistered (used by
+  // WebviewPlugin to replay deferred webview creates — timing race: webview bridge
+  // create arrives ~3ms after TSFN dispatch, but SubWindowPage.aboutToAppear which
+  // registers the componentRoot takes ~69ms). Static so it works exactly as before.
   static onComponentRootRegistered(windowId: number, callback: () => void): void {
-    const list = WindowManager.pendingComponentRootCallbacks.get(windowId) ?? [];
-    list.push(callback);
-    WindowManager.pendingComponentRootCallbacks.set(windowId, list);
-  }
-
-  private flushPendingComponentRootCallbacks(windowId: number): void {
-    const callbacks = WindowManager.pendingComponentRootCallbacks.get(windowId);
-    if (callbacks === undefined || callbacks.length === 0) {
-      return;
-    }
-    WindowManager.pendingComponentRootCallbacks.delete(windowId);
-    hilog.info(DOMAIN, 'WindowManager', 'Flushing %{public}d pending componentRoot callbacks for window %{public}d', callbacks.length, windowId);
-    for (const cb of callbacks) {
-      cb();
-    }
+    WindowAttachmentRegistry.onComponentRootRegistered(windowId, callback);
   }
 
   // Get component root for a sub-window (called by WebviewSurface.create)
   getComponentRoot(windowId: number): FrameNode | undefined {
-    const root = this.componentRoots.get(windowId);
-    hilog.info(DOMAIN, 'WindowManager', 'getComponentRoot windowId=%{public}d found=%{public}s', windowId, root !== undefined ? 'true' : 'false');
-    return root;
+    return this.attachments.getComponentRoot(windowId);
   }
 
   // Clean up controller and UIContext only (used by DefaultXComponent aboutToDisappear)
-  // Does not remove from windows Map (managed by FloatPage's destroyWindow path)
+  // Does not remove from windows Map (managed by SubWindowPage's destroyWindow path)
   removeControllerAndUIContext(windowId: number): void {
-    this.controllers.delete(windowId);
-    this.webviewControllers.delete(windowId);
-    this.uiContexts.delete(windowId);
-    this.componentRoots.delete(windowId);
-    hilog.info(DOMAIN, 'WindowManager', 'Controller and UIContext removed for windowId: %{public}d', windowId);
+    this.attachments.removeControllerAndUIContext(windowId);
+    hilog.info(
+      DOMAIN,
+      "WindowManager",
+      "Controller and UIContext removed for windowId: %{public}d",
+      windowId,
+    );
   }
 
   // Apply per-webview clipboard / zoom-hotkey intercept flags for a window.
   // Called from WebviewPlugin.create (sub-window path) using payload.clipboard /
   // payload.zoomHotkeys. Undefined leaves the default (true = ArkWeb native).
-  // Clearing happens in removeWindow; do not clear per-webview (siblings share a window).
+  // Clearing happens in clearWindowState — the single cleanup sink reused by
+  // both removeWindow and unregisterUIAbilityStage (review finding F4 folded
+  // the list there) — do not clear per-webview (siblings share a window).
   // Cross-platform note: on OHOS `clipboard=false` blocks keyboard Ctrl+C/X/V (onKeyPreIme
   // swallows them), whereas on Windows (webview2) the `clipboard` property only gates JS
   // execCommand clipboard access, not keyboard. Sub-windows needing Ctrl+C must call
@@ -1725,9 +2355,12 @@ export class WindowManager {
     }
   }
 
-  // Remove window: clean up all Maps to prevent memory leaks
+  // Remove window: clean up all per-window state to prevent memory leaks.
+  // The shared cleanup list lives in clearWindowState (also used by
+  // unregisterUIAbilityStage); this method additionally detaches the
+  // window-registry-specific pieces (rect listener, entry).
   removeWindow(windowId: number): void {
-    hilog.info(DOMAIN, 'WindowManager', `Removing window %{public}d from all maps`, windowId);
+    hilog.info(DOMAIN, "WindowManager", `Removing window %{public}d from all maps`, windowId);
     // Phase 2 (design.md D3): detach this window's windowRectChange listener before
     // dropping the Window reference so the native side stops delivering rect changes
     // for a window that no longer exists (prevents post-destroy callbacks / leaks).
@@ -1736,46 +2369,24 @@ export class WindowManager {
       try {
         entry.window.off("windowRectChange", entry.rectChangeHandler);
       } catch (e) {
-        hilog.warn(DOMAIN, 'WindowManager', `off windowRectChange failed for %{public}d: %{public}s`, windowId, String(e));
+        hilog.warn(
+          DOMAIN,
+          "WindowManager",
+          `off windowRectChange failed for %{public}d: %{public}s`,
+          windowId,
+          String(e),
+        );
       }
     }
     // Clear user interaction tracking if this window was the last interacted one
     if (this.lastUserInteractedWindowId === windowId) {
       this.lastUserInteractedWindowId = -1;
-      hilog.info(DOMAIN, 'WindowManager', 'Cleared lastUserInteractedWindowId (removed window)');
+      hilog.info(DOMAIN, "WindowManager", "Cleared lastUserInteractedWindowId (removed window)");
     }
     this.windows.delete(windowId);
-    this.windowKinds.delete(windowId);
-    this.controllers.delete(windowId);
-    this.webviewControllers.delete(windowId);
-    this.uiContexts.delete(windowId);
-    this.componentRoots.delete(windowId);
-    this.pendingJsHelperProxies.delete(windowId);
-    this.pendingUrls.delete(windowId);
-    this.pendingInits.delete(windowId);
-    this.pendingBlurs.delete(windowId);
-    this.windowOpQueues.delete(windowId);
-    this.preMaximizeRects.delete(windowId);
-    // Clear per-window accelerator flags (clipboard / zoom-hotkey intercepts).
-    // These are keyed by windowId and set in ArkHelper.createWebview; without
-    // clearing here they leak past window destruction. removeWindow is the
-    // window-lifetime sink — not removeWebview (per-webview), which would
-    // prematurely clear flags still in use by sibling webviews in the same window.
-    clearClipboardEnabled(windowId);
-    clearZoomHotkeysEnabled(windowId);
-    // Phase 3 (design.md D4): clear throttle state — clearTimeout is the "already removed"
-    // guard (ArkTS single-threaded event loop guarantees timer callback cannot interleave
-    // with synchronous removeWindow). The `destroying` flag is the "destruction in progress"
-    // guard (destroyWindow called but removeWindow not yet run). Both are needed.
-    const rectTimer = this.rectTimers.get(windowId);
-    if (rectTimer !== undefined) { clearTimeout(rectTimer); }
-    const sizeTimer = this.sizeTimers.get(windowId);
-    if (sizeTimer !== undefined) { clearTimeout(sizeTimer); }
-    this.rectTimers.delete(windowId);
-    this.rectPending.delete(windowId);
-    this.rectLeading.delete(windowId);
-    this.sizeTimers.delete(windowId);
-    this.sizePending.delete(windowId);
-    this.sizeLeading.delete(windowId);
+    // Shared per-window state (kinds/attachments/op-queues/pre-maximize/
+    // throttle/accelerator flags) — clearWindowState is the single cleanup
+    // sink; removeWindow adds nothing on top of it.
+    this.clearWindowState(windowId);
   }
 }

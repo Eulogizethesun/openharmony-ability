@@ -36,14 +36,68 @@ impl Modifier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Key {
     // Letters
-    A, B, C, D, E, F, G, H, I, J, K, L, M,
-    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
     // Digits
-    Digit0, Digit1, Digit2, Digit3, Digit4,
-    Digit5, Digit6, Digit7, Digit8, Digit9,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
     // Function keys
-    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-    F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    F13,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19,
+    F20,
+    F21,
+    F22,
+    F23,
+    F24,
     // Special keys
     Space,
     Enter,
@@ -67,69 +121,180 @@ impl Key {
     #[cfg(test)]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Key::A => "A", Key::B => "B", Key::C => "C", Key::D => "D",
-            Key::E => "E", Key::F => "F", Key::G => "G", Key::H => "H",
-            Key::I => "I", Key::J => "J", Key::K => "K", Key::L => "L",
-            Key::M => "M", Key::N => "N", Key::O => "O", Key::P => "P",
-            Key::Q => "Q", Key::R => "R", Key::S => "S", Key::T => "T",
-            Key::U => "U", Key::V => "V", Key::W => "W", Key::X => "X",
-            Key::Y => "Y", Key::Z => "Z",
-            Key::Digit0 => "0", Key::Digit1 => "1", Key::Digit2 => "2",
-            Key::Digit3 => "3", Key::Digit4 => "4", Key::Digit5 => "5",
-            Key::Digit6 => "6", Key::Digit7 => "7", Key::Digit8 => "8",
+            Key::A => "A",
+            Key::B => "B",
+            Key::C => "C",
+            Key::D => "D",
+            Key::E => "E",
+            Key::F => "F",
+            Key::G => "G",
+            Key::H => "H",
+            Key::I => "I",
+            Key::J => "J",
+            Key::K => "K",
+            Key::L => "L",
+            Key::M => "M",
+            Key::N => "N",
+            Key::O => "O",
+            Key::P => "P",
+            Key::Q => "Q",
+            Key::R => "R",
+            Key::S => "S",
+            Key::T => "T",
+            Key::U => "U",
+            Key::V => "V",
+            Key::W => "W",
+            Key::X => "X",
+            Key::Y => "Y",
+            Key::Z => "Z",
+            Key::Digit0 => "0",
+            Key::Digit1 => "1",
+            Key::Digit2 => "2",
+            Key::Digit3 => "3",
+            Key::Digit4 => "4",
+            Key::Digit5 => "5",
+            Key::Digit6 => "6",
+            Key::Digit7 => "7",
+            Key::Digit8 => "8",
             Key::Digit9 => "9",
-            Key::F1 => "F1", Key::F2 => "F2", Key::F3 => "F3", Key::F4 => "F4",
-            Key::F5 => "F5", Key::F6 => "F6", Key::F7 => "F7", Key::F8 => "F8",
-            Key::F9 => "F9", Key::F10 => "F10", Key::F11 => "F11", Key::F12 => "F12",
-            Key::F13 => "F13", Key::F14 => "F14", Key::F15 => "F15", Key::F16 => "F16",
-            Key::F17 => "F17", Key::F18 => "F18", Key::F19 => "F19", Key::F20 => "F20",
-            Key::F21 => "F21", Key::F22 => "F22", Key::F23 => "F23", Key::F24 => "F24",
-            Key::Space => "Space", Key::Enter => "Enter", Key::Escape => "Escape",
-            Key::Tab => "Tab", Key::Backspace => "Backspace",
-            Key::Delete => "Delete", Key::Insert => "Insert",
-            Key::Home => "Home", Key::End => "End",
-            Key::PageUp => "PageUp", Key::PageDown => "PageDown",
-            Key::ArrowUp => "ArrowUp", Key::ArrowDown => "ArrowDown",
-            Key::ArrowLeft => "ArrowLeft", Key::ArrowRight => "ArrowRight",
+            Key::F1 => "F1",
+            Key::F2 => "F2",
+            Key::F3 => "F3",
+            Key::F4 => "F4",
+            Key::F5 => "F5",
+            Key::F6 => "F6",
+            Key::F7 => "F7",
+            Key::F8 => "F8",
+            Key::F9 => "F9",
+            Key::F10 => "F10",
+            Key::F11 => "F11",
+            Key::F12 => "F12",
+            Key::F13 => "F13",
+            Key::F14 => "F14",
+            Key::F15 => "F15",
+            Key::F16 => "F16",
+            Key::F17 => "F17",
+            Key::F18 => "F18",
+            Key::F19 => "F19",
+            Key::F20 => "F20",
+            Key::F21 => "F21",
+            Key::F22 => "F22",
+            Key::F23 => "F23",
+            Key::F24 => "F24",
+            Key::Space => "Space",
+            Key::Enter => "Enter",
+            Key::Escape => "Escape",
+            Key::Tab => "Tab",
+            Key::Backspace => "Backspace",
+            Key::Delete => "Delete",
+            Key::Insert => "Insert",
+            Key::Home => "Home",
+            Key::End => "End",
+            Key::PageUp => "PageUp",
+            Key::PageDown => "PageDown",
+            Key::ArrowUp => "ArrowUp",
+            Key::ArrowDown => "ArrowDown",
+            Key::ArrowLeft => "ArrowLeft",
+            Key::ArrowRight => "ArrowRight",
         }
     }
 
     /// Parse a key name string into a `Key` variant.
     /// Accepts the same names as `as_str()` returns.
     pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "A" => Some(Key::A), "B" => Some(Key::B), "C" => Some(Key::C), "D" => Some(Key::D),
-            "E" => Some(Key::E), "F" => Some(Key::F), "G" => Some(Key::G), "H" => Some(Key::H),
-            "I" => Some(Key::I), "J" => Some(Key::J), "K" => Some(Key::K), "L" => Some(Key::L),
-            "M" => Some(Key::M), "N" => Some(Key::N), "O" => Some(Key::O), "P" => Some(Key::P),
-            "Q" => Some(Key::Q), "R" => Some(Key::R), "S" => Some(Key::S), "T" => Some(Key::T),
-            "U" => Some(Key::U), "V" => Some(Key::V), "W" => Some(Key::W), "X" => Some(Key::X),
-            "Y" => Some(Key::Y), "Z" => Some(Key::Z),
-            "0" => Some(Key::Digit0), "1" => Some(Key::Digit1), "2" => Some(Key::Digit2),
-            "3" => Some(Key::Digit3), "4" => Some(Key::Digit4), "5" => Some(Key::Digit5),
-            "6" => Some(Key::Digit6), "7" => Some(Key::Digit7), "8" => Some(Key::Digit8),
-            "9" => Some(Key::Digit9),
-            "F1" => Some(Key::F1), "F2" => Some(Key::F2), "F3" => Some(Key::F3),
-            "F4" => Some(Key::F4), "F5" => Some(Key::F5), "F6" => Some(Key::F6),
-            "F7" => Some(Key::F7), "F8" => Some(Key::F8), "F9" => Some(Key::F9),
-            "F10" => Some(Key::F10), "F11" => Some(Key::F11), "F12" => Some(Key::F12),
-            "F13" => Some(Key::F13), "F14" => Some(Key::F14), "F15" => Some(Key::F15),
-            "F16" => Some(Key::F16), "F17" => Some(Key::F17), "F18" => Some(Key::F18),
-            "F19" => Some(Key::F19), "F20" => Some(Key::F20), "F21" => Some(Key::F21),
-            "F22" => Some(Key::F22), "F23" => Some(Key::F23), "F24" => Some(Key::F24),
-            "Space" => Some(Key::Space), "Enter" => Some(Key::Enter), "Escape" => Some(Key::Escape),
-            "Tab" => Some(Key::Tab), "Backspace" => Some(Key::Backspace),
-            "Delete" => Some(Key::Delete), "Insert" => Some(Key::Insert),
-            "Home" => Some(Key::Home), "End" => Some(Key::End),
-            "PageUp" => Some(Key::PageUp), "PageDown" => Some(Key::PageDown),
-            "ArrowUp" => Some(Key::ArrowUp), "ArrowDown" => Some(Key::ArrowDown),
-            "ArrowLeft" => Some(Key::ArrowLeft), "ArrowRight" => Some(Key::ArrowRight),
-            _ => None,
-        }
+        // Declarative name table instead of a 75-arm match: the cyclomatic
+        // complexity budget (40) cannot hold that many arms in one function.
+        // Keep every row's name equal to what `as_str()` returns for the
+        // same variant - the round-trip invariant the doc comment promises.
+        Self::NAME_TABLE
+            .iter()
+            .find(|(table_name, _)| *table_name == name)
+            .map(|(_, key)| *key)
     }
+
+    /// Every `(name, variant)` pair, in declaration order. The name of each
+    /// row is exactly what `as_str()` returns for the variant, so
+    /// `from_name(key.as_str()) == Some(key)` holds for every `Key`.
+    const NAME_TABLE: &[(&'static str, Key)] = &[
+        ("A", Key::A),
+        ("B", Key::B),
+        ("C", Key::C),
+        ("D", Key::D),
+        ("E", Key::E),
+        ("F", Key::F),
+        ("G", Key::G),
+        ("H", Key::H),
+        ("I", Key::I),
+        ("J", Key::J),
+        ("K", Key::K),
+        ("L", Key::L),
+        ("M", Key::M),
+        ("N", Key::N),
+        ("O", Key::O),
+        ("P", Key::P),
+        ("Q", Key::Q),
+        ("R", Key::R),
+        ("S", Key::S),
+        ("T", Key::T),
+        ("U", Key::U),
+        ("V", Key::V),
+        ("W", Key::W),
+        ("X", Key::X),
+        ("Y", Key::Y),
+        ("Z", Key::Z),
+        ("0", Key::Digit0),
+        ("1", Key::Digit1),
+        ("2", Key::Digit2),
+        ("3", Key::Digit3),
+        ("4", Key::Digit4),
+        ("5", Key::Digit5),
+        ("6", Key::Digit6),
+        ("7", Key::Digit7),
+        ("8", Key::Digit8),
+        ("9", Key::Digit9),
+        ("F1", Key::F1),
+        ("F2", Key::F2),
+        ("F3", Key::F3),
+        ("F4", Key::F4),
+        ("F5", Key::F5),
+        ("F6", Key::F6),
+        ("F7", Key::F7),
+        ("F8", Key::F8),
+        ("F9", Key::F9),
+        ("F10", Key::F10),
+        ("F11", Key::F11),
+        ("F12", Key::F12),
+        ("F13", Key::F13),
+        ("F14", Key::F14),
+        ("F15", Key::F15),
+        ("F16", Key::F16),
+        ("F17", Key::F17),
+        ("F18", Key::F18),
+        ("F19", Key::F19),
+        ("F20", Key::F20),
+        ("F21", Key::F21),
+        ("F22", Key::F22),
+        ("F23", Key::F23),
+        ("F24", Key::F24),
+        ("Space", Key::Space),
+        ("Enter", Key::Enter),
+        ("Escape", Key::Escape),
+        ("Tab", Key::Tab),
+        ("Backspace", Key::Backspace),
+        ("Delete", Key::Delete),
+        ("Insert", Key::Insert),
+        ("Home", Key::Home),
+        ("End", Key::End),
+        ("PageUp", Key::PageUp),
+        ("PageDown", Key::PageDown),
+        ("ArrowUp", Key::ArrowUp),
+        ("ArrowDown", Key::ArrowDown),
+        ("ArrowLeft", Key::ArrowLeft),
+        ("ArrowRight", Key::ArrowRight),
+    ];
 }
 
-/// State of a shortcut event — matches the desktop hotkey crate's `HotKeyState`.
+/// State of a shortcut event - matches the desktop hotkey crate's `HotKeyState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShortcutState {
     Pressed,
@@ -193,6 +358,141 @@ mod tests {
         assert_eq!(Key::F5.as_str(), "F5");
         assert_eq!(Key::Space.as_str(), "Space");
         assert_eq!(Key::Escape.as_str(), "Escape");
+    }
+
+    /// UT for `Key::from_name` round-trip (#251 item 4: the 75-row mapping
+    /// had no unit test, so a table edit could silently break parsing).
+    ///
+    /// # Brief
+    /// 1. Round-trip: `Key::from_name(key.as_str()) == Some(key)` for every
+    ///    one of the 75 `Key` variants, enumerated in declaration order.
+    /// 2. Table invariants: every `NAME_TABLE` row's name equals `as_str()`
+    ///    for its variant (the doc-comment promise), names are unique (no
+    ///    shadowed row), and the table holds exactly 75 rows -- adding,
+    ///    removing, or renaming a row fails here instead of silently
+    ///    regressing.
+    /// 3. Negative: unknown names (lowercase forms, a modifier name, an
+    ///    out-of-range function key, empty/padded strings) parse to `None`.
+    #[test]
+    fn ut_key_from_name_round_trips_every_variant() {
+        const ALL_KEYS: [Key; 75] = [
+            // Letters
+            Key::A,
+            Key::B,
+            Key::C,
+            Key::D,
+            Key::E,
+            Key::F,
+            Key::G,
+            Key::H,
+            Key::I,
+            Key::J,
+            Key::K,
+            Key::L,
+            Key::M,
+            Key::N,
+            Key::O,
+            Key::P,
+            Key::Q,
+            Key::R,
+            Key::S,
+            Key::T,
+            Key::U,
+            Key::V,
+            Key::W,
+            Key::X,
+            Key::Y,
+            Key::Z,
+            // Digits
+            Key::Digit0,
+            Key::Digit1,
+            Key::Digit2,
+            Key::Digit3,
+            Key::Digit4,
+            Key::Digit5,
+            Key::Digit6,
+            Key::Digit7,
+            Key::Digit8,
+            Key::Digit9,
+            // Function keys
+            Key::F1,
+            Key::F2,
+            Key::F3,
+            Key::F4,
+            Key::F5,
+            Key::F6,
+            Key::F7,
+            Key::F8,
+            Key::F9,
+            Key::F10,
+            Key::F11,
+            Key::F12,
+            Key::F13,
+            Key::F14,
+            Key::F15,
+            Key::F16,
+            Key::F17,
+            Key::F18,
+            Key::F19,
+            Key::F20,
+            Key::F21,
+            Key::F22,
+            Key::F23,
+            Key::F24,
+            // Special keys
+            Key::Space,
+            Key::Enter,
+            Key::Escape,
+            Key::Tab,
+            Key::Backspace,
+            Key::Delete,
+            Key::Insert,
+            Key::Home,
+            Key::End,
+            Key::PageUp,
+            Key::PageDown,
+            Key::ArrowUp,
+            Key::ArrowDown,
+            Key::ArrowLeft,
+            Key::ArrowRight,
+        ];
+        for key in ALL_KEYS {
+            assert_eq!(
+                Key::from_name(key.as_str()),
+                Some(key),
+                "Key::{key:?} round-trip broken: from_name({:?}) does not return it",
+                key.as_str()
+            );
+        }
+        // Table-level invariants: exact row count, row name == as_str(), and
+        // no duplicate names (a duplicate would shadow the later row).
+        assert_eq!(
+            Key::NAME_TABLE.len(),
+            75,
+            "NAME_TABLE row count changed -- update ALL_KEYS and this assert together"
+        );
+        let mut names: Vec<&str> = Key::NAME_TABLE.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        let row_count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), row_count, "duplicate NAME_TABLE names");
+        for (idx, (name, key)) in Key::NAME_TABLE.iter().enumerate() {
+            assert_eq!(
+                *name,
+                key.as_str(),
+                "NAME_TABLE row {idx}: name {name:?} != as_str() for Key::{key:?}"
+            );
+        }
+        // Negative cases: names outside the table must not parse.
+        for unknown in [
+            "a", "z", "semi", "F25", "F0", "Meta", "Ctrl", "control", "", "Space ", " space",
+        ] {
+            assert_eq!(
+                Key::from_name(unknown),
+                None,
+                "unknown name {unknown:?} must not parse"
+            );
+        }
     }
 
     #[test]

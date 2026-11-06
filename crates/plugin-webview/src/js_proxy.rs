@@ -52,6 +52,7 @@ pub struct WebviewJavascriptProxyBuilder {
 }
 
 impl WebviewJavascriptProxyBuilder {
+    /// Creates a JavaScript proxy builder for `object_name` on the given WebView.
     pub fn new(webview_id: impl Into<String>, object_name: impl Into<String>) -> Self {
         Self {
             webview_id: webview_id.into(),
@@ -174,6 +175,22 @@ pub(crate) fn clear_attached() -> Result<()> {
         .attached_webviews
         .clear();
     Ok(())
+}
+
+/// Drops the queued proxy declarations for `webview_id`, if any.
+///
+/// Create-failure rollback path (see `callbacks::remove`): a failed create
+/// leaves no controller, so nothing was installed — only the queued
+/// declarations need removing. Returns how many declarations were dropped.
+pub fn remove_declarations(webview_id: &str) -> Result<usize> {
+    let dropped = PROXY_STATE
+        .lock()
+        .map_err(|_| Error::from_reason("Failed to lock WebView JavaScript proxy state"))?
+        .declarations
+        .remove(webview_id)
+        .map(|decls| decls.len())
+        .unwrap_or(0);
+    Ok(dropped)
 }
 
 fn install(

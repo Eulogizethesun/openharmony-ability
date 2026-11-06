@@ -1,6 +1,11 @@
 import { DefaultXComponent } from "./DefaultXComponent";
+import { Module } from "../ability/type";
 import { Loadable } from "../helper/loadable";
-import { AcceleratorMatcher, isClipboardEnabled, isZoomHotkeysEnabled } from "../helper/accelerator_matcher";
+import {
+  AcceleratorMatcher,
+  isClipboardEnabled,
+  isZoomHotkeysEnabled,
+} from "../helper/accelerator_matcher";
 import {
   MenuBarComponent,
   getMenuClickHandler,
@@ -8,10 +13,11 @@ import {
   isMenubarVisible,
 } from "./MenuBarComponent";
 import { KeyCode } from "@kit.InputKit";
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { DOMAIN, MAIN_WINDOW_ID } from '../helper/constants';
-import { synthesizeDomKeyEvent } from '../helper/key_synthesis';
-import { WindowManager } from '../window/WindowManager';
+import { hilog } from "@kit.PerformanceAnalysisKit";
+import { DOMAIN, MAIN_WINDOW_ID } from "../helper/constants";
+import { feedCursorFromMouse } from "../helper/cursor_feed";
+import { synthesizeDomKeyEvent, isWebFocused } from "../helper/key_synthesis";
+import { WindowManager } from "../window/WindowManager";
 import { NativeModuleLoader } from "../runtime/NativeModuleLoader";
 import { invokeNativeBackPressInterceptor } from "../runtime/BackPress";
 
@@ -23,31 +29,38 @@ struct MainPage {
   @StorageProp("moduleName") moduleNames: string | string[] = "";
   // Subsequent UIAbility instances receive their windowId via LocalStorage
   @LocalStorageProp('windowId') windowId: number = MAIN_WINDOW_ID;
+  // Bridge session id (design.md D6/D12): the primary instance's own session,
+  // or the shared session id for a joined spawned instance. Delivered through
+  // the per-instance LocalStorage built in NativeAbility.loadWindowStageContent
+  // — NOT AppStorage, which is a process-global single value a spawned
+  // instance would overwrite mid-attachment. Passed down to
+  // DefaultXComponent as a plain @Prop.
+  @LocalStorageProp('bridgeSessionId') bridgeSessionId: string = "";
 
   private loadMode: "async" | "sync" = "async";
 
-  @State private nativeModule: ESObject | null = null;
+  @State private nativeModule: Module | null = null;
   @State private resolvedModuleName: string = "";
 
   private acceleratorMatcher: AcceleratorMatcher = new AcceleratorMatcher();
 
   async aboutToAppear(): Promise<void> {
-    hilog.info(DOMAIN, 'MainPage', '=== MainPage aboutToAppear START ===');
+    hilog.info(DOMAIN, "MainPage", "=== MainPage aboutToAppear START ===");
     this.loadMode = (AppStorage.get<string>("loadMode") as "async" | "sync") ?? "async";
-    hilog.info(DOMAIN, 'MainPage', 'Initializing MAIN WINDOW');
+    hilog.info(DOMAIN, "MainPage", "Initializing MAIN WINDOW");
 
     const moduleName = Loadable.resolvePrimaryModuleName(this.moduleNames);
     if (!moduleName) {
-      hilog.error(DOMAIN, 'MainPage', 'moduleName is empty, cannot initialize main window');
+      hilog.error(DOMAIN, "MainPage", "moduleName is empty, cannot initialize main window");
       throw new Error("MainPage.moduleName is required for main window");
     }
 
-    hilog.info(DOMAIN, 'MainPage', 'Resolved moduleName: %{public}s', moduleName);
+    hilog.info(DOMAIN, "MainPage", "Resolved moduleName: %{public}s", moduleName);
     this.resolvedModuleName = moduleName;
 
-    hilog.info(DOMAIN, 'MainPage', 'Loading native module: %{public}s', moduleName);
+    hilog.info(DOMAIN, "MainPage", "Loading native module: %{public}s", moduleName);
     this.nativeModule = await Loadable.load(moduleName, this.loadMode);
-    hilog.info(DOMAIN, 'MainPage', 'Native module loaded successfully');
+    hilog.info(DOMAIN, "MainPage", "Native module loaded successfully");
   }
 
   onBackPress(): boolean {
@@ -59,7 +72,7 @@ struct MainPage {
         return this.nativeModule.on_back_press_intercept();
       }
     } catch (err) {
-      hilog.error(DOMAIN, 'MainPage', 'onBackPress failed: %{public}s', JSON.stringify(err));
+      hilog.error(DOMAIN, "MainPage", "onBackPress failed: %{public}s", JSON.stringify(err));
     }
     return false;
   }
@@ -71,35 +84,57 @@ struct MainPage {
           windowId: this.windowId,
           acceleratorMatcher: this.acceleratorMatcher,
         })
-
         Row() {
           Column() {
             if (this.resolvedModuleName !== "") {
-              DefaultXComponent({ moduleName: this.resolvedModuleName, windowId: this.windowId })
+              DefaultXComponent({
+                moduleName: this.resolvedModuleName,
+                windowId: this.windowId,
+                bridgeSessionId: this.bridgeSessionId,
+              })
             } else {
-              Text("Loading Main Window...")
-                .fontSize(20)
-                .fontColor(Color.Gray)
+              Text("Loading Main Window...").fontSize(20).fontColor(Color.Gray);
             }
           }.width("100%")
-        }.layoutWeight(1).height("100%")
-
-      }.width("100%").height("100%")
+        }
+        .layoutWeight(1)
+        .height("100%")
+      }
+      .width("100%")
+      .height("100%")
       .backgroundColor(Color.Transparent)
       .onKeyPreIme((event: KeyEvent) => {
+        // Track modifier down/up for EVERY event (issue #111 residue root
+        // cause, 2026-09-22 device finding): every matcher branch below is
+        // KeyType.Down-gated, so modifier KEYUP events never reached
+        // AcceleratorMatcher.trackModifiers — a released Ctrl left the
+        // module-level bit stuck indefinitely (device: bare J still assembled
+        // "ctrl+j" 2min15s after the only Ctrl press; menu-close handoff lost
+        // the keyup 3/3 with real keyboard). The menu sub-window's
+        // Menu.onKeyEvent tracks both Down and Up, which is why the residue
+        // only manifested once the keyup landed on a page handler.
+        this.acceleratorMatcher.trackModifiers(event);
         // Block native clipboard shortcuts when with_clipboard(false) (ohos-webview-flag-clipboard)
-        if (event.type === KeyType.Down && this.acceleratorMatcher.matchesClipboardShortcut(event) && !isClipboardEnabled(MAIN_WINDOW_ID)) {
+        if (
+          event.type === KeyType.Down &&
+          this.acceleratorMatcher.matchesClipboardShortcut(event) &&
+          !isClipboardEnabled(this.windowId)
+        ) {
           return true;
         }
         // Block native zoom hotkeys when with_zoom_hotkeys(false) (ohos-webview-flag-zoom-hotkeys)
-        if (event.type === KeyType.Down && this.acceleratorMatcher.matchesZoomShortcut(event) && !isZoomHotkeysEnabled(MAIN_WINDOW_ID)) {
+        if (
+          event.type === KeyType.Down &&
+          this.acceleratorMatcher.matchesZoomShortcut(event) &&
+          !isZoomHotkeysEnabled(this.windowId)
+        ) {
           return true;
         }
         // Accelerator matching (non-clipboard shortcuts)
         if (event.type === KeyType.Down && this.acceleratorMatcher.matches(event)) {
           const matchedItem = this.acceleratorMatcher.getMatchedItem();
           if (matchedItem) {
-            const handler = getMenuClickHandler(MAIN_WINDOW_ID);
+            const handler = getMenuClickHandler(this.windowId);
             if (handler) {
               handler(matchedItem);
             }
@@ -110,8 +145,12 @@ struct MainPage {
         // (window-API set_fullscreen AND predefined menu fullscreen) hide the
         // menubar via WindowManager.setFullscreen (macOS semantics), so the
         // menubar-invisible condition alone covers every case.
-        if (event.type === KeyType.Down && event.keyCode === KeyCode.KEYCODE_ESCAPE && !isMenubarVisible(MAIN_WINDOW_ID)) {
-          const recoverFn = getMenuBarRecoverFn(MAIN_WINDOW_ID);
+        if (
+          event.type === KeyType.Down &&
+          event.keyCode === KeyCode.KEYCODE_ESCAPE &&
+          !isMenubarVisible(this.windowId)
+        ) {
+          const recoverFn = getMenuBarRecoverFn(this.windowId);
           if (recoverFn) {
             recoverFn();
           }
@@ -130,13 +169,41 @@ struct MainPage {
         // synthetic + unsuppressed degenerate native). They keep the
         // pre-feature degradation, matching the ohos-platform-limitations spec.
         if (this.windowId === MAIN_WINDOW_ID) {
+          // Rust-side key forward (issue Eulogizethesun/tauri#109): the NDK
+          // XComponent key path never fires in webview apps (the render node
+          // is not in the ArkUI focus chain — no focusable, Web grabs focus
+          // on load and overlays it), so tao's WindowEvent::KeyboardInput was
+          // dead. onKeyPreIme sees every key the web sees — feed them to Rust
+          // through the same Event::Input dispatch the NDK path would have
+          // used. Gated on Web focus: focused ⇒ NDK structurally silent ⇒ no
+          // double dispatch; unfocused (menu bar / GL-style apps) ⇒ gate
+          // closed ⇒ NDK path stays exclusive (and webview-less apps are
+          // unchanged, per the key-synthesis spec). Same fall-through position
+          // as the DOM synthesis — keys consumed by the interceptors above
+          // are NOT forwarded (the shell already acted on them).
+          // Precise KeyType mapping (issue Eulogizethesun/tauri#138): the NDK
+          // action domain is DOWN=0/UP=1 (plus an UNKNOWN=-1 sentinel that is
+          // never a KeyType value), so only Down/Up are forwarded; any other
+          // KeyType value a future ArkUI adds (e.g. Cancel) has no NDK
+          // counterpart and must not be reported as a synthesized Up.
+          if (
+            isWebFocused(MAIN_WINDOW_ID) &&
+            typeof this.nativeModule?.notifyKeyEvent === "function" &&
+            (event.type === KeyType.Down || event.type === KeyType.Up)
+          ) {
+            this.nativeModule.notifyKeyEvent(
+              event.keyCode,
+              event.type === KeyType.Down ? 0 : 1,
+              event.deviceId,
+            );
+          }
           synthesizeDomKeyEvent(event, this.windowId);
         }
         return false;
       })
     }
-    .width('100%')
-    .height('100%')
+    .width("100%")
+    .height("100%")
     // Extend content into system safe areas (status bar + navigation bar).
     // Without this, setWindowLayoutFullScreen(true) + white window background
     // causes a white bar at the bottom where the navigation bar area is not
@@ -152,23 +219,23 @@ struct MainPage {
         try {
           WindowManager.getInstance().setUserInteractedWindow(this.windowId);
         } catch (e) {
-          hilog.warn(DOMAIN, 'MainPage', 'onTouch: WindowManager not ready: %{public}s', String(e));
+          hilog.warn(DOMAIN, "MainPage", "onTouch: WindowManager not ready: %{public}s", String(e));
         }
       }
     })
     // Track mouse cursor position for cursor_position() API.
     // NDK DispatchMouseEvent doesn't fire when cursor is over WebView,
     // so we use ArkTS onMouse which bubbles from all children.
+    // ohos-cursor-passthrough 3.2: the feed goes through the shared helper
+    // (single source of truth for the screen-global coordinate extraction
+    // and guards -- D2). The module reference passed here is this page's OWN
+    // `this.nativeModule` (declared :42, loaded :62) -- deliberately NOT an
+    // AppStorage read: AppStorage is a process-global single value a spawned
+    // instance would overwrite mid-attachment (admonition at :35-36).
     .onMouse((event: MouseEvent) => {
       if (event.action === MouseAction.Move || event.action === MouseAction.Press) {
-        try {
-          if (typeof this.nativeModule?.updateCursorPosition === "function") {
-            this.nativeModule.updateCursorPosition(event.x, event.y);
-          }
-        } catch (e) {
-          // Silently ignore — cursor tracking is best-effort
-        }
+        feedCursorFromMouse(this.nativeModule, event);
       }
-    })
+    });
   }
 }

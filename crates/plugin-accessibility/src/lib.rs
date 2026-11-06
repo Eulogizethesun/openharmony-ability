@@ -13,9 +13,70 @@ use napi_ohos::{bindgen_prelude::Unknown, Error, Result};
 use openharmony_ability::{
     impl_bridge_napi_type, AsyncBridge, BridgeCallOptions, BridgeContextRequirement,
     BridgeMainThreadEvent, BridgeNapiType, BridgePlugin, BridgeRuntime, OpenHarmonyApp,
+    PluginLifecycleEvent,
 };
 
-pub struct AccessibilityBridgePlugin;
+/// Carries the app handle so [`Self::on_lifecycle`] can re-issue bridge calls
+/// against the **current** session after an Ability rebuild (the previous
+/// session's runtime is released on teardown).
+pub struct AccessibilityBridgePlugin {
+    app: OpenHarmonyApp,
+}
+
+impl AccessibilityBridgePlugin {
+    /// Creates the plugin facade bound to one app instance (per-session).
+    pub fn new(app: &OpenHarmonyApp) -> Self {
+        Self { app: app.clone() }
+    }
+
+    /// Re-issues the state-change subscription after an Ability session rebuild.
+    ///
+    /// The process can outlive one Ability instance: on recreation the ArkTS
+    /// plugin instance is new (the previous instance removed the system listener
+    /// in `onDispose`) while the process-wide Rust setup never runs again, so a
+    /// one-shot subscription would silently die with the first session. The
+    /// handler slot survives across sessions — when it is empty the app never
+    /// subscribed and there is nothing to replay.
+    ///
+    /// Lifecycle dispatch runs on the NAPI main thread, so the bridge call is
+    /// issued from a spawned worker (blocking here could deadlock the TSFN
+    /// response loop). The ArkTS side is idempotent, so racing the app's initial
+    /// subscribe on the first session is harmless.
+    fn replay_subscription_after_session_rebuild(&self) {
+        let subscribed = STATE_CHANGE_HANDLER
+            .read()
+            .map(|slot| slot.is_some())
+            .unwrap_or(false);
+        if !subscribed {
+            return;
+        }
+
+        let app = self.app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("accessibility-resubscribe".to_string())
+            .spawn(move || {
+                let client = match app.accessibility() {
+                    Ok(client) => client,
+                    Err(e) => {
+                        log::error!(
+                            "[accessibility] session rebuild: bridge client unavailable: {}",
+                            e.reason
+                        );
+                        return;
+                    }
+                };
+                if let Err(e) = futures_executor::block_on(client.issue_subscribe()) {
+                    log::error!(
+                        "[accessibility] session rebuild: state-change resubscribe failed: {}",
+                        e.reason
+                    );
+                }
+            });
+        if spawned.is_err() {
+            log::error!("[accessibility] session rebuild: failed to spawn resubscribe worker");
+        }
+    }
+}
 
 impl BridgePlugin for AccessibilityBridgePlugin {
     type Mode = AsyncBridge;
@@ -40,12 +101,20 @@ impl BridgePlugin for AccessibilityBridgePlugin {
             ))),
         }
     }
+
+    fn on_lifecycle(&self, event: &PluginLifecycleEvent) -> Result<()> {
+        if matches!(event, PluginLifecycleEvent::AbilityCreated { .. }) {
+            self.replay_subscription_after_session_rebuild();
+        }
+        Ok(())
+    }
 }
 
 // ── get-font-scale ───────────────────────────────────────────────────────────────
 
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
+/// Request payload for the `get-font-scale` action (empty).
 pub struct AccessibilityGetFontScaleRequest {}
 
 impl_bridge_napi_type!(
@@ -58,7 +127,9 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug)]
+/// Response for the system font scale query.
 pub struct AccessibilityGetFontScaleResponse {
+    /// Current system font scale factor (1.0 = default size).
     pub font_scale: f64,
 }
 
@@ -71,6 +142,7 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
+/// Request payload for the `is-open-accessibility` probe (empty).
 pub struct AccessibilityIsOpenRequest {}
 
 impl_bridge_napi_type!(
@@ -80,7 +152,9 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug)]
+/// Response for the screen-reader enabled query.
 pub struct AccessibilityIsOpenResponse {
+    /// `true` when the accessibility (screen reader) feature is enabled.
     pub enabled: bool,
 }
 
@@ -93,6 +167,7 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
+/// Request payload for the `is-touch-explore-enabled` probe (empty).
 pub struct AccessibilityIsTouchExploreRequest {}
 
 impl_bridge_napi_type!(
@@ -102,7 +177,9 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug)]
+/// Response for the touch-explore mode query.
 pub struct AccessibilityIsTouchExploreResponse {
+    /// `true` when touch-explore (explore-by-touch) mode is active.
     pub enabled: bool,
 }
 
@@ -115,6 +192,7 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
+/// Request payload for subscribing to accessibility state changes (empty).
 pub struct AccessibilitySubscribeRequest {}
 
 impl_bridge_napi_type!(
@@ -124,7 +202,9 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug)]
+/// Acknowledgement for the state-change subscription.
 pub struct AccessibilitySubscribeResponse {
+    /// `true` when the state-change subscription was installed.
     pub accepted: bool,
 }
 
@@ -135,6 +215,7 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug, Default)]
+/// Request payload for cancelling the accessibility state subscription (empty).
 pub struct AccessibilityUnsubscribeRequest {}
 
 impl_bridge_napi_type!(
@@ -144,7 +225,9 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug)]
+/// Acknowledgement for removing the state-change subscription.
 pub struct AccessibilityUnsubscribeResponse {
+    /// `true` when the subscription was removed.
     pub accepted: bool,
 }
 
@@ -159,7 +242,9 @@ impl_bridge_napi_type!(
 /// `accessibility.on("screenReaderStateChange")` callback via `invokeNativeSync`.
 #[napi(object)]
 #[derive(Clone, Debug)]
+/// Payload of the `accessibility-state-changed` event (wire shape).
 pub struct AccessibilityStateChangedEvent {
+    /// New screen-reader enabled state after the change.
     pub enabled: bool,
 }
 
@@ -170,7 +255,9 @@ impl_bridge_napi_type!(
 
 #[napi(object)]
 #[derive(Clone, Debug)]
+/// Acknowledgement returned by the state-change subscriber callback.
 pub struct AccessibilityEventAcknowledgement {
+    /// `true` when the subscriber accepted the state-change event.
     pub accepted: bool,
 }
 
@@ -189,9 +276,19 @@ impl_bridge_napi_type!(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccessibilityError {
     /// The system denied the query (BusinessError code 201 — `ohos.permission.ACCESSIBILITY`).
-    PermissionDenied { code: i32, message: String },
+    PermissionDenied {
+        /// Raw BusinessError code (201).
+        code: i32,
+        /// Raw error message text from the system callback.
+        message: String,
+    },
     /// The query itself failed for any other reason.
-    Unavailable { code: i32, message: String },
+    Unavailable {
+        /// Raw BusinessError code carried through from the ArkTS throw.
+        code: i32,
+        /// Raw error message text from the system callback.
+        message: String,
+    },
 }
 
 /// BusinessError code embedded in ArkTS `throw new Error("... code=<n> msg=<...>")`.
@@ -199,7 +296,7 @@ const BRIDGE_ERR_PERMISSION: i32 = 201;
 
 impl AccessibilityError {
     fn from_reason(reason: &str) -> Self {
-        let code = extract_code(reason).unwrap_or(0);
+        let code = extract_code(reason).unwrap_or(0_i32);
         let message = reason.to_string();
         if code == BRIDGE_ERR_PERMISSION {
             Self::PermissionDenied { code, message }
@@ -213,7 +310,10 @@ impl std::fmt::Display for AccessibilityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PermissionDenied { code, message } => {
-                write!(f, "accessibility permission denied (code={code}): {message}")
+                write!(
+                    f,
+                    "accessibility permission denied (code={code}): {message}"
+                )
             }
             Self::Unavailable { code, message } => {
                 write!(f, "accessibility query failed (code={code}): {message}")
@@ -268,6 +368,10 @@ pub struct AccessibilityClient {
 }
 
 impl AccessibilityClient {
+    /// Builds an accessibility client bound to the app's bridge session.
+    ///
+    /// # Errors
+    /// Fails when the app has no active bridge session yet.
     pub fn new(app: &OpenHarmonyApp) -> Result<Self> {
         Ok(Self {
             bridge: app.bridge()?,
@@ -338,34 +442,49 @@ impl AccessibilityClient {
     where
         F: Fn(bool) + Send + Sync + 'static,
     {
+        // Annotate through the trait-object alias so Arc::clone/ptr_eq below
+        // operate on the slot's type (Arc<F> would not coerce at those call sites).
+        let handler: StateChangeHandler = Arc::new(handler);
         {
             let mut slot = STATE_CHANGE_HANDLER
                 .write()
                 .map_err(|_| Error::from_reason("accessibility state-change lock poisoned"))?;
-            *slot = Some(Arc::new(handler));
+            *slot = Some(Arc::clone(&handler));
         }
-        let response = self
-            .call::<AccessibilitySubscribeRequest, AccessibilitySubscribeResponse>(
-                "subscribe-state-change",
-                AccessibilitySubscribeRequest {},
-            )
-            .await;
-        // On failure drop the handler again — a stale slot would receive events from a
-        // subscription that never completed.
-        if let Err(e) = &response {
-            if let Ok(mut slot) = STATE_CHANGE_HANDLER.write() {
-                *slot = None;
-            }
-            return Err(Error::from(AccessibilityError::from_reason(&e.reason)));
-        }
-        let response = response.expect("checked Err above");
-        if response.accepted {
-            Ok(())
-        } else {
-            Err(Error::from_reason(
+        match self.issue_subscribe().await {
+            Ok(response) if response.accepted => Ok(()),
+            Ok(_) => Err(Error::from_reason(
                 "Accessibility plugin rejected subscribe-state-change",
-            ))
+            )),
+            Err(e) => {
+                // On failure drop the handler again — a stale slot would receive
+                // events from a subscription that never completed. Only clear it
+                // while the slot still holds OUR handler: a later subscribe may
+                // have already replaced it, and clearing that one would silently
+                // kill a live subscription.
+                if let Ok(mut slot) = STATE_CHANGE_HANDLER.write() {
+                    if slot
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &handler))
+                    {
+                        *slot = None;
+                    }
+                }
+                Err(Error::from(AccessibilityError::from_reason(&e.reason)))
+            }
         }
+    }
+
+    /// Issues the `subscribe-state-change` bridge call without touching the
+    /// registered handler slot. The ArkTS side is idempotent, so this is also
+    /// the session-rebuild replay path — the handler survives across sessions
+    /// and must not be replaced or cleared by a replay.
+    async fn issue_subscribe(&self) -> Result<AccessibilitySubscribeResponse> {
+        self.call::<AccessibilitySubscribeRequest, AccessibilitySubscribeResponse>(
+            "subscribe-state-change",
+            AccessibilitySubscribeRequest {},
+        )
+        .await
     }
 
     /// Unsubscribes from screen-reader state changes and drops the handler.
@@ -393,7 +512,12 @@ impl AccessibilityClient {
     }
 }
 
+/// Extension trait that adds [`AccessibilityClient`] access to the app handle.
 pub trait AccessibilityExt {
+    /// Returns the accessibility client bound to this app's bridge session.
+    ///
+    /// # Errors
+    /// Fails when the app has no active bridge session yet.
     fn accessibility(&self) -> Result<AccessibilityClient>;
 }
 
@@ -460,7 +584,7 @@ mod tests {
         assert_eq!(
             err,
             AccessibilityError::PermissionDenied {
-                code: 201,
+                code: 201_i32,
                 message: "isScreenReaderOpenSync failed: code=201 msg=permission denied"
                     .to_string()
             }
@@ -469,13 +593,19 @@ mod tests {
         let err = AccessibilityError::from_reason(
             "on(screenReaderStateChange) failed: code=9300001 msg=inner error",
         );
-        assert!(matches!(err, AccessibilityError::Unavailable { code: 9300001, .. }));
+        assert!(matches!(
+            err,
+            AccessibilityError::Unavailable {
+                code: 9_300_001_i32,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn extract_code_handles_missing_and_negative() {
         assert_eq!(extract_code("no code here"), None);
-        assert_eq!(extract_code("failed: code=-1 msg=x"), Some(-1));
-        assert_eq!(extract_code("code=201"), Some(201));
+        assert_eq!(extract_code("failed: code=-1 msg=x"), Some(-1_i32));
+        assert_eq!(extract_code("code=201"), Some(201_i32));
     }
 }
