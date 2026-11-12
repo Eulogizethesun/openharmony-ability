@@ -435,6 +435,17 @@ fn make_on_configuration_updated<'a>(
             mcc,
             mnc,
         };
+        // S1-061 fix-wave probe: log every instance's callback BEFORE the
+        // primary gate -- a device round can then tell "NAPI callback never
+        // arrived" (no line at the switch moment) from "arrived but only a
+        // non-primary instance saw it" (line with non-zero window_id) from
+        // "arrived and dispatched" (line with window_id=0, followed by the
+        // event_loop ConfigChanged probe line).
+        crate::debug!(
+            "onConfigurationUpdate: window_id={}, font_size_scale={}",
+            window_id,
+            font_size_scale
+        );
         // The cached configuration and the app-level Event::ConfigChanged stay
         // primary-instance-driven (R10: app-level dispatch keeps WindowId(0));
         // OHOS notifies every live instance, so the primary's copy suffices.
