@@ -218,6 +218,11 @@ export class AppControlPlugin extends SyncPluginBase {
 
     if (action === "set-color-mode") {
       const request = parseSetColorModeRequest(payload);
+      // accepted=true means "queued", not "executed": the actual setColorMode
+      // runs on a deferred tick (deadlock avoidance, ohos-constraints 4.3), so
+      // its outcome cannot ride on this response. The deferred tick reports
+      // both outcomes out-of-band via notifySetColorModeFailed /
+      // notifySetColorModeSucceeded (issue Eulogizethesun/tauri#222).
       this.setAppColorMode(request.colorMode, context);
       return { typeName: SET_COLOR_MODE_RESPONSE_TYPE, value: new SetColorModeResponse(true) };
     }
@@ -365,6 +370,20 @@ export class AppControlPlugin extends SyncPluginBase {
     setTimeout(() => {
       try {
         applicationContext.setColorMode(colorMode);
+        // Success completion (issue Eulogizethesun/tauri#222): closes the
+        // notify loop so a Rust-side poller can distinguish "failed" from
+        // "nothing reported yet". typeof-probed optional export, same shape
+        // as the failure path — a stale .so without it keeps the pre-fix
+        // silent-success semantics instead of throwing a new error.
+        try {
+          const nativeModule: Module | undefined =
+            AppStorage.get<Module>(NATIVE_MODULE_STORAGE_KEY);
+          if (nativeModule && typeof nativeModule.notifySetColorModeSucceeded === "function") {
+            nativeModule.notifySetColorModeSucceeded();
+          }
+        } catch (notifyErr) {
+          console.error(`[AppControl] setColorMode success notify failed: ${String(notifyErr)}`);
+        }
       } catch (e) {
         // The ability may have been destroyed between scheduling and execution
         // (e.g. 16000011 "context does not exist"). The bridge response has

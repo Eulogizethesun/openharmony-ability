@@ -248,6 +248,13 @@ export interface Module {
    *  after accepted=true already returned; this notify records it on the
    *  Rust side instead of swallowing it (issue Eulogizethesun/tauri#222). */
   notifySetColorModeFailed?: (code: number, message: string) => void;
+  /** `notify_set_color_mode_succeeded` — set-color-mode deferred-tick success
+   *  surfacing (AppControlPlugin): closes the completion loop opened by
+   *  notifySetColorModeFailed — the Rust slot can only distinguish "failed"
+   *  from "nothing reported yet" if the success path also notifies (issue
+   *  Eulogizethesun/tauri#222). Optional export: typeof-probed at the call
+   *  site, so a stale .so keeps the pre-fix silent-success semantics. */
+  notifySetColorModeSucceeded?: () => void;
   /** `enable_ui_ability_pending_tracking` — UIAbility spawn pending-registry
    *  capability handshake (mirrors enableFloatPendingTracking); arms the Rust-side
    *  gate only when present, so a stale HAR keeps the pre-registry fire-and-forget

@@ -375,12 +375,16 @@ impl AppControlExt for OpenHarmonyApp {
 /// failure (e.g. 16000011 teardown race) can no longer reach the synchronous
 /// `!accepted` leg — it is surfaced through the notify channel instead, where
 /// the ArkTS deferred catch calls `notify_set_color_mode_failed` and the
-/// latest failure is readable via
-/// `openharmony_ability::take_color_mode_failure()` (issue #222 / C85). No
-/// polling is wired in tao/tauri yet — the visible failure surface today is
-/// the error log (ArkTS console.error + the ability crate's error!); the slot
-/// API is there for an embedder that wants programmatic access. The sync
-/// `Err` paths here only cover bridge/payload failures.
+/// deferred tick calls `notify_set_color_mode_succeeded` on success; the
+/// latest completion is readable via
+/// `openharmony_ability::take_color_mode_completion()` — `Some(false)` =
+/// failed, `Some(true)` = executed, `None` = nothing since the last take
+/// (issue #222 / C85). The consumer is a bounded poll in tao's event loop
+/// that turns `Some(false)` into a real `Err`; until that lands the visible
+/// failure surface today is the error log (ArkTS console.error + the ability
+/// crate's error!); the slot API is there for an embedder that wants
+/// programmatic access. The sync `Err` paths here only cover bridge/payload
+/// failures.
 pub trait ColorModeExt {
     /// Sets the system color mode (`0 = Dark`, `1 = Light`, `2 = NoSet`).
     ///

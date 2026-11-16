@@ -458,7 +458,7 @@ pub fn notify_ui_ability_start_failed(window_id: i64) {
     crate::waker::wake_installed_app();
 }
 
-// ─── setColorMode deferred failure trace (issue Eulogizethesun/tauri#222) ────
+// ─── setColorMode deferred completion trace (issue Eulogizethesun/tauri#222) ─
 //
 // set-color-mode is a MainThreadSync bridge action whose actual setColorMode
 // call runs on a deferred tick (setTimeout(0) — ohos-constraints 4.3 deadlock
@@ -466,49 +466,62 @@ pub fn notify_ui_ability_start_failed(window_id: i64) {
 // accepted=true ("queued") before execution. An execution failure (e.g.
 // 16000011 "The context does not exist" teardown race) used to be swallowed
 // by an empty ArkTS catch — the caller's `!accepted` leg could never fire.
-// The AppControlPlugin now reports it through notify_set_color_mode_failed.
+// The AppControlPlugin now reports BOTH outcomes through notify_set_color_
+// mode_failed / notify_set_color_mode_succeeded.
 //
 // Unlike the spawn-rejection trace there is nothing to roll back (no registry
 // or queue is mutated by set-color-mode), so this is a single-slot diagnostic:
-// the latest failure is the one a caller diagnosing "theme didn't change"
+// the latest completion is the one a caller diagnosing "theme didn't change"
 // needs. Keyed by nothing — the app has exactly one application context.
+//
+// Wire compatibility: notify_set_color_mode_failed keeps its napi name and
+// (code, message) signature so older ArkTS callers keep working, but the slot
+// records a bool completion instead of a failure payload. The old
+// take_color_mode_failure / note_color_mode_failed pair (Mutex<Option<(i32,
+// String)>>) had zero consumers — verified by grep across the workspace — and
+// was removed; the failure payload lives on in the error log emitted by
+// notify_set_color_mode_failed.
 
-static COLOR_MODE_FAILURE: Mutex<Option<(i32, String)>> = Mutex::new(None);
+static COLOR_MODE_COMPLETION: Mutex<Option<bool>> = Mutex::new(None);
 
-fn color_mode_failure() -> std::sync::MutexGuard<'static, Option<(i32, String)>> {
+fn color_mode_completion() -> std::sync::MutexGuard<'static, Option<bool>> {
     // Poisoned lock: same policy as the pending registry — keep serving, the
     // trace is diagnostic only.
-    COLOR_MODE_FAILURE
+    COLOR_MODE_COMPLETION
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Records the latest deferred setColorMode failure reported by the ArkTS
-/// side (AppControlPlugin.ets deferred catch). Overwrites any earlier failure:
-/// the slot holds "most recent", not a history.
-pub fn note_color_mode_failed(code: i32, message: &str) {
-    *color_mode_failure() = Some((code, message.to_string()));
+/// Records the latest deferred setColorMode completion reported by the ArkTS
+/// side: `false` = execution failed (deferred catch), `true` = the deferred
+/// tick executed setColorMode without throwing. Overwrites any earlier
+/// completion: the slot holds "most recent", not a history.
+fn note_color_mode_completion(ok: bool) {
+    *color_mode_completion() = Some(ok);
 }
 
-/// Takes the latest recorded setColorMode failure. Consuming keeps the slot
-/// bounded and makes "none since last check" a meaningful answer. No caller
-/// is wired in this workspace yet — the failure surface today is the error
-/// log (ArkTS console.error + this crate's error!); the slot is the polling
-/// API for an embedder that wants programmatic access.
-pub fn take_color_mode_failure() -> Option<(i32, String)> {
-    color_mode_failure().take()
+/// Takes the latest recorded setColorMode completion: `Some(true)` = the
+/// deferred tick executed setColorMode, `Some(false)` = it failed,
+/// `None` = nothing reported since the last take. Consuming keeps the slot
+/// bounded and makes "none since last check" a meaningful answer. The
+/// consumer is a bounded poll in tao's event loop that turns `Some(false)`
+/// into a real `Err` for the JS caller (issue #222) — this crate only builds
+/// the channel; until that consumer lands, the visible surface is the error
+/// log (ArkTS console.error + this crate's error!/info!).
+pub fn take_color_mode_completion() -> Option<bool> {
+    color_mode_completion().take()
 }
 
 /// NAPI: Called by the ArkTS `set-color-mode` handler's deferred catch
-/// (AppControlPlugin.ets) when setColorMode fails on the deferred tick. No
-/// rollback applies (see the section note above) — this records the failure
-/// and logs it. No consumer reads the slot yet (a tao event-loop drain was
-/// the deferred optional enhancement); the loop wake is kept so such a
-/// consumer, once wired, reads it promptly instead of waiting for an
-/// unrelated event.
+/// (AppControlPlugin.ets) when setColorMode fails on the deferred tick. The
+/// napi name and signature are wire-compatible with the pre-#222 channel;
+/// the slot records completion=false (the old (code, message) payload had no
+/// consumer and lives on in this error log). No rollback applies (see the
+/// section note above) — this records the completion and wakes the
+/// embedding runtime's event loop so a polling consumer reads it promptly.
 #[napi]
 pub fn notify_set_color_mode_failed(code: i32, message: String) {
-    note_color_mode_failed(code, &message);
+    note_color_mode_completion(false);
     crate::error!(
         "notify_set_color_mode_failed: code={} message={}",
         code,
@@ -517,28 +530,43 @@ pub fn notify_set_color_mode_failed(code: i32, message: String) {
     crate::waker::wake_installed_app();
 }
 
+/// NAPI: Called by the ArkTS `set-color-mode` handler's deferred tick
+/// (AppControlPlugin.ets) when setColorMode executes without throwing —
+/// closes the completion loop so a caller polling
+/// take_color_mode_completion can distinguish "failed" from "nothing
+/// reported yet". Same typeof-probed optional export semantics as the
+/// failure path on the ArkTS side: a stale .so/HAR without the notify simply
+/// never records a success (pre-#222 silent-success semantics).
+#[napi]
+pub fn notify_set_color_mode_succeeded() {
+    note_color_mode_completion(true);
+    crate::info!("notify_set_color_mode_succeeded: deferred setColorMode executed");
+    crate::waker::wake_installed_app();
+}
+
 #[cfg(test)]
-mod color_mode_failure_tests {
+mod color_mode_completion_tests {
     use super::*;
 
     #[test]
-    fn note_overwrites_and_take_consumes() {
+    fn notify_overwrites_and_take_consumes() {
         // Only this test touches the slot, so the cold-start state is empty.
-        assert!(take_color_mode_failure().is_none());
-        note_color_mode_failed(16000011, "context does not exist");
-        assert_eq!(
-            take_color_mode_failure(),
-            Some((16000011, "context does not exist".to_string()))
-        );
+        assert!(take_color_mode_completion().is_none());
+        notify_set_color_mode_failed(16000011, "context does not exist".to_string());
+        assert_eq!(take_color_mode_completion(), Some(false));
         // Consuming clears the slot — "none since last check" is meaningful.
-        assert!(take_color_mode_failure().is_none());
-        // The slot holds the LATEST failure, not a history.
-        note_color_mode_failed(401, "parameter error");
-        note_color_mode_failed(16000011, "context does not exist");
-        assert_eq!(
-            take_color_mode_failure(),
-            Some((16000011, "context does not exist".to_string()))
-        );
+        assert!(take_color_mode_completion().is_none());
+        // The slot holds the LATEST completion, not a history: a success
+        // after a failure overwrites it, and vice versa. (Both notify fns
+        // also wake the installed app's event loop — a no-op here because
+        // lifecycle setup has not run in this test process.)
+        notify_set_color_mode_failed(401, "parameter error".to_string());
+        notify_set_color_mode_succeeded();
+        assert_eq!(take_color_mode_completion(), Some(true));
+        notify_set_color_mode_succeeded();
+        notify_set_color_mode_failed(16000011, "context does not exist".to_string());
+        assert_eq!(take_color_mode_completion(), Some(false));
+        assert!(take_color_mode_completion().is_none());
     }
 }
 
