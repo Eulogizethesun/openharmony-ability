@@ -1044,34 +1044,6 @@ export class NativeAbility extends UIAbility {
             String(e),
           );
         }
-
-        // Multi-display layout backfill (issue Eulogizethesun/tauri#106): the
-        // Rust-side C API OH_NativeDisplayManager_CreateAllDisplays enumerates
-        // the display list, but its DisplayInfo struct has no x/y — positions
-        // can only come from ArkTS Display.x/y (API 19+; on lower versions
-        // undefined → 0, same as before the fix). Push the full layout here
-        // and listen for add/remove/change to refresh on hot-plug: hot-plugging
-        // an external monitor fires add/remove; change fires on attribute
-        // changes (resolution/orientation/fold). getAllDisplays is API 12+.
-        this.pushDisplayLayout();
-        try {
-          this.displayAddListener = (displayId: number): void =>
-            this.onDisplayLayoutEvent("add", displayId);
-          this.displayRemoveListener = (displayId: number): void =>
-            this.onDisplayLayoutEvent("remove", displayId);
-          this.displayChangeListener = (displayId: number): void =>
-            this.onDisplayLayoutEvent("change", displayId);
-          display.on("add", this.displayAddListener);
-          display.on("remove", this.displayRemoveListener);
-          display.on("change", this.displayChangeListener);
-        } catch (e) {
-          hilog.warn(
-            DOMAIN,
-            "NativeAbility",
-            "display.on(add/remove/change) registration failed: %{public}s",
-            String(e),
-          );
-        }
       } catch (e) {
         hilog.error(
           DOMAIN,
@@ -1081,6 +1053,13 @@ export class NativeAbility extends UIAbility {
         );
       }
     }
+
+    // Multi-display layout backfill + hot-plug listeners (issue
+    // Eulogizethesun/tauri#106) moved OUT of the `if (win)` gate (issue
+    // Eulogizethesun/tauri#134): display monitoring is a process-level concern
+    // and must not be coupled to whether the main window happened to be
+    // reachable on this stage pass.
+    this.registerDisplayListeners();
 
     if (this.defaultPage) {
       try {
@@ -1201,6 +1180,67 @@ export class NativeAbility extends UIAbility {
   private displayAddListener?: (displayId: number) => void;
   private displayRemoveListener?: (displayId: number) => void;
   private displayChangeListener?: (displayId: number) => void;
+
+  // Display listener registration (issue Eulogizethesun/tauri#134): off the
+  // PREVIOUS handle generation before assigning new refs. Re-entry is real —
+  // onWindowStageRestore's cold-continuation path delegates to
+  // onWindowStageCreate again, and the pre-#134 code overwrote the handle
+  // fields without off-ing, leaking one closure set per pass: display is a
+  // process-level module and the closures capture this, so nothing dies with
+  // the stage, and a leaked set kept firing pushDisplayLayout on every display
+  // event forever. The offs below target exactly the fields
+  // onWindowStageDestroy offs, so register / unregister stay paired on one
+  // handle generation.
+  private registerDisplayListeners(): void {
+    if (this.displayAddListener) {
+      try {
+        display.off("add", this.displayAddListener);
+      } catch (e) {
+        hilog.warn(DOMAIN, "NativeAbility", "display.off(add) failed: %{public}s", String(e));
+      }
+    }
+    if (this.displayRemoveListener) {
+      try {
+        display.off("remove", this.displayRemoveListener);
+      } catch (e) {
+        hilog.warn(DOMAIN, "NativeAbility", "display.off(remove) failed: %{public}s", String(e));
+      }
+    }
+    if (this.displayChangeListener) {
+      try {
+        display.off("change", this.displayChangeListener);
+      } catch (e) {
+        hilog.warn(DOMAIN, "NativeAbility", "display.off(change) failed: %{public}s", String(e));
+      }
+    }
+    // Backfill the current layout BEFORE the live listeners are armed (same
+    // order as the pre-#134 block, issue Eulogizethesun/tauri#106): the
+    // Rust-side C API OH_NativeDisplayManager_CreateAllDisplays enumerates the
+    // display list, but its DisplayInfo struct has no x/y — positions can only
+    // come from ArkTS Display.x/y (API 19+; on lower versions undefined → 0,
+    // same as before the fix). add/remove fire on external-monitor hot-plug;
+    // change on attribute changes (resolution/orientation/fold).
+    // getAllDisplays is API 12+.
+    this.pushDisplayLayout();
+    try {
+      this.displayAddListener = (displayId: number): void =>
+        this.onDisplayLayoutEvent("add", displayId);
+      this.displayRemoveListener = (displayId: number): void =>
+        this.onDisplayLayoutEvent("remove", displayId);
+      this.displayChangeListener = (displayId: number): void =>
+        this.onDisplayLayoutEvent("change", displayId);
+      display.on("add", this.displayAddListener);
+      display.on("remove", this.displayRemoveListener);
+      display.on("change", this.displayChangeListener);
+    } catch (e) {
+      hilog.warn(
+        DOMAIN,
+        "NativeAbility",
+        "display.on(add/remove/change) registration failed: %{public}s",
+        String(e),
+      );
+    }
+  }
 
   // Shared display-event handler: log the event (with the display id the
   // callback reports) and re-push the layout — the positions of every display
