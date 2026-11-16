@@ -238,7 +238,12 @@ export class AcceleratorMatcher {
       } catch (e) {
         // Parameter rejection / API variance across builds: treat as
         // "cannot ask" — the tracked set above stays authoritative.
-        hilog.debug(DOMAIN, TAG, "%{public}s", `[Accelerator] getModifierKeyState(${modifier}) rejected: ${e}`);
+        hilog.debug(
+          DOMAIN,
+          TAG,
+          "%{public}s",
+          `[Accelerator] getModifierKeyState(${modifier}) rejected: ${e}`,
+        );
       }
     }
     return false;
@@ -274,7 +279,10 @@ export class AcceleratorMatcher {
 
   /**
    * Returns true if the key event is a zoom hotkey (Ctrl+=/-/0, incl. KEYCODE_* forms).
-   * Used by onKeyPreIme to block native zoom when with_zoom_hotkeys(false).
+   * Used by onKeyPreIme to consume the shortcuts when zoom hotkeys are disabled —
+   * ArkWeb's engine has no keyboard page-zoom (Chromium keeps those accelerators
+   * in the browser layer, which ArkWeb does not ship), so this only stops the
+   * keys from reaching the page, it does not block an existing zoom.
    * See ohos-webview-flag-zoom-hotkeys spec.
    */
   matchesZoomShortcut(event: KeyEvent): boolean {
@@ -341,9 +349,14 @@ export function clearClipboardEnabled(windowId: number): void {
   clipboardEnabledMap.delete(windowId);
 }
 
-// Per-window zoom-hotkeys flag: windowId -> enabled (default true = ArkWeb native zoom).
-// Set by WindowManager.setWebviewFlags (from WebviewPlugin.create's payload.zoomHotkeys); read
-// by onKeyPreIme to decide whether to block zoom hotkeys. See ohos-webview-flag-zoom-hotkeys spec.
+// Per-window zoom-hotkeys flag: windowId -> enabled. Map-miss default true
+// (matcher does not block) — but wry, the only Rust caller, always sends an
+// explicit value and its attribute defaults to false. Set by
+// WindowManager.setWebviewFlags (from WebviewPlugin.create's
+// payload.zoomHotkeys); read by onKeyPreIme to decide whether to consume the
+// shortcuts before the page. "Enabled" does not create keyboard zoom:
+// ArkWeb's engine has no page-zoom accelerator.
+// See ohos-webview-flag-zoom-hotkeys spec.
 const zoomHotkeysEnabledMap: Map<number, boolean> = new Map();
 
 export function setZoomHotkeysEnabled(windowId: number, enabled: boolean): void {
@@ -351,7 +364,8 @@ export function setZoomHotkeysEnabled(windowId: number, enabled: boolean): void 
 }
 
 export function isZoomHotkeysEnabled(windowId: number): boolean {
-  // Default true (ArkWeb native zoom) when not explicitly set.
+  // Default true (matcher does not block) when not explicitly set; wry, the
+  // only Rust caller, always sets it — false by attribute default.
   return zoomHotkeysEnabledMap.get(windowId) ?? true;
 }
 
