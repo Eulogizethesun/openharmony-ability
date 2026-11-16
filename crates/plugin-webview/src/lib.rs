@@ -77,7 +77,7 @@ impl BridgePlugin for WebviewBridgePlugin {
                 Self::on_callback_decision_event(&event)
             }
             "drag-enter" | "drag-over" | "drag-drop" | "drag-leave" | "page-begin" | "page-end"
-            | "download-end" | "title-change" | "print-state" => {
+            | "download-end" | "title-change" | "print-state" | "scale-change" => {
                 Self::on_callback_ack_event(&event)
             }
             _ => Err(unsupported_main_thread_event(&event)),
@@ -245,6 +245,11 @@ impl WebviewBridgePlugin {
             "title-change" => {
                 let notification = event.decode::<WebviewTitleChangeEvent>()?;
                 callbacks::dispatch_title_change(notification)?;
+                event.respond(WebviewEventAcknowledgement { accepted: true })
+            }
+            "scale-change" => {
+                let notification = event.decode::<WebviewScaleChangeEvent>()?;
+                callbacks::dispatch_scale_change(notification)?;
                 event.respond(WebviewEventAcknowledgement { accepted: true })
             }
             "print-state" => {
@@ -424,6 +429,8 @@ pub struct WebviewCallbackOptions {
     pub download_end: bool,
     /// A title-change callback is registered.
     pub title_change: bool,
+    /// A scale-change (`onScaleChange`) callback is registered.
+    pub scale_change: bool,
     /// True when any drag callback (enter/over/drop/leave) is registered.
     pub drag_drop: bool,
     /// True when a new-window callback is registered.
@@ -482,7 +489,14 @@ pub struct WebviewCreateRequest {
     /// Enable ArkWeb native clipboard (Ctrl+C/V/X/A/Z/Y). Defaults to true (ArkWeb default).
     /// false disables native clipboard so accelerator_matcher can intercept clipboard shortcuts.
     pub clipboard: Option<bool>,
-    /// Enable zoom hotkeys (Ctrl+/-/0). Defaults to false.
+    /// Zoom-hotkey policy (Ctrl+/-/0). The only Rust caller (wry's
+    /// `zoom_hotkeys_enabled` attribute) always sends an explicit value,
+    /// defaulting to FALSE — the ArkTS accelerator matcher then consumes the
+    /// shortcuts before the page. `true` only makes the matcher stop blocking:
+    /// ArkWeb's engine has no keyboard page-zoom (Chromium keeps those
+    /// accelerators in the browser layer, which ArkWeb does not ship), so the
+    /// keys reach the page as plain key events. See the ETS side
+    /// (`isZoomHotkeysEnabled`) for the absent-field (map-miss) default.
     pub zoom_hotkeys: Option<bool>,
     /// Use a transparent Stack overlay to receive drag events (instead of binding directly on the
     /// Web component). Defaults to false. Use when ArkWeb drag events are unreliable.
@@ -781,8 +795,28 @@ pub struct WebviewTitleChangeEvent {
     pub title: String,
 }
 
+/// Page-zoom notification delivered directly through a named N-API callback.
+///
+/// ArkWeb's `Web` component fires `onScaleChange` for every real zoom change
+/// source (programmatic `zoom()`, pinch; ArkWeb has no keyboard page-zoom) and
+/// exposes no getter, so this event is the only way to observe the actual zoom
+/// level.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct WebviewScaleChangeEvent {
+    /// Module-local WebView id whose page zoom changed.
+    pub id: String,
+    /// Process-unique controller generation used to reject callbacks from a replaced WebView.
+    pub native_tag: String,
+    /// Scale before the change (percent units as reported by ArkWeb: 100 = 1×).
+    pub old_scale: f64,
+    /// Scale after the change (percent units as reported by ArkWeb: 100 = 1×).
+    pub new_scale: f64,
+}
+
 impl_bridge_napi_type!(WebviewDownloadEndEvent, "ohos.webview.DownloadEndEvent");
 impl_bridge_napi_type!(WebviewTitleChangeEvent, "ohos.webview.TitleChangeEvent");
+impl_bridge_napi_type!(WebviewScaleChangeEvent, "ohos.webview.ScaleChangeEvent");
 
 /// Response used by one-way named N-API notifications sent directly from ArkTS.
 #[napi(object)]
@@ -2453,6 +2487,10 @@ mod tests {
         assert_eq!(
             <WebviewTitleChangeEvent as BridgeNapiType>::TYPE_NAME,
             "ohos.webview.TitleChangeEvent"
+        );
+        assert_eq!(
+            <WebviewScaleChangeEvent as BridgeNapiType>::TYPE_NAME,
+            "ohos.webview.ScaleChangeEvent"
         );
         assert_eq!(
             <WebviewEventAcknowledgement as BridgeNapiType>::TYPE_NAME,
