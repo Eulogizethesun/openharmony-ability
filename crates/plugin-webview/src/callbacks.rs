@@ -15,7 +15,8 @@ use super::{
     controller, WebviewCallbackOptions, WebviewDownloadEndEvent, WebviewDownloadStartRequest,
     WebviewDownloadStartResponse, WebviewDragEvent, WebviewDropEvent, WebviewHttpsInterceptRequest,
     WebviewHttpsInterceptResponse, WebviewNavigationRequest, WebviewNavigationResponse,
-    WebviewNewWindowRequest, WebviewNewWindowResponse, WebviewPageEvent, WebviewTitleChangeEvent,
+    WebviewNewWindowRequest, WebviewNewWindowResponse, WebviewPageEvent, WebviewScaleChangeEvent,
+    WebviewTitleChangeEvent,
 };
 
 type NavigationCallback = Arc<dyn Fn(WebviewNavigationRequest) -> bool + Send + Sync + 'static>;
@@ -24,6 +25,7 @@ type DownloadStartCallback = Arc<
 >;
 type DownloadEndCallback = Arc<dyn Fn(WebviewDownloadEndEvent) + Send + Sync + 'static>;
 type TitleChangeCallback = Arc<dyn Fn(WebviewTitleChangeEvent) + Send + Sync + 'static>;
+type ScaleChangeCallback = Arc<dyn Fn(WebviewScaleChangeEvent) + Send + Sync + 'static>;
 type DragEnterCallback = Arc<dyn Fn(WebviewDragEvent) + Send + Sync + 'static>;
 type DragOverCallback = Arc<dyn Fn(WebviewDragEvent) + Send + Sync + 'static>;
 type DragDropCallback = Arc<dyn Fn(WebviewDropEvent) + Send + Sync + 'static>;
@@ -45,6 +47,7 @@ struct WebviewCallbacks {
     download_start: Option<DownloadStartCallback>,
     download_end: Option<DownloadEndCallback>,
     title_change: Option<TitleChangeCallback>,
+    scale_change: Option<ScaleChangeCallback>,
     drag_enter: Option<DragEnterCallback>,
     drag_over: Option<DragOverCallback>,
     drag_drop: Option<DragDropCallback>,
@@ -63,6 +66,7 @@ impl WebviewCallbacks {
             download_start: self.download_start.is_some(),
             download_end: self.download_end.is_some(),
             title_change: self.title_change.is_some(),
+            scale_change: self.scale_change.is_some(),
             drag_drop: self.drag_enter.is_some()
                 || self.drag_over.is_some()
                 || self.drag_drop.is_some()
@@ -78,6 +82,7 @@ impl WebviewCallbacks {
             && self.download_start.is_none()
             && self.download_end.is_none()
             && self.title_change.is_none()
+            && self.scale_change.is_none()
             && self.drag_enter.is_none()
             && self.drag_over.is_none()
             && self.drag_drop.is_none()
@@ -148,6 +153,19 @@ impl WebviewCallbacksBuilder {
         F: Fn(WebviewTitleChangeEvent) + Send + Sync + 'static,
     {
         self.callbacks.title_change = Some(Arc::new(callback));
+        self
+    }
+
+    /// Receives page zoom updates (`onScaleChange`: oldScale/newScale) on the active N-API
+    /// callback and should return promptly. Fires for every real ArkWeb zoom change source —
+    /// programmatic `zoom()` and pinch. (ArkWeb has no keyboard page-zoom; the zoom-hotkeys
+    /// flag only controls whether the ArkTS accelerator matcher consumes those keys.)
+    /// This is the only read path for the current zoom level (ArkWeb exposes no getter).
+    pub fn on_scale_change<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(WebviewScaleChangeEvent) + Send + Sync + 'static,
+    {
+        self.callbacks.scale_change = Some(Arc::new(callback));
         self
     }
 
@@ -522,6 +540,22 @@ pub(crate) fn dispatch_title_change(event: WebviewTitleChangeEvent) -> Result<()
     Ok(())
 }
 
+pub(crate) fn dispatch_scale_change(event: WebviewScaleChangeEvent) -> Result<()> {
+    if !controller::is_current(&event.id, &event.native_tag)? {
+        return Ok(());
+    }
+    let callback = CALLBACKS
+        .read()
+        .map_err(|_| Error::from_reason("Failed to lock WebView callback registry"))?
+        .get(&event.id)
+        .and_then(|callbacks| callbacks.scale_change.as_ref())
+        .cloned();
+    if let Some(callback) = callback {
+        callback(event);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -642,6 +676,7 @@ mod tests {
             page_begin: Some(Arc::new(|_| ())),
             page_end: Some(Arc::new(|_| ())),
             title_change: Some(Arc::new(|_| ())),
+            scale_change: Some(Arc::new(|_| ())),
             download_end: Some(Arc::new(|_| ())),
             close_window: Some(Arc::new(|| ())),
             https_intercept: Some(Arc::new(|_| {

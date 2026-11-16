@@ -40,6 +40,7 @@ const DOWNLOAD_START_REQUEST_TYPE = "ohos.webview.DownloadStartRequest";
 const DOWNLOAD_START_RESPONSE_TYPE = "ohos.webview.DownloadStartResponse";
 const DOWNLOAD_END_EVENT_TYPE = "ohos.webview.DownloadEndEvent";
 const TITLE_CHANGE_EVENT_TYPE = "ohos.webview.TitleChangeEvent";
+const SCALE_CHANGE_EVENT_TYPE = "ohos.webview.ScaleChangeEvent";
 const ENGINE_LIFECYCLE_EVENT_TYPE = "ohos.webview.EngineLifecycleEvent";
 const ENGINE_LIFECYCLE_RESPONSE_TYPE = "ohos.webview.EngineLifecycleResponse";
 const CONTROLLER_EVENT_TYPE = "ohos.webview.ControllerEvent";
@@ -171,6 +172,7 @@ interface WebviewEventOptions {
   downloadStart?: boolean | null;
   downloadEnd?: boolean | null;
   titleChange?: boolean | null;
+  scaleChange?: boolean | null;
   dragDrop?: boolean | null;
   newWindow?: boolean | null;
   pageBegin?: boolean | null;
@@ -200,7 +202,13 @@ interface WebviewCreatePayload {
   transparent?: boolean | null;
   /** Enable ArkWeb native clipboard (Ctrl+C/V/X/A/Z/Y). Defaults to true. */
   clipboard?: boolean | null;
-  /** Enable zoom hotkeys (Ctrl+/-/0). Defaults to false. */
+  /** Zoom-hotkey policy (Ctrl+/-/0). The only Rust caller (wry's `zoom_hotkeys`
+   *  attribute) always sends an explicit value, defaulting to FALSE — the ArkTS
+   *  accelerator matcher then consumes the shortcuts before the page. true only
+   *  makes the matcher stop blocking: ArkWeb's engine has no keyboard
+   *  page-zoom (Chromium keeps those accelerators in the browser layer, which
+   *  ArkWeb does not ship), so the keys reach the page as plain key events.
+   *  See `isZoomHotkeysEnabled` for the absent-field (map-miss) default. */
   zoomHotkeys?: boolean | null;
   /** Use a transparent Stack overlay to receive drag events. Defaults to false. */
   dragDropOverlay?: boolean | null;
@@ -244,6 +252,11 @@ interface ManagedWebview extends WebviewCreatePayload {
   onNavigationRequest: (url: string) => boolean;
   onCloseWindow?: () => void;
   onTitleChange: (title: string) => void;
+  /** Page-zoom notification (ArkWeb `onScaleChange`): every real zoom change
+   *  fires it — programmatic `zoom()` and pinch. (ArkWeb has no keyboard
+   *  page-zoom; the zoom-hotkeys flag only controls whether the matcher
+   *  consumes those keys.) */
+  onScaleChange: (oldScale: number, newScale: number) => void;
   onDownloadStart: (url: string, tempPath: string | null) => WebviewDownloadStartResponse;
   onDownloadEnd: (url: string, tempPath: string | null, success: boolean) => void;
   onDragEnter: (x: number, y: number) => void;
@@ -593,6 +606,20 @@ class WebviewTitleChangeEvent {
     this.id = id;
     this.nativeTag = nativeTag;
     this.title = title;
+  }
+}
+
+class WebviewScaleChangeEvent {
+  readonly id: string;
+  readonly nativeTag: string;
+  readonly oldScale: number;
+  readonly newScale: number;
+
+  constructor(id: string, nativeTag: string, oldScale: number, newScale: number) {
+    this.id = id;
+    this.nativeTag = nativeTag;
+    this.oldScale = oldScale;
+    this.newScale = newScale;
   }
 }
 
@@ -1010,6 +1037,7 @@ function normalizeEventOptions(
     downloadStart: optionalEventFlag(options?.downloadStart, "WebView eventOptions.downloadStart"),
     downloadEnd: optionalEventFlag(options?.downloadEnd, "WebView eventOptions.downloadEnd"),
     titleChange: optionalEventFlag(options?.titleChange, "WebView eventOptions.titleChange"),
+    scaleChange: optionalEventFlag(options?.scaleChange, "WebView eventOptions.scaleChange"),
     dragDrop: optionalEventFlag(options?.dragDrop, "WebView eventOptions.dragDrop"),
     newWindow: optionalEventFlag(options?.newWindow, "WebView eventOptions.newWindow"),
     pageBegin: optionalEventFlag(options?.pageBegin, "WebView eventOptions.pageBegin"),
@@ -1584,6 +1612,7 @@ function BuildWebview(data: ManagedWebview) {
           return handleWebviewInterceptRequest(data, event as WebInterceptRequestEvent, "");
         })
         .onTitleReceive((event) => data.onTitleChange(event.title))
+        .onScaleChange((event) => data.onScaleChange(event.oldScale, event.newScale))
         .onPageBegin((e) => {
           handleWebviewPageBegin(data, e.url);
         })
@@ -1724,6 +1753,7 @@ function BuildWebview(data: ManagedWebview) {
           );
         })
         .onTitleReceive((event) => data.onTitleChange(event.title))
+        .onScaleChange((event) => data.onScaleChange(event.oldScale, event.newScale))
         .onPageBegin((e) => {
           handleWebviewPageBegin(data, e.url);
         })
@@ -2331,6 +2361,21 @@ class WebviewSurface {
           );
         } catch (error) {
           console.error("WebView title notification failed: " + String(error));
+        }
+      },
+      onScaleChange: (oldScale: number, newScale: number): void => {
+        if (eventOptions.scaleChange !== true) {
+          return;
+        }
+        try {
+          notifyNative(
+            this.pluginContext,
+            "scale-change",
+            SCALE_CHANGE_EVENT_TYPE,
+            new WebviewScaleChangeEvent(payload.id, nativeTag, oldScale, newScale) as ESObject,
+          );
+        } catch (error) {
+          console.error("WebView scale notification failed: " + String(error));
         }
       },
       onDownloadStart: (url: string, tempPath: string | null): WebviewDownloadStartResponse => {
