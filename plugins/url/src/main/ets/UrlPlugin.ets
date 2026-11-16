@@ -4,7 +4,9 @@ import {
   AsyncPluginBase,
   BridgeContextRequirement,
 } from "@ohos-rs/ability";
+import { BusinessError } from "@kit.BasicServicesKit";
 import Want from "@ohos.app.ability.Want";
+import wantConstant from "@ohos.app.ability.wantConstant";
 
 const OPEN_REQUEST_TYPE = "ohos.url.OpenRequest";
 const REVEAL_REQUEST_TYPE = "ohos.url.RevealRequest";
@@ -191,28 +193,45 @@ export class UrlPlugin extends AsyncPluginBase {
     if (action === "reveal-in-dir") {
       const request = parseRevealRequest(payload);
       // Map the real filesystem parent path to the file-manager virtual uri and
-      // start an EXPLICIT Want — the only form empirically verified to reach the
-      // 2in1 desktop file manager (com.huawei.hmos.filemanager / MainAbility /
-      // module "pc"). A generic viewData+file:// want only matches archive utd
-      // types and silently falls back to the notepad handler.
-      // Sandbox/unmappable-prefix paths throw before startAbility, so they can
-      // never fall through to a wrong handler.
-      // No fallback is attempted: on systems without the Huawei file manager
-      // (non-Huawei environments, or a package rename) startAbility throws and
-      // the error below is propagated to the caller. The OHOS SDK (checked
-      // against 6.1.1 / API 24) exposes no system-generic "reveal in folder"
-      // API — the HMS filePreview kit is content preview only — so this
-      // explicit Want is the only workable form.
+      // start an IMPLICIT Want (issue Eulogizethesun/tauri#223). The pre-#223
+      // form pinned the dispatch to one vendor package with an explicit triple
+      // (com.huawei.hmos.filemanager / MainAbility / module "pc"), so any
+      // non-Huawei environment or package rename failed outright — picking a
+      // bundle by name was the implementer's choice, not a system contract. The
+      // implicit form (action "ohos.want.action.viewData") lets whichever file
+      // manager on the system declares matching skills handle the want, and an
+      // unmatched system now fails LOUDLY: startAbility throws 16000019, which
+      // the catch below rethrows as an explicit unsupported error.
       //
-      // ⚠️ Want parameter placement (2026-08-28 device experiment): FM MainAbility
-      // reads the target from `want.parameters.fileUri` + `want.parameters.external_storage_uuid`,
+      // Honest history (2026-08-28 2in1 device experiment): a bare
+      // viewData+file:// want WITHOUT the parameter contract matched only
+      // archive utd types and silently fell back to the notepad handler — that
+      // observation is why the explicit triple existed. #223 trades that risk
+      // for vendor neutrality: the parameters contract below is retained (it is
+      // what steers the FM to the target folder), the vendor triple is not.
+      // Whether a given system's FM skills actually match this implicit want is
+      // verified by bm dump in the device round (pending); until then the
+      // fallback/unsupported behavior is disclosed, never silent.
+      //
+      // Sandbox/unmappable-prefix paths throw before startAbility, so they can
+      // never fall through to a wrong handler. No fallback candidate list is
+      // attempted (issue #223: 查不到系统通用 reveal 能力 → 明确报不支持).
+      // The OHOS SDK (checked against 6.1.1 / API 24) exposes no system-generic
+      // "reveal in folder" API — the HMS filePreview kit is content preview only.
+      //
+      // ⚠️ Want parameter placement (2026-08-28 device experiment): FM reads the
+      // target from `want.parameters.fileUri` + `want.parameters.external_storage_uuid`,
       // NOT from `want.uri` (top-level `uri` is ignored → FM defaults to home).
       // `external_storage_uuid = "LOCAL"` is the local disk id (verified via FM
       // diskNameArray; cloud = "cloud").
+      //
+      // Action uses the raw string literal: the wantConstant.Action constants
+      // are deprecated since API 9. The flag still comes from wantConstant.Flags
+      // (FLAG_AUTH_READ_URI_PERMISSION, @since 9) so the receiving file manager
+      // is granted read access to the file:// uri we hand it.
       const want: Want = {
-        bundleName: "com.huawei.hmos.filemanager",
-        abilityName: "MainAbility",
-        moduleName: "pc",
+        action: "ohos.want.action.viewData",
+        flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION,
         parameters: {
           fileUri: mapToVirtualUri(request.path),
           external_storage_uuid: "LOCAL",
@@ -221,6 +240,17 @@ export class UrlPlugin extends AsyncPluginBase {
       try {
         await context.abilityContext.startAbility(want);
       } catch (error) {
+        // 16000019 "No matching ability" (@since 12): no skill on this system
+        // matches the implicit want — rethrow as an explicit unsupported error
+        // (the issue #223 no-fallback policy: 明确报不支持, never a silent
+        // wrong-handler open). Any other code keeps the generic translation.
+        const err = error as BusinessError;
+        if (err.code === 16000019) {
+          throw new Error(
+            "reveal-in-dir is unsupported on this system: no ability matches " +
+              "the implicit viewData Want (16000019 No matching ability)",
+          );
+        }
         throw new Error(`reveal-in-dir startAbility failed: ${String(error)}`);
       }
       if (!context.isActive()) {
