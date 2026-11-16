@@ -466,8 +466,8 @@ pub fn notify_ui_ability_start_failed(window_id: i64) {
 // accepted=true ("queued") before execution. An execution failure (e.g.
 // 16000011 "The context does not exist" teardown race) used to be swallowed
 // by an empty ArkTS catch — the caller's `!accepted` leg could never fire.
-// The AppControlPlugin now reports BOTH outcomes through notify_set_color_
-// mode_failed / notify_set_color_mode_succeeded.
+// The AppControlPlugin now reports BOTH outcomes through
+// notify_set_color_mode_failed / notify_set_color_mode_succeeded.
 //
 // Unlike the spawn-rejection trace there is nothing to roll back (no registry
 // or queue is mutated by set-color-mode), so this is a single-slot diagnostic:
@@ -504,10 +504,15 @@ fn note_color_mode_completion(ok: bool) {
 /// deferred tick executed setColorMode, `Some(false)` = it failed,
 /// `None` = nothing reported since the last take. Consuming keeps the slot
 /// bounded and makes "none since last check" a meaningful answer. The
-/// consumer is a bounded poll in tao's event loop that turns `Some(false)`
-/// into a real `Err` for the JS caller (issue #222) — this crate only builds
-/// the channel; until that consumer lands, the visible surface is the error
-/// log (ArkTS console.error + this crate's error!/info!).
+/// consumer is tao's event loop drain (tao PR#31,
+/// `apply_color_mode_completion`): the slot is consumed at the head of every
+/// MainEvent dispatch (both notify legs wake the loop) and `Some(false)`
+/// surfaces as an error log plus the theme-override rollback to follow-system
+/// (issue #222) — the JS caller still sees the bridge's accepted=true Ok, so
+/// the visible failure surface is that error log (ArkTS console.error + this
+/// crate's error!), not a real Err; an honest Err would need the call chain
+/// moved off the ArkTS main thread (worker migration, deliberately out of
+/// scope). This crate only builds the channel.
 pub fn take_color_mode_completion() -> Option<bool> {
     color_mode_completion().take()
 }

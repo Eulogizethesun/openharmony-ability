@@ -59,8 +59,10 @@ impl UrlOpenResponse {
 /// `path` is the **absolute real filesystem path** of the directory to reveal
 /// (the file's parent), e.g. `/storage/media/100/local/files/Docs/IDEProjects`.
 /// NOT a `file://` URI — the ArkTS side maps the real path to the file-manager
-/// virtual uri and builds the explicit Want. Sandbox or unmappable-prefix
-/// paths are rejected ArkTS-side with a documented platform-limitation error.
+/// virtual uri and dispatches the implicit `ohos.want.action.viewData` Want —
+/// the system resolves the handling file manager (no hardcoded bundleName).
+/// Sandbox or unmappable-prefix paths are rejected ArkTS-side with a
+/// documented platform-limitation error.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct UrlRevealRequest {
@@ -97,7 +99,8 @@ pub trait UrlExt {
     /// Reveals a directory in the system file manager. `path` must be the
     /// absolute **real filesystem path** of the directory (the file's parent),
     /// not a `file://` URI — the ArkTS side maps it to the file-manager
-    /// virtual uri and starts the explicit file-manager Want.
+    /// virtual uri and dispatches the implicit `ohos.want.action.viewData`
+    /// Want (the system resolves the handler; no hardcoded bundleName).
     fn reveal_in_dir(
         &self,
         path: impl Into<String>,

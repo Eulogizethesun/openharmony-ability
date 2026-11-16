@@ -226,9 +226,11 @@ export class UrlPlugin extends AsyncPluginBase {
       // diskNameArray; cloud = "cloud").
       //
       // Action uses the raw string literal: the wantConstant.Action constants
-      // are deprecated since API 9. The flag still comes from wantConstant.Flags
-      // (FLAG_AUTH_READ_URI_PERMISSION, @since 9) so the receiving file manager
-      // is granted read access to the file:// uri we hand it.
+      // are deprecated since API 9. FLAG_AUTH_READ_URI_PERMISSION (@since 9)
+      // grants the receiving ability read access to the uri carried by
+      // `want.uri`; this want has NO uri field (the FM reads the target from
+      // `want.parameters.fileUri`, see above), so the flag is inert in the
+      // current form and kept for a want.uri-bearing variant.
       const want: Want = {
         action: "ohos.want.action.viewData",
         flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION,
